@@ -4,7 +4,7 @@
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)]()
 [![ECS](https://img.shields.io/badge/Pattern-ECS-orange.svg)]()
 
-> Platform asset storage with Mandatory Access Control — Realms, Keycards, Schutzstufen, Codewörter, Lattice, Audit. Absorbs ase-auth.
+> Platform asset storage with Mandatory Access Control — Realms, Keycards, Schutzstufen, Codewörter, Lattice, Audit. Applies DSGN_109 patterns to engine asset management.
 
 Part of [ASE - Antares Simulation Engine](../../..)
 
@@ -12,7 +12,7 @@ Part of [ASE - Antares Simulation Engine](../../..)
 
 The **ase-storage** module manages all platform-level asset storage and access control for the ASE Engine. It implements the A/ACS (Antares Access Control System) from DSGN_109 applied to developer workflows: game studios, teams, freelancers, and publishers collaborating on projects built with the ASE Engine.
 
-This module **absorbs ase-auth** — the Keycard IS the authentication token. Identity, authorization, and storage are one domain: **Who are you** (Keycard) → **What can you do** (ACL) → **Where are the files** (Storage).
+This module applies DSGN_109 A/ACS patterns to the **real-world engine platform**: developer authentication, team collaboration, and asset management. Parallel to ase-auth (which implements the same patterns for in-game mechanics), ase-storage manages: **Who are you** (Developer Keycard) → **What can you do** (Platform ACL) → **Where are the files** (Realm Storage).
 
 ### Core Concepts
 
@@ -60,7 +60,7 @@ This module **absorbs ase-auth** — the Keycard IS the authentication token. Id
 
 ### System Pipeline
 
-#### Keycard Pipeline (absorbed from ase-auth)
+#### Developer Keycard Pipeline
 
 | # | System | Schedule | Purpose |
 |---|--------|----------|---------|
@@ -138,9 +138,9 @@ This module **absorbs ase-auth** — the Keycard IS the authentication token. Id
 ## Related Documents
 
 - `ARCH_ASE_STORAGE.md` — Full architecture specification
-- `DSGN_109` — A/ACS game design (31 subsystems, inspiration source)
+- `DSGN_109` — A/ACS game design (31 subsystems, shared patterns — ase-auth implements for game, ase-storage for platform)
 - `DSGN_080` — Asset Management (lifecycle, categories)
-- `ARCH_ASE_AUTH.md` — JWT pipeline (absorbed into this module)
+- `ARCH_ASE_AUTH.md` — In-game JWT pipeline (separate module, parallel implementation)
 - `DPLY_ASE_GAME_PROJECT.md` — Manifest + project structure
 - `PJV Praeambel` — Complexity is a FEATURE
 

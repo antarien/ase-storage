@@ -42,7 +42,7 @@
 
 ASE_STORAGE=00.00.01.00001
 ASE_STORAGE_NAME=Storage & Access Control
-ASE_STORAGE_DESC=A/ACS-based asset storage with Realms, Keycards, ACL, Audit (absorbs ase-auth)
+ASE_STORAGE_DESC=A/ACS-based asset storage with Realms, Keycards, ACL, Audit for engine platform
 ASE_STORAGE_LAYER=3
 ASE_STORAGE_STATUS=stub
 ASE_STORAGE_CREATED=2026-04-04
