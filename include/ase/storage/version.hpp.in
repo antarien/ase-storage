@@ -1,0 +1,2 @@
+#pragma once
+namespace ase::storage { constexpr const char* MODULE_VERSION = "@ASE_STORAGE_VERSION@"; }
