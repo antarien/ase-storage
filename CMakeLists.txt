@@ -94,6 +94,8 @@ add_library(${PROJECT_NAME} STATIC
     include/ase/storage/components/state/storage_req_acss_comp.hpp
     include/ase/storage/components/state/storage_vote_cnt_comp.hpp
     include/ase/storage/components/state/storage_bllt_vote_comp.hpp
+    include/ase/storage/components/state/storage_sta_cur_cur_comp.hpp
+    include/ase/storage/components/state/storage_req_cur_comp.hpp
 
     #[[
     COMPONENTS - TAG
@@ -116,6 +118,12 @@ add_library(${PROJECT_NAME} STATIC
     include/ase/storage/components/tag/storage_tag_relm_suspended.hpp
     include/ase/storage/components/tag/storage_tag_relm_archived.hpp
     include/ase/storage/components/tag/storage_tag_relm_conceal.hpp
+    include/ase/storage/components/tag/storage_tag_cur_unrated.hpp
+    include/ase/storage/components/tag/storage_tag_cur_approved.hpp
+    include/ase/storage/components/tag/storage_tag_cur_rejected.hpp
+    include/ase/storage/components/tag/storage_tag_cur_rework.hpp
+    include/ase/storage/components/tag/storage_tag_cur_req.hpp
+    include/ase/storage/components/tag/storage_tag_cur_done.hpp
 
     #[[
     SYSTEMS - KEYCARD
@@ -164,6 +172,12 @@ add_library(${PROJECT_NAME} STATIC
     SYSTEMS - VOTE
     ]]
     include/ase/storage/systems/vote/storage_vote_prc_sys.hpp
+
+    #[[
+    SYSTEMS - CURATOR
+    Curator request processing (business logic only, no persistence).
+    ]]
+    include/ase/storage/systems/curator/storage_cur_prc_sys.hpp
 
     #[[
     RESOURCE MANAGER IMPLEMENTATION
@@ -216,6 +230,11 @@ add_library(${PROJECT_NAME} STATIC
     SYSTEM IMPLEMENTATIONS - VOTE
     ]]
     src/vote/storage_vote_prc_sys.cpp
+
+    #[[
+    SYSTEM IMPLEMENTATIONS - CURATOR
+    ]]
+    src/curator/storage_cur_prc_sys.cpp
 )
 add_library(ase::storage ALIAS ${PROJECT_NAME})
 

@@ -84,6 +84,9 @@
 #include <ase/storage/systems/audit/storage_audt_writ_sys.hpp>
 #include <ase/storage/systems/lattice/storage_latc_sync_sys.hpp>
 
+// Curator
+#include <ase/storage/systems/curator/storage_cur_prc_sys.hpp>
+
 // Observation
 #include <ase/storage/systems/quota/storage_quot_chk_sys.hpp>
 #include <ase/storage/systems/vote/storage_vote_prc_sys.hpp>
@@ -113,6 +116,10 @@ struct StorageModule {
         app.add_system_with<StorageWflwTranSystem>(ecs::Schedule::Integration)
             .run_after("StorageFileWritSystem");
         app.add_system_with<StorageCncmFltSystem>(ecs::Schedule::Integration)
+            .run_after("StorageAcssChkSystem");
+
+        // Integration (60Hz): Curator request processing (after ACL)
+        app.add_system_with<StorageCurPrcSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssChkSystem");
 
         // Preservation (1Hz): expiry, revocation, audit write, lattice sync

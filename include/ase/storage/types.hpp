@@ -206,4 +206,19 @@ constexpr uint8_t FLAG_SHR  = 3;    // Shared resources and lattice links zone
 
 constexpr uint8_t MAX_FLAG_ITEMS = 4;  // Maximum key-value items per Fahne zone
 
+// ── CURATOR — Curation metadata for game art assets ────────────────────
+
+constexpr uint32_t CUR_MAX_KEY    = 160;   // Curation key max chars ("IMG_ID" or "IMG_ID::v3")
+constexpr uint32_t CUR_MAX_NOTES  = 256;   // Free-text curation notes max chars
+constexpr uint32_t CUR_MAX_USERID = 64;    // User ID who last edited max chars
+
+constexpr uint8_t CUR_ST_UNRATED      = 0;   // Image not yet reviewed by curator
+constexpr uint8_t CUR_ST_APPROVED     = 1;   // Approved for use in game
+constexpr uint8_t CUR_ST_REJECTED     = 2;   // Not suitable for intended purpose
+constexpr uint8_t CUR_ST_NEEDS_REWORK = 3;   // Requires changes before approval
+
+constexpr uint8_t CUR_ACT_RATE    = 0;   // Set rating on an image or version
+constexpr uint8_t CUR_ACT_STATUS  = 1;   // Set approval status on image or version
+constexpr uint8_t CUR_ACT_NOTES   = 2;   // Set free-text notes on image or version
+
 }  // namespace ase::storage
