@@ -1,0 +1,14 @@
+[module]
+name = "ase-storage"
+version = "00.00.01.00001"
+type = "module"
+layer = 3
+api_version = 1
+
+[dependencies]
+ase-hub = "^00.01"
+
+[dependencies.optional]
+
+[build]
+output = "ase_storage.module"

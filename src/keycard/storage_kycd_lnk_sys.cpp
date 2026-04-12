@@ -145,12 +145,15 @@
 #include <ase/storage/components/state/storage_sta_idn_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
 #include <ase/storage/components/tag/storage_tag_kycd_rjct.hpp>
-// Components from ase-network (L3 cross-module read)
-#include <ase/network/components/core/state/network_core_state_id_component.hpp>
+// Hub API for client identity mirror (Hub API 2.0: no L3→L3 network import)
+#include <ase/hub/api.hpp>
+// Types (L0 — is_not_found sentinel check)
+#include <ase/types/types.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
 using namespace entt::literals;
+namespace types = ase::types;
 
 namespace ase::storage {
 
@@ -175,19 +178,20 @@ void StorageKycdLnkSystem::on_start(ecs::Registry& /*registry*/) {
 
 void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
     // Link each validated keycard entity to its network client entity
-    auto auth_view = registry.view<StorageStaIdnComponent, StorageKycdVldTag>(entt::exclude<StorageKycdRjctTag, network::NetworkCoreStateIdComponent>);
+    // Hub API 2.0: find clients via hub::HubNetClaiRdyTag (Mirror Tag) + hub::get() for client_id
+    auto auth_view = registry.view<StorageStaIdnComponent, StorageKycdVldTag>(
+        entt::exclude<StorageKycdRjctTag>);
     for (auto auth_entity : auth_view) {
         auto& auth_idn = auth_view.get<StorageStaIdnComponent>(auth_entity);
         uint32_t target_client_id = auth_idn.client_id;
 
-        // Find matching network client entity
+        // Find matching client via Hub Mirror Tag (WRFL_ASE_HUB_ENTITY_DISCOVERY)
         bool linked = false;
-        auto client_view = registry.view<network::NetworkCoreStateIdComponent>();
+        auto client_view = registry.view<hub::HubNetClaiRdyTag>();
         for (auto client_entity : client_view) {
-            auto& net_id = client_view.get<network::NetworkCoreStateIdComponent>(client_entity);
-            if (net_id.client_id != target_client_id) {
-                continue;
-            }
+            float net_id = hub::get(registry, static_cast<uint32_t>(client_entity), "NET_CLAI_ID"_hs);
+            if (types::is_not_found(net_id)) continue;
+            if (static_cast<uint32_t>(net_id) != target_client_id) continue;
 
             // Copy identity to client entity
             auto& client_idn = registry.emplace_or_replace<StorageStaIdnComponent>(client_entity);
