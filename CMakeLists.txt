@@ -19,7 +19,7 @@ CMAKE MODULE COMPLIANCE
 [ ] cmake_minimum_required(VERSION 3.20) as FIRST line
 [ ] project() with VERSION and LANGUAGES CXX
 [ ] message(STATUS) for configuration output
-[ ] add_library() with STATIC and EXPLICIT file list
+[ ] add_library() with SHARED and EXPLICIT file list
 [ ] NO file(GLOB_RECURSE ...) - explicit files only!
 [ ] NO file(GLOB ...) - explicit files only!
 [ ] Files organized by category with bracket comment headers
@@ -66,7 +66,8 @@ find_package(OpenSSL REQUIRED)
 
 message(STATUS "Configuring ${PROJECT_NAME} v${PROJECT_VERSION}")
 
-add_library(${PROJECT_NAME} STATIC
+add_library(${PROJECT_NAME} SHARED
+    src/module_export.cpp
     #[[
     MODULE HEADERS
     Umbrella, module definition, types, resource manager.
@@ -238,6 +239,11 @@ add_library(${PROJECT_NAME} STATIC
 )
 add_library(ase::storage ALIAS ${PROJECT_NAME})
 
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    OUTPUT_NAME "ase_storage"
+    SUFFIX ".module"
+)
+
 target_include_directories(${PROJECT_NAME}
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -252,12 +258,10 @@ target_link_libraries(${PROJECT_NAME}
         ase::ecs          # Layer 1 - ECS framework
         ase::log          # Layer 1 - Logging
         ase::utils        # Layer 0 - String operations (strops.hpp)
-        ase::network      # Layer 3 - NetworkCoreStateIdComponent (cross-module read)
+        ase::types        # Layer 0 - Type helpers (is_not_found)
+        ase::hub          # Hub API 2.0 (client identity via Mirror Tags)
         OpenSSL::Crypto   # HMAC-SHA256 for keycard validation
 )
-#[[ VERBOTEN: Direct L3 module dependencies without Hub!
-    EXCEPTION: ase::network is allowed for reading NetworkCoreStateIdComponent
-    (same cross-module read pattern as other L3 modules) ]]
 
 if(ASE_BUILD_TESTS)
     add_subdirectory(tests)
