@@ -145,6 +145,10 @@
 #include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
 #include <ase/storage/components/tag/storage_tag_kycd_exp.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
+// Hub API (counter)
+#include <ase/hub/api.hpp>
+// Types (L0 — is_not_found sentinel check)
+#include <ase/types/types.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
@@ -190,6 +194,9 @@ void StorageKycdExpSystem::tick(ecs::Registry& registry, float /*dt*/) {
             registry.emplace<StorageKycdExpTag>(entity);
             log::debug("[StorageKycdExp] -StorageKycdVldTag entity={} reason=expired",
                        static_cast<uint32_t>(entity));
+            float exp_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_EXP_COUNT"_hs, 0.0f);
+            if (ase::types::is_not_found(exp_count)) exp_count = 0.0f;
+            hub::set(registry, hub::GLOBAL, "STG_KYCD_EXP_COUNT"_hs, exp_count + 1.0f);
             log::info("[StorageKycdExp] Keycard expired: {}", kycd.kycd_hash);
         }
     }
