@@ -430,20 +430,8 @@
                 "file": "keycard/storage_ini_sys.hpp"
             },
             {
-                "name": "StorageKycdDrnSystem",
-                "file": "keycard/storage_kycd_drn_sys.hpp"
-            },
-            {
-                "name": "StorageKycdExpSystem",
-                "file": "keycard/storage_kycd_exp_sys.hpp"
-            },
-            {
                 "name": "StorageKycdRevSystem",
                 "file": "keycard/storage_kycd_rev_sys.hpp"
-            },
-            {
-                "name": "StorageKycdVldSystem",
-                "file": "keycard/storage_kycd_vld_sys.hpp"
             },
             {
                 "name": "StorageQuotChkSystem",
@@ -476,8 +464,20 @@
                 "file": "fs/storage_file_writ_sys.hpp"
             },
             {
+                "name": "StorageKycdDrnSystem",
+                "file": "keycard/storage_kycd_drn_sys.hpp"
+            },
+            {
+                "name": "StorageKycdExpSystem",
+                "file": "keycard/storage_kycd_exp_sys.hpp"
+            },
+            {
                 "name": "StorageKycdLnkSystem",
                 "file": "keycard/storage_kycd_lnk_sys.hpp"
+            },
+            {
+                "name": "StorageKycdVldSystem",
+                "file": "keycard/storage_kycd_vld_sys.hpp"
             },
             {
                 "name": "StorageLatcSyncSystem",

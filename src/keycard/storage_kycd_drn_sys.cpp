@@ -145,6 +145,10 @@
 #include <ase/storage/components/state/storage_sta_tkn_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_kycd_pend.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
+// Hub API (counter)
+#include <ase/hub/api.hpp>
+// Types (L0 — is_not_found sentinel check)
+#include <ase/types/types.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
@@ -193,6 +197,9 @@ void StorageKycdDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         registry.emplace<StorageKycdPendTag>(entity);
 
         log::debug("[StorageKycdDrn] +StorageKycdPendTag client_id={} token_id={}", client_id, token_id);
+        float drn_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_DRN_COUNT"_hs, 0.0f);
+        if (ase::types::is_not_found(drn_count)) drn_count = 0.0f;
+        hub::set(registry, hub::GLOBAL, "STG_KYCD_DRN_COUNT"_hs, drn_count + 1.0f);
     }
 
     mgr.drain_clear();

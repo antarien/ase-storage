@@ -149,6 +149,10 @@
 #include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
 #include <ase/storage/components/tag/storage_tag_kycd_rjct.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
+// Hub API (counter)
+#include <ase/hub/api.hpp>
+// Types (L0 — is_not_found sentinel check)
+#include <ase/types/types.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
@@ -197,6 +201,9 @@ void StorageKycdVldSystem::tick(ecs::Registry& registry, float /*dt*/) {
             mgr.remove_token(tkn.token_id);
 
             log::debug("[StorageKycdVld] +StorageKycdVldTag client_id={} user='{}'", tkn.client_id, idn.user_id);
+            float acc_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_VLD_ACCEPT_COUNT"_hs, 0.0f);
+            if (ase::types::is_not_found(acc_count)) acc_count = 0.0f;
+            hub::set(registry, hub::GLOBAL, "STG_KYCD_VLD_ACCEPT_COUNT"_hs, acc_count + 1.0f);
             log::info("[StorageKycdVld] Keycard validated for client {}", tkn.client_id);
         } else {
             registry.emplace<StorageKycdRjctTag>(entity);
@@ -204,6 +211,9 @@ void StorageKycdVldSystem::tick(ecs::Registry& registry, float /*dt*/) {
             mgr.remove_token(tkn.token_id);
 
             log::debug("[StorageKycdVld] +StorageKycdRjctTag client_id={} token_id={}", tkn.client_id, tkn.token_id);
+            float rej_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_VLD_REJECT_COUNT"_hs, 0.0f);
+            if (ase::types::is_not_found(rej_count)) rej_count = 0.0f;
+            hub::set(registry, hub::GLOBAL, "STG_KYCD_VLD_REJECT_COUNT"_hs, rej_count + 1.0f);
             log::warn("[StorageKycdVld] Keycard rejected for client {}", tkn.client_id);
         }
     }
