@@ -12,7 +12,7 @@ ASE MODULE BUILD CONFIGURATION
 @layer       3 (Module)
 @created     2026-04-04
 @modified    2026-04-05
-@version     00.00.01.00001 [stub]
+@version     00.00.01.00001 [seed]
 
 CMAKE MODULE COMPLIANCE
 
@@ -97,6 +97,8 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/state/storage_bllt_vote_comp.hpp
     include/ase/storage/components/state/storage_sta_cur_cur_comp.hpp
     include/ase/storage/components/state/storage_req_cur_comp.hpp
+    # NOTE: storage_sta_kycd_cch_comp.hpp migrated to ase-session
+    #       as session_sta_idn_comp + session_sta_athz_comp (2026-04-16).
 
     #[[
     COMPONENTS - TAG
@@ -244,6 +246,8 @@ set_target_properties(${PROJECT_NAME} PROPERTIES
     SUFFIX ".module"
 )
 
+ase_install_module_toml(${PROJECT_NAME})
+
 target_include_directories(${PROJECT_NAME}
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -256,7 +260,7 @@ target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_20)
 target_link_libraries(${PROJECT_NAME}
     PUBLIC
         ase::ecs          # Layer 1 - ECS framework
-        ase::log          # Layer 1 - Logging
+        ase::log::headers          # Layer 1 - Logging
         ase::utils        # Layer 0 - String operations (strops.hpp)
         ase::types        # Layer 0 - Type helpers (is_not_found)
         ase::hub          # Hub API 2.0 (client identity via Mirror Tags)

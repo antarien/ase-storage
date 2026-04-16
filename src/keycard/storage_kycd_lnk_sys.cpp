@@ -9,8 +9,8 @@
  * @category    process
  * @schedule    Ingestion
  * @created     2026-04-05
- * @modified    2026-04-05
- * @version     1.0.0
+ * @modified    2026-04-16
+ * @version     1.1.0
  *
  * CAUSAL CHAIN (Keycard Link)
  *
@@ -23,24 +23,27 @@
  *   │                                             │
  *   │  READS:                                     │
  *   │    - StorageKycdVldTag + StorageStaIdnComp  │
- *   │    - NetworkCoreStateIdComponent (clients)  │
+ *   │    - StorageStaKycdComponent (auth entity)  │
+ *   │    - NET_CLAI_ID hub value (client mirror)  │
  *   │                                             │
  *   │  WRITES:                                    │
- *   │    - StorageStaIdnComponent on client entity│
- *   │    - StorageKycdVldTag on client entity     │
+ *   │    - StorageStaIdnComponent (client entity) │
+ *   │    - StorageStaKycdCchComponent (cache)     │
+ *   │    - StorageKycdVldTag (client entity)      │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Client entity now has identity + valid tag
+ *          │ Client entity: identity + keycard cache + valid tag
  *          ▼
+ *   StorageIdnHubWritSystem publishes STG_SES_* hub values
  *   StorageAcssChkSystem uses identity for ACL checks
  *
- * HUB Pattern (N/A - No Hub reads/writes)
+ * HUB Pattern (ARCH_ASE_STG_SES_HUB.md)
  *
  * READS (from Hub):
- *   (none)
+ *   NET_CLAI_ID — per-client session identity anchor
  *
  * WRITES (to Hub):
- *   (none)
+ *   (none — StorageIdnHubWritSystem publishes session identity downstream)
  *
  * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
  *   Identity data transferred from token entity to client entity.
@@ -92,7 +95,7 @@
  * [ ] hub::set() for writes
  * [ ] Method order: on_start → tick → on_stop
  * [ ] ALL THREE METHODS implemented
- * [ ] on_start/on_stop: log::info with system name
+ * [ ] on_start/on_stop: log::debug with system name
  * [ ] log::warn() if value EXISTS but invalid (e.g., health < 0, temp > 1000)
  * [ ] log::error() for EVERY NOT_FOUND check (see ase-log/log.hpp ERR::CAT::*)
  * [ ] Unused params: (void)dt; or commented parameter name
@@ -152,6 +155,8 @@
 // Logging
 #include <ase/log/log.hpp>
 
+#include <entt/core/hashed_string.hpp>
+
 using namespace entt::literals;
 namespace types = ase::types;
 
@@ -173,7 +178,7 @@ namespace {
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
 void StorageKycdLnkSystem::on_start(ecs::Registry& /*registry*/) {
-    log::info("[StorageKycdLnk] Started");
+    log::debug("[StorageKycdLnkSystem] Started");
 }
 
 void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
@@ -222,7 +227,7 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
 }
 
 void StorageKycdLnkSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::info("[StorageKycdLnk] Stopped");
+    log::debug("[StorageKycdLnkSystem] Stopped");
 }
 
 }  // namespace ase::storage
