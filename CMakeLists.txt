@@ -61,8 +61,6 @@ configure_file(
     @ONLY
 )
 
-# Find OpenSSL for HMAC-SHA256 keycard validation
-find_package(OpenSSL REQUIRED)
 
 message(STATUS "Configuring ${PROJECT_NAME} v${PROJECT_VERSION}")
 
@@ -271,8 +269,8 @@ target_link_libraries(${PROJECT_NAME}
         ase::log::headers          # Layer 1 - Logging
         ase::utils        # Layer 0 - String operations (strops.hpp)
         ase::types        # Layer 0 - Type helpers (is_not_found)
+        ase::crypto       # Layer 0 - HMAC-SHA256 for keycard validation (OpenSSL wrapper)
         ase::hub          # Hub API 2.0 (client identity via Mirror Tags)
-        OpenSSL::Crypto   # HMAC-SHA256 for keycard validation
 )
 
 if(ASE_BUILD_TESTS)

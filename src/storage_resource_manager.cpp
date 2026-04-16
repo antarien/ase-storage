@@ -45,7 +45,8 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <unistd.h>
-#include <openssl/hmac.h>
+#include <ase/crypto/hmac.hpp>
+#include <ase/crypto/compare.hpp>
 
 namespace ase::storage {
 
@@ -266,25 +267,22 @@ StorageResourceManager::ValidationResult StorageResourceManager::validate_jwt(ui
     }
     if (dot1 < 0 || dot2 < 0) return result;
 
-    const void* token_void = static_cast<const void*>(token);
-    unsigned char expected[32];
-    unsigned int expected_len = 0;
-    HMAC(EVP_sha256(),
-         jwt_secret_buf_, static_cast<int>(jwt_secret_len_),
-         static_cast<const unsigned char*>(token_void), static_cast<int>(dot2),
-         expected, &expected_len);
+    std::uint8_t expected[ase::crypto::HMAC_SHA256_SIZE];
+    if (!ase::crypto::hmac_sha256(jwt_secret_buf_, jwt_secret_len_,
+                                   token, static_cast<size_t>(dot2),
+                                   expected)) {
+        return result;
+    }
 
     const char* sig_b64 = token + dot2 + 1;
     uint16_t sig_b64_len = token_len - static_cast<uint16_t>(dot2) - 1;
     char actual[32];
     uint32_t actual_len = b64url_decode(sig_b64, sig_b64_len, actual, 32);
 
-    if (actual_len != expected_len) return result;
-    unsigned char diff = 0;
-    for (uint32_t si = 0; si < actual_len; ++si) {
-        diff |= static_cast<unsigned char>(actual[si]) ^ expected[si];
+    if (actual_len != ase::crypto::HMAC_SHA256_SIZE) return result;
+    if (!ase::crypto::constant_time_equal(actual, expected, ase::crypto::HMAC_SHA256_SIZE)) {
+        return result;
     }
-    if (diff) return result;
 
     const char* payload_b64 = token + dot1 + 1;
     uint16_t payload_b64_len = static_cast<uint16_t>(dot2 - dot1 - 1);
