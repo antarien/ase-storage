@@ -186,13 +186,18 @@ void StorageKycdLnkSystem::on_start(ecs::Registry& /*registry*/) {
 }
 
 void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
+    log::debug("[StorageKycdLnkSystem] tick entry");
     // Link each validated keycard entity to its network client entity
     // Hub API 2.0: find clients via hub::HubNetClaiRdyTag (Mirror Tag) + hub::get() for client_id
     auto auth_view = registry.view<StorageStaIdnComponent, StorageKycdVldTag>(
         entt::exclude<StorageKycdRjctTag>);
+    uint32_t processed = 0;
+    uint32_t linked_total = 0;
     for (auto auth_entity : auth_view) {
         auto& auth_idn = auth_view.get<StorageStaIdnComponent>(auth_entity);
         uint32_t target_client_id = auth_idn.client_id;
+        log::debug("[StorageKycdLnk] checking token user='{}' target_client={}",
+                   auth_idn.user_id, target_client_id);
 
         // Find matching client via Hub Mirror Tag (WRFL_ASE_HUB_ENTITY_DISCOVERY)
         bool linked = false;
@@ -214,6 +219,13 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
 
             registry.emplace_or_replace<StorageKycdVldTag>(client_entity);
+
+            auto* kycd_pre = registry.try_get<StorageStaKycdComponent>(auth_entity);
+            log::debug("[StorageKycdLnk] publishing SES_* for owner={} user='{}' clearance={} has_kycd={}",
+                       static_cast<uint32_t>(client_entity), auth_idn.user_id,
+                       kycd_pre != nullptr ? kycd_pre->clrn : 0,
+                       kycd_pre != nullptr ? 1 : 0);
+            (void)kycd_pre;
 
             // Publish SES_* hub contract keys for the newly-validated session
             // (ARCH_ASE_REP_LYR unified hub-centric pattern). Broadcast is
@@ -248,18 +260,22 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
                        kycd != nullptr ? kycd->clrn : 0);
 
             linked = true;
+            ++linked_total;
             log::info("[StorageKycdLnk] Linked keycard to client {}", target_client_id);
             break;
         }
 
         if (!linked) {
+            log::debug("[StorageKycdLnk] no client-entity found for target_client={}", target_client_id);
             log::warn("[StorageKycdLnk] Client entity not found for client_id {}", target_client_id);
         }
 
         // Deferred Deletion Pattern: mark temp entity for cleanup
         registry.erase<StorageKycdVldTag>(auth_entity);
         registry.emplace<StorageKycdRjctTag>(auth_entity);
+        ++processed;
     }
+    log::debug("[StorageKycdLnkSystem] tick: processed {} tokens, linked {}", processed, linked_total);
 }
 
 void StorageKycdLnkSystem::on_stop(ecs::Registry& /*registry*/) {

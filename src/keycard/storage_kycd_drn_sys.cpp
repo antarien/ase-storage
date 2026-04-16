@@ -9,8 +9,8 @@
  * @category    process
  * @schedule    Ingestion
  * @created     2026-04-05
- * @modified    2026-04-05
- * @version     1.0.0
+ * @modified    2026-04-16
+ * @version     1.1.0
  *
  * CAUSAL CHAIN (Keycard Drain)
  *
@@ -92,7 +92,7 @@
  * [ ] hub::set() for writes
  * [ ] Method order: on_start → tick → on_stop
  * [ ] ALL THREE METHODS implemented
- * [ ] on_start/on_stop: log::info with system name
+ * [ ] on_start/on_stop: log::debug with system name
  * [ ] log::warn() if value EXISTS but invalid (e.g., health < 0, temp > 1000)
  * [ ] log::error() for EVERY NOT_FOUND check (see ase-log/log.hpp ERR::CAT::*)
  * [ ] Unused params: (void)dt; or commented parameter name
@@ -168,18 +168,20 @@ namespace {
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
 void StorageKycdDrnSystem::on_start(ecs::Registry& /*registry*/) {
-    log::info("[StorageKycdDrn] Started");
+    log::debug("[StorageKycdDrnSystem] Started");
 }
 
 void StorageKycdDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
     // Access StorageResourceManager via ctx() (Flyweight Pattern)
     auto* mgr_ptr = registry.ctx().find<StorageResourceManager*>();
     if (!mgr_ptr || !(*mgr_ptr)) {
+        log::debug("[StorageKycdDrnSystem] tick idle: drain-source empty (no StorageResourceManager in ctx)");
         return;
     }
     auto& mgr = **mgr_ptr;
 
     uint32_t count = mgr.drain_pending_count();
+    log::debug("[StorageKycdDrnSystem] tick: drain-queue size={}", count);
     if (!count) {
         return;
     }
@@ -195,13 +197,15 @@ void StorageKycdDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         tkn.token_id = token_id;
         tkn.client_id = client_id;
         registry.emplace<StorageKycdPendTag>(entity);
+
+        log::debug("[StorageKycdDrn] drained token client_id={} token_id={}", client_id, token_id);
     }
 
     mgr.drain_clear();
 }
 
 void StorageKycdDrnSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::info("[StorageKycdDrn] Stopped");
+    log::debug("[StorageKycdDrnSystem] Stopped");
 }
 
 }  // namespace ase::storage
