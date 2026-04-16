@@ -127,6 +127,7 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/tag/storage_tag_cur_rework.hpp
     include/ase/storage/components/tag/storage_tag_cur_req.hpp
     include/ase/storage/components/tag/storage_tag_cur_done.hpp
+    include/ase/storage/components/tag/storage_tag_kycd_snt.hpp
 
     #[[
     SYSTEMS - KEYCARD
@@ -181,6 +182,12 @@ add_library(${PROJECT_NAME} SHARED
     Curator request processing (business logic only, no persistence).
     ]]
     include/ase/storage/systems/curator/storage_cur_prc_sys.hpp
+
+    #[[
+    SYSTEMS - SYNC
+    Engine→Replica binary-WS session identity sync sender.
+    ]]
+    include/ase/storage/systems/sync/storage_kycd_sync_snd_sys.hpp
 
     #[[
     RESOURCE MANAGER IMPLEMENTATION
@@ -238,6 +245,11 @@ add_library(${PROJECT_NAME} SHARED
     SYSTEM IMPLEMENTATIONS - CURATOR
     ]]
     src/curator/storage_cur_prc_sys.cpp
+
+    #[[
+    SYSTEM IMPLEMENTATIONS - SYNC
+    ]]
+    src/sync/storage_kycd_sync_snd_sys.cpp
 )
 add_library(ase::storage ALIAS ${PROJECT_NAME})
 
@@ -264,6 +276,7 @@ target_link_libraries(${PROJECT_NAME}
         ase::utils        # Layer 0 - String operations (strops.hpp)
         ase::types        # Layer 0 - Type helpers (is_not_found)
         ase::hub          # Hub API 2.0 (client identity via Mirror Tags)
+        ase::websocket    # L1 Core - Engine→Replica binary-WS client
         OpenSSL::Crypto   # HMAC-SHA256 for keycard validation
 )
 

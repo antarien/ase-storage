@@ -3,6 +3,9 @@
     "version": "2.0.0",
     "module": "ase-storage",
     "client_relevance": true,
+    "dependencies": [
+        "ase-websocket"
+    ],
     "hub_input_manager_tag": "StorageMgrTag",
     "channels": [
         {
@@ -51,6 +54,7 @@
                 "StorageKycdPendTag",
                 "StorageKycdRevTag",
                 "StorageKycdRjctTag",
+                "StorageKycdSntTag",
                 "StorageKycdVldTag",
                 "StorageRelmActiveTag",
                 "StorageRelmArchivedTag",
@@ -200,6 +204,12 @@
                 "description": "Marker for entities whose keycard HMAC-SHA256 check failed",
                 "fields": [],
                 "file": "tag/storage_tag_kycd_rjct.hpp"
+            },
+            {
+                "name": "StorageKycdSntTag",
+                "description": "StorageKycdSntTag - Keycard sync frame has been sent to Replica",
+                "fields": [],
+                "file": "tag/storage_tag_kycd_snt.hpp"
             },
             {
                 "name": "StorageKycdVldTag",
@@ -478,6 +488,10 @@
             {
                 "name": "StorageKycdLnkSystem",
                 "file": "keycard/storage_kycd_lnk_sys.hpp"
+            },
+            {
+                "name": "StorageKycdSyncSndSystem",
+                "file": "sync/storage_kycd_sync_snd_sys.hpp"
             },
             {
                 "name": "StorageLatcSyncSystem",

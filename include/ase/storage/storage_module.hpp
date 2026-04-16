@@ -87,6 +87,10 @@
 // Curator
 #include <ase/storage/systems/curator/storage_cur_prc_sys.hpp>
 
+// Sync (Engine→Replica binary WS keycard propagation)
+#include <ase/storage/systems/sync/storage_kycd_sync_snd_sys.hpp>
+#include <ase/storage/components/tag/storage_tag_kycd_snt.hpp>
+
 // Observation
 #include <ase/storage/systems/quota/storage_quot_chk_sys.hpp>
 #include <ase/storage/systems/vote/storage_vote_prc_sys.hpp>
@@ -121,6 +125,9 @@ struct StorageModule {
         // Integration (60Hz): Curator request processing (after ACL)
         app.add_system_with<StorageCurPrcSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssChkSystem");
+
+        // Transmission (20Hz): Engine→Replica binary-WS session identity sync
+        app.add_system<StorageKycdSyncSndSystem>(ecs::Schedule::Transmission);
 
         // Preservation (1Hz): expiry, revocation, audit write, lattice sync
         app.add_system<StorageKycdExpSystem>(ecs::Schedule::Preservation);
