@@ -28,22 +28,24 @@
  *   │                                             │
  *   │  WRITES:                                    │
  *   │    - StorageStaIdnComponent (client entity) │
- *   │    - StorageStaKycdCchComponent (cache)     │
  *   │    - StorageKycdVldTag (client entity)      │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Client entity: identity + keycard cache + valid tag
+ *          │ Client entity: identity + valid tag
  *          ▼
- *   StorageIdnHubWritSystem publishes STG_SES_* hub values
- *   StorageAcssChkSystem uses identity for ACL checks
+ *   StorageAcssChkSystem uses identity for ACL checks.
+ *   Session hub publication lives now in ase-session (Replica-scoped):
+ *   the Engine→Replica keycard-sync bridge (Phase 3) will populate the
+ *   session-side SessionStaIdnComponent + SessionStaAthzComponent, and
+ *   SessionIdnHubWritSystem will publish SES_* hub values from there.
  *
- * HUB Pattern (ARCH_ASE_STG_SES_HUB.md)
+ * HUB Pattern
  *
  * READS (from Hub):
  *   NET_CLAI_ID — per-client session identity anchor
  *
  * WRITES (to Hub):
- *   (none — StorageIdnHubWritSystem publishes session identity downstream)
+ *   (none — session hub publication moved to ase-session, Replica-scoped)
  *
  * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
  *   Identity data transferred from token entity to client entity.
