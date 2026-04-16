@@ -69,6 +69,7 @@
 
 // Ingestion (Keycard Pipeline)
 #include <ase/storage/systems/keycard/storage_kycd_drn_sys.hpp>
+#include <ase/storage/systems/keycard/storage_kycd_ntfy_drn_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_req_drn_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_vld_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp>
@@ -105,9 +106,15 @@ struct StorageModule {
 
         // Ingestion (60Hz): Developer Keycard pipeline (drain → validate → link)
         app.add_system<StorageKycdDrnSystem>(ecs::Schedule::Ingestion);
-        // HTTP-posted keycard issuance drain runs after Hub receives notify tags.
-        app.add_system_with<StorageKycdReqDrnSystem>(ecs::Schedule::Ingestion)
+        // SDK Hub-bridge drain: convert SES_KYCD_NTF_* Hub keys into
+        // StorageReqKycdComponent on the request entity before the main
+        // keycard-req drain sees it (same tick).
+        app.add_system_with<StorageKycdNtfyDrnSystem>(ecs::Schedule::Ingestion)
             .run_after("HubRcvDrnSystem");
+        // HTTP-posted keycard issuance drain runs after the notify bridge so it
+        // sees StorageReqKycdComponent + HubStgKycdPendTag together.
+        app.add_system_with<StorageKycdReqDrnSystem>(ecs::Schedule::Ingestion)
+            .run_after("StorageKycdNtfyDrnSystem");
         app.add_system_with<StorageKycdVldSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageKycdDrnSystem");
         app.add_system_with<StorageKycdLnkSystem>(ecs::Schedule::Ingestion)
