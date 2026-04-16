@@ -176,19 +176,12 @@ void StorageKycdVldSystem::on_start(ecs::Registry& /*registry*/) {
 }
 
 void StorageKycdVldSystem::tick(ecs::Registry& registry, float /*dt*/) {
-    auto* mgr_ptr = registry.ctx().find<StorageResourceManager*>();
-    if (!mgr_ptr || !(*mgr_ptr)) {
-        log::debug("[StorageKycdVldSystem] tick idle: no StorageResourceManager in ctx");
-        return;
-    }
-    auto& mgr = **mgr_ptr;
+    auto& mgr = *registry.ctx().get<StorageResourceManager*>();
 
     auto view = registry.view<StorageStaTknComponent, StorageKycdPendTag>();
-    uint32_t processed = 0;
     for (auto entity : view) {
         auto& tkn = view.get<StorageStaTknComponent>(entity);
 
-        log::debug("[StorageKycdVld] validating client_id={} token_id={}", tkn.client_id, tkn.token_id);
         auto result = mgr.validate_jwt(tkn.token_id);
 
         if (result.valid) {
@@ -203,19 +196,17 @@ void StorageKycdVldSystem::tick(ecs::Registry& registry, float /*dt*/) {
             registry.erase<StorageKycdPendTag>(entity);
             mgr.remove_token(tkn.token_id);
 
-            log::debug("[StorageKycdVld] accepted client_id={} user='{}'", tkn.client_id, idn.user_id);
+            log::debug("[StorageKycdVld] +StorageKycdVldTag client_id={} user='{}'", tkn.client_id, idn.user_id);
             log::info("[StorageKycdVld] Keycard validated for client {}", tkn.client_id);
         } else {
             registry.emplace<StorageKycdRjctTag>(entity);
             registry.erase<StorageKycdPendTag>(entity);
             mgr.remove_token(tkn.token_id);
 
-            log::debug("[StorageKycdVld] rejected client_id={} token_id={}", tkn.client_id, tkn.token_id);
+            log::debug("[StorageKycdVld] +StorageKycdRjctTag client_id={} token_id={}", tkn.client_id, tkn.token_id);
             log::warn("[StorageKycdVld] Keycard rejected for client {}", tkn.client_id);
         }
-        ++processed;
     }
-    log::debug("[StorageKycdVldSystem] tick: processed {} pending tokens", processed);
 }
 
 void StorageKycdVldSystem::on_stop(ecs::Registry& /*registry*/) {

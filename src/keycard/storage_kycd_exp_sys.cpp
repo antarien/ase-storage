@@ -9,8 +9,8 @@
  * @category    process
  * @schedule    Preservation
  * @created     2026-04-05
- * @modified    2026-04-05
- * @version     1.0.0
+ * @modified    2026-04-16
+ * @version     1.1.0
  *
  * CAUSAL CHAIN (Keycard Expiry)
  *
@@ -91,7 +91,7 @@
  * [ ] hub::set() for writes
  * [ ] Method order: on_start → tick → on_stop
  * [ ] ALL THREE METHODS implemented
- * [ ] on_start/on_stop: log::info with system name
+ * [ ] on_start/on_stop: log::debug with system name
  * [ ] log::warn() if value EXISTS but invalid (e.g., health < 0, temp > 1000)
  * [ ] log::error() for EVERY NOT_FOUND check (see ase-log/log.hpp ERR::CAT::*)
  * [ ] Unused params: (void)dt; or commented parameter name
@@ -163,15 +163,11 @@ namespace {
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
 void StorageKycdExpSystem::on_start(ecs::Registry& /*registry*/) {
-    log::info("[StorageKycdExp] Started");
+    log::debug("[StorageKycdExpSystem] Started");
 }
 
 void StorageKycdExpSystem::tick(ecs::Registry& registry, float /*dt*/) {
-    auto* mgr_ptr = registry.ctx().find<StorageResourceManager*>();
-    if (!mgr_ptr || !(*mgr_ptr)) {
-        return;
-    }
-    auto& mgr = **mgr_ptr;
+    auto& mgr = *registry.ctx().get<StorageResourceManager*>();
 
     uint64_t now = mgr.get_wall_time_seconds();
     if (!now) {
@@ -192,13 +188,15 @@ void StorageKycdExpSystem::tick(ecs::Registry& registry, float /*dt*/) {
         if (now > kycd.expires_at) {
             registry.erase<StorageKycdVldTag>(entity);
             registry.emplace<StorageKycdExpTag>(entity);
+            log::debug("[StorageKycdExp] -StorageKycdVldTag entity={} reason=expired",
+                       static_cast<uint32_t>(entity));
             log::info("[StorageKycdExp] Keycard expired: {}", kycd.kycd_hash);
         }
     }
 }
 
 void StorageKycdExpSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::info("[StorageKycdExp] Stopped");
+    log::debug("[StorageKycdExpSystem] Stopped");
 }
 
 }  // namespace ase::storage

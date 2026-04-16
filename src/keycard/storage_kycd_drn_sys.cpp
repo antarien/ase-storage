@@ -173,15 +173,9 @@ void StorageKycdDrnSystem::on_start(ecs::Registry& /*registry*/) {
 
 void StorageKycdDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
     // Access StorageResourceManager via ctx() (Flyweight Pattern)
-    auto* mgr_ptr = registry.ctx().find<StorageResourceManager*>();
-    if (!mgr_ptr || !(*mgr_ptr)) {
-        log::debug("[StorageKycdDrnSystem] tick idle: drain-source empty (no StorageResourceManager in ctx)");
-        return;
-    }
-    auto& mgr = **mgr_ptr;
+    auto& mgr = *registry.ctx().get<StorageResourceManager*>();
 
     uint32_t count = mgr.drain_pending_count();
-    log::debug("[StorageKycdDrnSystem] tick: drain-queue size={}", count);
     if (!count) {
         return;
     }
@@ -198,7 +192,7 @@ void StorageKycdDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         tkn.client_id = client_id;
         registry.emplace<StorageKycdPendTag>(entity);
 
-        log::debug("[StorageKycdDrn] drained token client_id={} token_id={}", client_id, token_id);
+        log::debug("[StorageKycdDrn] +StorageKycdPendTag client_id={} token_id={}", client_id, token_id);
     }
 
     mgr.drain_clear();
