@@ -148,6 +148,8 @@
 #include <ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp>
 // Components from same module
 #include <ase/storage/components/state/storage_sta_idn_comp.hpp>
+#include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
+#include <ase/storage/components/state/storage_sta_relm_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
 #include <ase/storage/components/tag/storage_tag_kycd_rjct.hpp>
 // Hub API for client identity mirror (Hub API 2.0: no L3→L3 network import)
@@ -212,6 +214,38 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
 
             registry.emplace_or_replace<StorageKycdVldTag>(client_entity);
+
+            // Publish SES_* hub contract keys for the newly-validated session
+            // (ARCH_ASE_REP_LYR unified hub-centric pattern). Broadcast is
+            // automatic via HubValDtyTag on value-change; ReplicationHubBctSystem
+            // relays the delta to Replica and downstream consumers.
+            uint32_t owner = static_cast<uint32_t>(client_entity);
+            uint32_t user_id_hash = entt::hashed_string{auth_idn.user_id}.value();
+            hub::register_name(registry, user_id_hash, auth_idn.user_id);
+
+            hub::set(registry, owner, "SES_USER_ID"_hs,          static_cast<float>(user_id_hash));
+            hub::set(registry, owner, "SES_IS_AUTHENTICATED"_hs, 1.0f);
+
+            auto* kycd = registry.try_get<StorageStaKycdComponent>(auth_entity);
+            if (kycd != nullptr) {
+                hub::set(registry, owner, "SES_CLEARANCE"_hs, static_cast<float>(kycd->clrn));
+                hub::set(registry, owner, "SES_EXP_AT"_hs,    static_cast<float>(kycd->expires_at));
+                if (kycd->relm_ref != 0) {
+                    auto relm_entity = static_cast<entt::entity>(kycd->relm_ref);
+                    auto* relm = registry.try_get<StorageStaRelmComponent>(relm_entity);
+                    uint32_t realm_hash = (relm != nullptr)
+                                          ? entt::hashed_string{relm->id}.value()
+                                          : kycd->relm_ref;
+                    if (relm != nullptr) {
+                        hub::register_name(registry, realm_hash, relm->id);
+                    }
+                    hub::set(registry, owner, "SES_REALM_ID"_hs, static_cast<float>(realm_hash));
+                }
+            }
+
+            log::debug("[StorageKycdLnk] SES_* published owner={} user='{}' user_hash={} clearance={}",
+                       owner, auth_idn.user_id, user_id_hash,
+                       kycd != nullptr ? kycd->clrn : 0);
 
             linked = true;
             log::info("[StorageKycdLnk] Linked keycard to client {}", target_client_id);
