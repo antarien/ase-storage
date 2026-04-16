@@ -37,6 +37,9 @@
 #include <ase/storage/components/tag/storage_tag_relm_archived.hpp>
 #include <ase/storage/components/tag/storage_tag_relm_conceal.hpp>
 
+// Request Components
+#include <ase/storage/components/request/storage_req_kycd_comp.hpp>
+
 // State Components
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
 #include <ase/storage/components/state/storage_sta_idn_comp.hpp>
