@@ -69,6 +69,7 @@
 
 // Ingestion (Keycard Pipeline)
 #include <ase/storage/systems/keycard/storage_kycd_drn_sys.hpp>
+#include <ase/storage/systems/keycard/storage_kycd_req_drn_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_vld_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp>
 
@@ -104,6 +105,9 @@ struct StorageModule {
 
         // Ingestion (60Hz): Developer Keycard pipeline (drain → validate → link)
         app.add_system<StorageKycdDrnSystem>(ecs::Schedule::Ingestion);
+        // HTTP-posted keycard issuance drain runs after Hub receives notify tags.
+        app.add_system_with<StorageKycdReqDrnSystem>(ecs::Schedule::Ingestion)
+            .run_after("HubRcvDrnSystem");
         app.add_system_with<StorageKycdVldSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageKycdDrnSystem");
         app.add_system_with<StorageKycdLnkSystem>(ecs::Schedule::Ingestion)

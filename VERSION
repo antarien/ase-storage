@@ -14,7 +14,7 @@
 #   ASE_{ABBR}_NAME=Full Name
 #   ASE_{ABBR}_DESC=Short description
 #   ASE_{ABBR}_LAYER=0-5
-#   ASE_{ABBR}_STATUS=stub|poc|init|core|feat|refine|alpha|beta|stable
+#   ASE_{ABBR}_STATUS=seed|poc|init|core|feat|refine|alpha|beta|stable
 #   ASE_{ABBR}_CREATED=YYYY-MM-DD
 #   ASE_{ABBR}_UPDATED=YYYY-MM-DD
 #
@@ -27,7 +27,7 @@
 #   5 = Servers & Clients (executables)
 #
 # STATUS (auto-calculated from commits, max=refine):
-#   stub   = <5 commits, placeholder only
+#   seed   = <5 commits, first code landed
 #   poc    = 5-15 commits, proof of concept
 #   init   = 15-30 commits, initial development
 #   core   = 30-60 commits, core functionality
@@ -39,11 +39,10 @@
 #   stable = Production ready (set manually)
 #
 # ==============================================================================
-
-ASE_STORAGE=00.00.01.00001
-ASE_STORAGE_NAME=Storage & Access Control
-ASE_STORAGE_DESC=A/ACS-based asset storage with Realms, Keycards, ACL, Audit for engine platform
+ASE_STORAGE=00.00.04.00004
+ASE_STORAGE_NAME=ASE Storage
+ASE_STORAGE_DESC=
 ASE_STORAGE_LAYER=3
-ASE_STORAGE_STATUS=stub
+ASE_STORAGE_STATUS=seed
 ASE_STORAGE_CREATED=2026-04-04
-ASE_STORAGE_UPDATED=2026-04-04
+ASE_STORAGE_UPDATED=2026-04-12

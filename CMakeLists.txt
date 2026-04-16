@@ -101,6 +101,12 @@ add_library(${PROJECT_NAME} SHARED
     #       as session_sta_idn_comp + session_sta_athz_comp (2026-04-16).
 
     #[[
+    COMPONENTS - REQUEST
+    HTTP-posted request payloads consumed by drain systems.
+    ]]
+    include/ase/storage/components/request/storage_req_kycd_comp.hpp
+
+    #[[
     COMPONENTS - TAG
     Classification tags for storage entities.
     ]]
@@ -134,6 +140,7 @@ add_library(${PROJECT_NAME} SHARED
     ]]
     include/ase/storage/systems/keycard/storage_ini_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_drn_sys.hpp
+    include/ase/storage/systems/keycard/storage_kycd_req_drn_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_vld_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_exp_sys.hpp
@@ -192,6 +199,7 @@ add_library(${PROJECT_NAME} SHARED
     ]]
     src/keycard/storage_ini_sys.cpp
     src/keycard/storage_kycd_drn_sys.cpp
+    src/keycard/storage_kycd_req_drn_sys.cpp
     src/keycard/storage_kycd_vld_sys.cpp
     src/keycard/storage_kycd_lnk_sys.cpp
     src/keycard/storage_kycd_exp_sys.cpp
