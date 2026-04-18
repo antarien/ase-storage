@@ -9,8 +9,8 @@
  * @category    process
  * @schedule    Ingestion
  * @created     2026-04-05
- * @modified    2026-04-16
- * @version     1.1.0
+ * @modified    2026-04-18
+ * @version     1.2.0
  *
  * CAUSAL CHAIN (Keycard Link)
  *
@@ -225,9 +225,16 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             // relays the delta to Replica and downstream consumers.
             uint32_t owner = static_cast<uint32_t>(client_entity);
             uint32_t user_id_hash = entt::hashed_string{auth_idn.user_id}.value();
-            hub::register_name(registry, user_id_hash, auth_idn.user_id);
+            hub::set_debug_label(registry, user_id_hash, auth_idn.user_id);
 
-            hub::set(registry, owner, "SES_USER_ID"_hs,          static_cast<float>(user_id_hash));
+            // user_id_hash is held as raw uint32_t on the session-entity's
+            // hub mirror. Hub::set would transport it as float and lose
+            // precision for hashes > 2^24 (ARCH_ASE_HUB_API.md). Consumers
+            // read this field directly from the component.
+            if (auto* mirror = registry.try_get<hub::HubStaClaiIdntComponent>(client_entity);
+                mirror != nullptr) {
+                mirror->user_id_hash = user_id_hash;
+            }
             hub::set(registry, owner, "SES_IS_AUTHENTICATED"_hs, 1.0f);
 
             auto* kycd = registry.try_get<StorageStaKycdComponent>(auth_entity);
@@ -241,7 +248,7 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
                                           ? entt::hashed_string{relm->id}.value()
                                           : kycd->relm_ref;
                     if (relm != nullptr) {
-                        hub::register_name(registry, realm_hash, relm->id);
+                        hub::set_debug_label(registry, realm_hash, relm->id);
                     }
                     hub::set(registry, owner, "SES_REALM_ID"_hs, static_cast<float>(realm_hash));
                 }
