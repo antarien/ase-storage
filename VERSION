@@ -39,10 +39,10 @@
 #   stable = Production ready (set manually)
 #
 # ==============================================================================
-ASE_STORAGE=00.00.16.00016
+ASE_STORAGE=00.00.17.00017
 ASE_STORAGE_NAME=ASE Storage
 ASE_STORAGE_DESC=
 ASE_STORAGE_LAYER=3
 ASE_STORAGE_STATUS=init
-ASE_STORAGE_CREATED=2026-04-04
-ASE_STORAGE_UPDATED=2026-04-18
+ASE_STORAGE_CREATED=2026-05-11
+ASE_STORAGE_UPDATED=2026-05-11
