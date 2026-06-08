@@ -49,8 +49,8 @@
 
 #include <cstdint>
 #include <mutex>
-#include <unordered_map>
-#include <vector>
+#include <ase/containers/hash_map.hpp>
+#include <ase/containers/vector.hpp>
 
 namespace ase::storage {
 
@@ -174,7 +174,7 @@ private:
     };
 
     // Token entries keyed by Flyweight ID
-    std::unordered_map<uint32_t, TokenEntry> token_entries_;
+    ase::containers::HashMap<uint32_t, TokenEntry> token_entries_;
     uint32_t next_token_id_ = 0;
 
     // Pending token buffer (pushed by callbacks, drained by StgKycdDrnSystem)
@@ -182,7 +182,7 @@ private:
         uint32_t client_id;
         uint32_t token_id;
     };
-    std::vector<PendingEntry> pending_tokens_;
+    ase::containers::Vector<PendingEntry> pending_tokens_;
 
     // Data directory root (from ASE_DATA_DIR env or default)
     char data_dir_[512] = {};

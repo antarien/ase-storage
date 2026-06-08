@@ -271,6 +271,7 @@ target_link_libraries(${PROJECT_NAME}
         ase::log::headers          # Layer 1 - Logging
         ase::utils        # Layer 0 - String operations (strops.hpp)
         ase::types        # Layer 0 - Type helpers (is_not_found)
+        ase::containers   # Layer 0 - HashMap/Vector (ResourceManager storage)
         ase::crypto       # Layer 0 - HMAC-SHA256 for keycard validation (OpenSSL wrapper)
         ase::hub          # Hub API 2.0 (client identity via Mirror Tags)
 )
