@@ -9,7 +9,7 @@
  * @category    process
  * @schedule    Preservation
  * @created     2026-04-05
- * @modified    2026-04-05
+ * @modified    2026-06-24
  * @version     1.0.0
  *
  * CAUSAL CHAIN (Audit Persistence)
@@ -91,7 +91,7 @@
  * [ ] hub::set() for writes
  * [ ] Method order: on_start → tick → on_stop
  * [ ] ALL THREE METHODS implemented
- * [ ] on_start/on_stop: log::info with system name
+ * [ ] on_start/on_stop: log::debug with system name
  * [ ] log::warn() if value EXISTS but invalid (e.g., health < 0, temp > 1000)
  * [ ] log::error() for EVERY NOT_FOUND check (see ase-log/log.hpp ERR::CAT::*)
  * [ ] Unused params: (void)dt; or commented parameter name
@@ -158,7 +158,7 @@ namespace {
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
 void StorageAudtWritSystem::on_start(ecs::Registry& /*registry*/) {
-    log::info("[StorageAudtWrit] Started");
+    log::debug("[StorageAudtWrit] Started");
 }
 
 void StorageAudtWritSystem::tick(ecs::Registry& /*registry*/, float /*dt*/) {
@@ -166,7 +166,7 @@ void StorageAudtWritSystem::tick(ecs::Registry& /*registry*/, float /*dt*/) {
 }
 
 void StorageAudtWritSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::info("[StorageAudtWrit] Stopped");
+    log::debug("[StorageAudtWrit] Stopped");
 }
 
 }  // namespace ase::storage

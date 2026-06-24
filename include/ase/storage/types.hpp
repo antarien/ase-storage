@@ -221,4 +221,24 @@ constexpr uint8_t CUR_ACT_RATE    = 0;   // Set rating on an image or version
 constexpr uint8_t CUR_ACT_STATUS  = 1;   // Set approval status on image or version
 constexpr uint8_t CUR_ACT_NOTES   = 2;   // Set free-text notes on image or version
 
+// ── EDGE-BINARY DISTRIBUTION (Phase 12 — A/ACS edge-daemon distribution) ─
+
+constexpr const char* EDGE_REALM_ID = "edge_binaries";  // Dedicated realm for edge-daemon binary distribution
+
+// Workflow labels — release pipeline driven by StorageWflwTranSystem transitions
+constexpr const char* EDGE_LABEL_DRAFT    = "draft";     // Uploaded build, not yet reviewed
+constexpr const char* EDGE_LABEL_REVIEW   = "review";    // Under release-manager review
+constexpr const char* EDGE_LABEL_APPROVED = "approved";  // Reviewed, awaiting publish to released
+constexpr const char* EDGE_LABEL_RELEASED = "released";  // Public download (clearance 0 + codeword BINARY)
+constexpr const char* EDGE_LABEL_RETIRED  = "retired";   // Withdrawn build, no longer downloadable
+
+// Codewords — horizontal access keys for edge-binary asset areas
+constexpr const char* EDGE_CWRD_BINARY   = "BINARY";     // Native binary + companion latest manifest
+constexpr const char* EDGE_CWRD_SBOM     = "SBOM";       // SPDX software bill of materials
+constexpr const char* EDGE_CWRD_SIG      = "SIG";        // ES256 YubiKey-PIV signature over the SHA-256
+constexpr const char* EDGE_CWRD_METADATA = "METADATA";   // compatibility.json + version manifests
+
+constexpr uint8_t EDGE_CLEARANCE_CUSTOMER = 0;   // Customer download-only clearance for released binaries
+constexpr uint8_t EDGE_CLEARANCE_OPERATOR = 5;   // Release-manager full release-workflow clearance
+
 }  // namespace ase::storage

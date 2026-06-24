@@ -9,7 +9,7 @@
  * @category    process
  * @schedule    Preservation
  * @created     2026-04-05
- * @modified    2026-04-05
+ * @modified    2026-06-24
  * @version     1.0.0
  *
  * CAUSAL CHAIN (Lattice Sync)
@@ -91,7 +91,7 @@
  * [ ] hub::set() for writes
  * [ ] Method order: on_start → tick → on_stop
  * [ ] ALL THREE METHODS implemented
- * [ ] on_start/on_stop: log::info with system name
+ * [ ] on_start/on_stop: log::debug with system name
  * [ ] log::warn() if value EXISTS but invalid (e.g., health < 0, temp > 1000)
  * [ ] log::error() for EVERY NOT_FOUND check (see ase-log/log.hpp ERR::CAT::*)
  * [ ] Unused params: (void)dt; or commented parameter name
@@ -158,7 +158,7 @@ namespace {
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
 void StorageLatcSyncSystem::on_start(ecs::Registry& /*registry*/) {
-    log::info("[StorageLatcSync] Started");
+    log::debug("[StorageLatcSync] Started");
 }
 
 void StorageLatcSyncSystem::tick(ecs::Registry& /*registry*/, float /*dt*/) {
@@ -166,7 +166,7 @@ void StorageLatcSyncSystem::tick(ecs::Registry& /*registry*/, float /*dt*/) {
 }
 
 void StorageLatcSyncSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::info("[StorageLatcSync] Stopped");
+    log::debug("[StorageLatcSync] Stopped");
 }
 
 }  // namespace ase::storage

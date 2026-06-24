@@ -142,6 +142,7 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/systems/keycard/storage_kycd_req_drn_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_vld_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp
+    include/ase/storage/systems/keycard/storage_kycd_cwrd_pub_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_exp_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_rev_sys.hpp
 
@@ -160,6 +161,12 @@ add_library(${PROJECT_NAME} SHARED
     SYSTEMS - WORKFLOW
     ]]
     include/ase/storage/systems/workflow/storage_wflw_tran_sys.hpp
+
+    #[[
+    SYSTEMS - EDGE DISTRIBUTION
+    Phase 12 edge_binaries realm seeding (realm, release ACL rule, codeword).
+    ]]
+    include/ase/storage/systems/edge/storage_edge_ini_sys.hpp
 
     #[[
     SYSTEMS - AUDIT + SURVEILLANCE
@@ -202,6 +209,7 @@ add_library(${PROJECT_NAME} SHARED
     src/keycard/storage_kycd_req_drn_sys.cpp
     src/keycard/storage_kycd_vld_sys.cpp
     src/keycard/storage_kycd_lnk_sys.cpp
+    src/keycard/storage_kycd_cwrd_pub_sys.cpp
     src/keycard/storage_kycd_exp_sys.cpp
     src/keycard/storage_kycd_rev_sys.cpp
 
@@ -220,6 +228,11 @@ add_library(${PROJECT_NAME} SHARED
     SYSTEM IMPLEMENTATIONS - WORKFLOW
     ]]
     src/workflow/storage_wflw_tran_sys.cpp
+
+    #[[
+    SYSTEM IMPLEMENTATIONS - EDGE DISTRIBUTION
+    ]]
+    src/edge/storage_edge_ini_sys.cpp
 
     #[[
     SYSTEM IMPLEMENTATIONS - AUDIT + SURVEILLANCE

@@ -1,50 +1,52 @@
 /**
  * ASE ECS SYSTEM IMPLEMENTATION
  *
- * @file        storage_vote_prc_sys.cpp
- * @brief       StorageVotePrcSystem - Evaluates Vote of Confidence outcomes
+ * @file        storage_kycd_cwrd_pub_sys.cpp
+ * @brief       StorageKycdCwrdPubSystem - Publishes session codewords to the Hub
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
- * @schedule    Observation
- * @created     2026-04-05
+ * @schedule    Ingestion
+ * @created     2026-06-24
  * @modified    2026-06-24
  * @version     1.0.0
  *
- * CAUSAL CHAIN (Vote Evaluation)
+ * CAUSAL CHAIN (Session Codeword Publication)
  *
- *   [HTTP routes create vote entities with ballots]
+ *   [StorageKycdLnkSystem links validated keycard to client]
  *          │
- *          │ Observation schedule evaluates at 1Hz
+ *          │ Client entity: StorageStaIdnComponent + StorageKycdVldTag
  *          ▼
  *   ┌─────────────────────────────────────────────┐
- *   │  THIS SYSTEM: StorageVotePrcSystem          │
+ *   │  THIS SYSTEM: StorageKycdCwrdPubSystem      │
  *   │                                             │
  *   │  READS:                                     │
- *   │    - StorageVotePendTag (open votes)        │
- *   │    - StorageStaVoteComponent (vote config)  │
- *   │    - StorageBlltVoteComponent (ballots)     │
+ *   │    - StorageStaIdnComponent + KycdVldTag    │
+ *   │    - StorageStaKycdComponent (issued_to)    │
+ *   │    - StorageKycdCwrdComponent (kycd_ref)    │
  *   │                                             │
- *   │  WRITES:                                    │
- *   │    - Removes StorageVotePendTag on resolve  │
- *   │    - Issues keycard if vote accepted        │
+ *   │  WRITES (to Hub):                           │
+ *   │    - SES_KYCD_CWRD_COUNT (per-session owner)│
+ *   │    - SES_KYCD_CWRD_<i> debug labels         │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Vote resolved: accepted or rejected
+ *          │ owner = hashed_string(user_id) — same owner the
+ *          │ edge A/ACS gate reads SES_CLEARANCE on
  *          ▼
- *   Keycard issued or vote entity marked complete
+ *   ase-pl-edge-webserver acl_gate enforces codeword possession.
  *
- * HUB Pattern (N/A - No Hub reads/writes)
+ * HUB Pattern (Active - session codeword publication)
  *
  * READS (from Hub):
  *   (none)
  *
  * WRITES (to Hub):
- *   (none)
+ *   SES_KYCD_CWRD_COUNT — number of codewords held by the session keycard
+ *   SES_KYCD_CWRD_<i>   — per-index codeword debug labels (i in [0, count))
  *
- * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
- *   Vote evaluation checks ballot counts against quorum thresholds.
+ * FLYWEIGHT PATTERN (N/A — no external resource handles)
+ *   Codeword strings live in StorageKycdCwrdComponent (char[]), no ctx handles.
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -141,34 +143,114 @@
 // ALLOWED:   <cstdint>, <cmath>, <cassert>, ase-* headers
 
 // Own header FIRST
-#include <ase/storage/systems/vote/storage_vote_prc_sys.hpp>
+#include <ase/storage/systems/keycard/storage_kycd_cwrd_pub_sys.hpp>
+// Components from same module
+#include <ase/storage/components/state/storage_sta_idn_comp.hpp>
+#include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
+#include <ase/storage/components/state/storage_kycd_cwrd_comp.hpp>
+#include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
+// Module constants (MAX_OWNER_ID, MAX_CODEWORD_LEN)
+#include <ase/storage/types.hpp>
+// Hub API for cross-module session contract keys
+#include <ase/hub/api.hpp>
+// Utils (L0 — safe C-string operations)
+#include <ase/utils/strops.hpp>
 // Logging
 #include <ase/log/log.hpp>
+
+#include <entt/core/hashed_string.hpp>
 
 using namespace entt::literals;
 
 namespace ase::storage {
 
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
+// IMPORTANT: Use anonymous namespace, NOT static keyword!
+//   namespace { void helper() {...} }   // CORRECT
+//   static void helper() {...}          // WRONG!
+// NO STRUCTS HERE! Structs = Data = Components!
+// NO View/Query operations in helpers! Only pure math!
 namespace {
 
-// No helper functions needed → vote evaluation checks ballots via Tag-filtered Views
+// Write the decimal representation of value into dst (bounded by dst_size).
+// Mirrors std::to_string(value) digit-for-digit so the resulting
+// "SES_KYCD_CWRD_<i>" hash matches the edge-gate consumer exactly.
+// Pure math — no views, no components. The do-while always emits at least
+// one digit, so value zero yields "0" without an equality check.
+void append_decimal(char* dst, uint32_t dst_size, uint32_t value) {
+    char tmp[11] = {};  // uint32_t max = 4294967295 → 10 digits + null
+    uint32_t di = 0;
+    do {
+        tmp[di++] = static_cast<char>('0' + (value % 10));
+        value /= 10;
+    } while (value > 0 && di < 10);
+    // tmp holds digits reversed — emit a forward-ordered string for str_append.
+    char fwd[11] = {};
+    for (uint32_t fi = 0; fi < di; ++fi) {
+        fwd[fi] = tmp[di - 1 - fi];
+    }
+    fwd[di] = '\0';
+    ase::utils::str_append(dst, dst_size, fwd);
+}
+
+// Build the indexed contract key "SES_KYCD_CWRD_<index>" into key.
+void build_cwrd_key(char* key, uint32_t key_size, uint32_t index) {
+    ase::utils::str_copy(key, key_size, "SES_KYCD_CWRD_");
+    append_decimal(key, key_size, index);
+}
 
 }  // anonymous namespace
 
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
-void StorageVotePrcSystem::on_start(ecs::Registry& /*registry*/) {
-    log::debug("[StorageVotePrc] Started");
+void StorageKycdCwrdPubSystem::on_start(ecs::Registry& /*registry*/) {
+    log::debug("[StorageKycdCwrdPub] Started");
 }
 
-void StorageVotePrcSystem::tick(ecs::Registry& /*registry*/, float /*dt*/) {
-    // Vote evaluation checks ballot counts against quorum thresholds
+void StorageKycdCwrdPubSystem::tick(ecs::Registry& registry, float /*dt*/) {
+    // For each authenticated session (same set StorageKycdLnkSystem publishes
+    // SES_CLEARANCE for), publish the codewords held by its keycard so the
+    // edge A/ACS gate (ase-pl-edge-webserver) can enforce them.
+    auto session_view = registry.view<StorageStaIdnComponent, StorageKycdVldTag>();
+    for (auto [session_entity, idn] : session_view.each()) {
+        (void)session_entity;
+        // owner = hashed_string(user_id) — identical to the edge-gate consumer's
+        // owner derivation, so SES_CLEARANCE and SES_KYCD_CWRD_* co-locate.
+        uint32_t owner = entt::hashed_string{idn.user_id}.value();
+
+        // Locate this session's keycard entity (issued_to == user_id) and
+        // publish each held codeword in a single pass per codeword entity.
+        auto kycd_view = registry.view<StorageStaKycdComponent>();
+        uint32_t count = 0;
+        for (auto [kycd_entity, kycd] : kycd_view.each()) {
+            if (!ase::utils::str_equal(kycd.issued_to, idn.user_id, MAX_OWNER_ID)) {
+                continue;
+            }
+
+            uint32_t kycd_ref = static_cast<uint32_t>(kycd_entity);
+            auto cwrd_view = registry.view<StorageKycdCwrdComponent>();
+            for (auto [cwrd_entity, cwrd] : cwrd_view.each()) {
+                (void)cwrd_entity;
+                if (cwrd.kycd_ref != kycd_ref) {
+                    continue;
+                }
+                char key[40] = {};
+                build_cwrd_key(key, sizeof(key), count);
+                uint32_t key_hash = entt::hashed_string{key}.value();
+                hub::set_debug_label(registry, key_hash, cwrd.cwrd);
+                ++count;
+            }
+        }
+
+        hub::set(registry, owner, "SES_KYCD_CWRD_COUNT"_hs, static_cast<float>(count));
+        log::debug("[StorageKycdCwrdPub] owner={} user='{}' codewords={}",
+                   owner, idn.user_id, count);
+    }
 }
 
-void StorageVotePrcSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::debug("[StorageVotePrc] Stopped");
+void StorageKycdCwrdPubSystem::on_stop(ecs::Registry& /*registry*/) {
+    log::debug("[StorageKycdCwrdPub] Stopped");
 }
 
 }  // namespace ase::storage

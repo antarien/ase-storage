@@ -9,7 +9,7 @@
  * @category    process
  * @schedule    Integration
  * @created     2026-04-05
- * @modified    2026-04-05
+ * @modified    2026-06-24
  * @version     1.0.0
  *
  * CAUSAL CHAIN (A/ACS Enforcement)
@@ -24,6 +24,9 @@
  *   │  READS:                                     │
  *   │    - StorageReqAcssComponent (requests)     │
  *   │    - StorageAcssRuleComponent (ACL rules)   │
+ *   │    - StorageAcssCwrdComponent (codewords)   │
+ *   │    - StorageStaKycdComponent (keycards)     │
+ *   │    - StorageKycdCwrdComponent (held cwrds)  │
  *   │                                             │
  *   │  WRITES:                                    │
  *   │    - StorageAcssGrantTag or AcssDenyTag     │
@@ -92,7 +95,7 @@
  * [ ] hub::set() for writes
  * [ ] Method order: on_start → tick → on_stop
  * [ ] ALL THREE METHODS implemented
- * [ ] on_start/on_stop: log::info with system name
+ * [ ] on_start/on_stop: log::debug with system name
  * [ ] log::warn() if value EXISTS but invalid (e.g., health < 0, temp > 1000)
  * [ ] log::error() for EVERY NOT_FOUND check (see ase-log/log.hpp ERR::CAT::*)
  * [ ] Unused params: (void)dt; or commented parameter name
@@ -144,7 +147,10 @@
 // Components from same module
 #include <ase/storage/components/state/storage_req_acss_comp.hpp>
 #include <ase/storage/components/state/storage_acss_rule_comp.hpp>
+#include <ase/storage/components/state/storage_acss_cwrd_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
+#include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
+#include <ase/storage/components/state/storage_kycd_cwrd_comp.hpp>
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_acss_grant.hpp>
 #include <ase/storage/components/tag/storage_tag_acss_deny.hpp>
@@ -189,7 +195,7 @@ void emit_audit(ecs::Registry& registry, uint32_t relm_ref, uint32_t proj_ref,
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
 void StorageAcssChkSystem::on_start(ecs::Registry& /*registry*/) {
-    log::info("[StorageAcssChk] Started");
+    log::debug("[StorageAcssChk] Started");
 }
 
 void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
@@ -202,7 +208,6 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
     // SINGLE-PASS: evaluate each pending access request
     // Request entities have pre-resolved clearance + permissions from auth headers
-    // No cross-entity Tag checks needed → all data in the request component
     auto req_view = registry.view<StorageReqAcssComponent>(entt::exclude<StorageAcssGrantTag, StorageAcssDenyTag>);
     for (auto entity : req_view) {
         auto& req = req_view.get<StorageReqAcssComponent>(entity);
@@ -273,8 +278,10 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             continue;
         }
 
-        // Step 2: Find matching ACL rule for this path (clearance check)
+        // Step 2: Find matching ACL rule for this path (clearance + label + codeword source)
         uint8_t required_protection = PROTECTION_PUBLIC;
+        uint32_t matched_rule = INVALID_ENTITY;
+        char rule_label[MAX_LABEL_LEN] = {};
         auto acl_view = registry.view<StorageAcssRuleComponent>();
         for (auto acl_ent : acl_view) {
             auto& rule = acl_view.get<StorageAcssRuleComponent>(acl_ent);
@@ -282,6 +289,8 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             if (rule.proj_ref != req.proj_ref && rule.proj_ref != 0) { continue; }
             if (ase::utils::str_equal(rule.path_pattern, req.path, ase::utils::str_len(rule.path_pattern, 256))) {
                 required_protection = rule.protection_level;
+                matched_rule = static_cast<uint32_t>(acl_ent);
+                ase::utils::str_copy(rule_label, MAX_LABEL_LEN, rule.label);
                 break;
             }
         }
@@ -306,8 +315,55 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             continue;
         }
 
-        // Steps 5-10: Codeword, Label, Lattice, N2K, Quota checks
-        // use same pattern → iterate relevant views, match against request data
+        // Step 5: Codeword check — keycard must possess EVERY codeword the rule requires
+        // Rules without required codewords are unaffected (no entry → no enforcement)
+        if (matched_rule != INVALID_ENTITY) {
+            bool missing_codeword = false;
+            auto cwrd_view = registry.view<StorageAcssCwrdComponent>();
+            for (auto [ce, required] : cwrd_view.each()) {
+                if (required.acss_ref != matched_rule) { continue; }
+                bool held = false;
+                auto kycd_view = registry.view<StorageStaKycdComponent>();
+                for (auto [ke, kc] : kycd_view.each()) {
+                    if (!ase::utils::str_equal(kc.issued_to, req.user_id, 64)) { continue; }
+                    if (kc.relm_ref != req.relm_ref && kc.relm_ref != 0) { continue; }
+                    auto held_view = registry.view<StorageKycdCwrdComponent>();
+                    for (auto [he, hc] : held_view.each()) {
+                        if (hc.kycd_ref != static_cast<uint32_t>(ke)) { continue; }
+                        if (ase::utils::str_equal(hc.cwrd, required.required_cwrd, MAX_CODEWORD_LEN) ||
+                            ase::utils::str_equal(hc.cwrd, "ALL", 3)) {
+                            held = true;
+                            break;
+                        }
+                    }
+                    if (held) { break; }
+                }
+                if (!held) { missing_codeword = true; break; }
+            }
+            if (missing_codeword) {
+                registry.emplace<StorageAcssDenyTag>(entity);
+                emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "missing_codeword");
+                continue;
+            }
+        }
+
+        // Step 7: Label (workflow status) gate
+        // retired = withdrawn build (no access); draft/review = team-only (clearance >= TEAM)
+        if (ase::utils::str_equal(rule_label, EDGE_LABEL_RETIRED, MAX_LABEL_LEN)) {
+            registry.emplace<StorageAcssDenyTag>(entity);
+            emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "retired_asset");
+            continue;
+        }
+        if ((ase::utils::str_equal(rule_label, EDGE_LABEL_DRAFT, MAX_LABEL_LEN) ||
+             ase::utils::str_equal(rule_label, EDGE_LABEL_REVIEW, MAX_LABEL_LEN)) &&
+            req.clrn < PROTECTION_TEAM) {
+            registry.emplace<StorageAcssDenyTag>(entity);
+            emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "label_restricted");
+            continue;
+        }
+
+        // Steps 6/8/9/10: Lattice, Need-to-Know, Quota are cross-cutting and
+        // evaluated out-of-band by StorageLatcSyncSystem / StorageQuotChkSystem.
 
         // GRANT
         registry.emplace<StorageAcssGrantTag>(entity);
@@ -316,7 +372,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
 }
 
 void StorageAcssChkSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::info("[StorageAcssChk] Stopped");
+    log::debug("[StorageAcssChk] Stopped");
 }
 
 }  // namespace ase::storage

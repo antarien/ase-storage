@@ -73,12 +73,16 @@
 #include <ase/storage/systems/keycard/storage_kycd_req_drn_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_vld_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp>
+#include <ase/storage/systems/keycard/storage_kycd_cwrd_pub_sys.hpp>
 
 // Integration (ACL + Storage)
 #include <ase/storage/systems/acl/storage_acss_chk_sys.hpp>
 #include <ase/storage/systems/acl/storage_cncm_flt_sys.hpp>
 #include <ase/storage/systems/fs/storage_file_writ_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_tran_sys.hpp>
+
+// Initialization (Edge Distribution)
+#include <ase/storage/systems/edge/storage_edge_ini_sys.hpp>
 
 // Preservation
 #include <ase/storage/systems/keycard/storage_kycd_exp_sys.hpp>
@@ -103,6 +107,9 @@ struct StorageModule {
     void build(ecs::App& app) {
         // Initialization: manager entity, JWT secret, data dir, realm seeding
         app.add_system<StorageIniSystem>(ecs::Schedule::Initialization);
+        // Edge-distribution realm seeding runs after the manager + data dir exist
+        app.add_system_with<StorageEdgeIniSystem>(ecs::Schedule::Initialization)
+            .run_after("StorageIniSystem");
 
         // Ingestion (60Hz): Developer Keycard pipeline (drain → validate → link)
         app.add_system<StorageKycdDrnSystem>(ecs::Schedule::Ingestion);
@@ -119,6 +126,11 @@ struct StorageModule {
             .run_after("StorageKycdDrnSystem");
         app.add_system_with<StorageKycdLnkSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageKycdVldSystem");
+        // Publish each authenticated session's keycard codewords to the Hub so
+        // the edge-distribution A/ACS gate (ase-pl-edge-webserver) can enforce
+        // them. Runs after the link system populates the validated session.
+        app.add_system_with<StorageKycdCwrdPubSystem>(ecs::Schedule::Ingestion)
+            .run_after("StorageKycdLnkSystem");
 
         // Integration (60Hz): ACL → file ops → workflow → concealment
         app.add_system<StorageAcssChkSystem>(ecs::Schedule::Integration);

@@ -1,39 +1,40 @@
 /**
  * ASE ECS SYSTEM IMPLEMENTATION
  *
- * @file        storage_vote_prc_sys.cpp
- * @brief       StorageVotePrcSystem - Evaluates Vote of Confidence outcomes
+ * @file        storage_edge_ini_sys.cpp
+ * @brief       StorageEdgeIniSystem - Seeds the edge_binaries distribution realm
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
- * @schedule    Observation
- * @created     2026-04-05
+ * @schedule    Initialization
+ * @created     2026-06-24
  * @modified    2026-06-24
  * @version     1.0.0
  *
- * CAUSAL CHAIN (Vote Evaluation)
+ * CAUSAL CHAIN (Edge-Distribution Realm Seeding)
  *
- *   [HTTP routes create vote entities with ballots]
+ *   [Server startup, after StorageIniSystem]
  *          │
- *          │ Observation schedule evaluates at 1Hz
+ *          │ App runs Initialization schedule
  *          ▼
  *   ┌─────────────────────────────────────────────┐
- *   │  THIS SYSTEM: StorageVotePrcSystem          │
+ *   │  THIS SYSTEM: StorageEdgeIniSystem          │
  *   │                                             │
  *   │  READS:                                     │
- *   │    - StorageVotePendTag (open votes)        │
- *   │    - StorageStaVoteComponent (vote config)  │
- *   │    - StorageBlltVoteComponent (ballots)     │
+ *   │    - StorageResourceManager* from ctx()      │
  *   │                                             │
  *   │  WRITES:                                    │
- *   │    - Removes StorageVotePendTag on resolve  │
- *   │    - Issues keycard if vote accepted        │
+ *   │    - edge_binaries realm directory tree     │
+ *   │    - StorageStaRelmComponent (edge realm)   │
+ *   │    - StorageRelmPublicTag + RelmActiveTag    │
+ *   │    - StorageAcssRuleComponent (release path)│
+ *   │    - StorageAcssCwrdComponent (BINARY)       │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Vote resolved: accepted or rejected
+ *          │ Realm + release ACL rule ready
  *          ▼
- *   Keycard issued or vote entity marked complete
+ *   StorageAcssChkSystem gates customer downloads against the rule
  *
  * HUB Pattern (N/A - No Hub reads/writes)
  *
@@ -44,7 +45,7 @@
  *   (none)
  *
  * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
- *   Vote evaluation checks ballot counts against quorum thresholds.
+ *   Realm path resolution + directory creation via the manager.
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -141,7 +142,16 @@
 // ALLOWED:   <cstdint>, <cmath>, <cassert>, ase-* headers
 
 // Own header FIRST
-#include <ase/storage/systems/vote/storage_vote_prc_sys.hpp>
+#include <ase/storage/systems/edge/storage_edge_ini_sys.hpp>
+// Components from same module
+#include <ase/storage/components/state/storage_sta_relm_comp.hpp>
+#include <ase/storage/components/state/storage_acss_rule_comp.hpp>
+#include <ase/storage/components/state/storage_acss_cwrd_comp.hpp>
+#include <ase/storage/components/tag/storage_tag_relm_public.hpp>
+#include <ase/storage/components/tag/storage_tag_relm_active.hpp>
+#include <ase/storage/storage_resource_manager.hpp>
+#include <ase/storage/types.hpp>
+#include <ase/utils/strops.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
@@ -150,25 +160,73 @@ using namespace entt::literals;
 namespace ase::storage {
 
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
+// IMPORTANT: Use anonymous namespace, NOT static keyword!
+// NO STRUCTS HERE! Structs = Data = Components!
+// NO View/Query operations in helpers! Only pure math!
 namespace {
 
-// No helper functions needed → vote evaluation checks ballots via Tag-filtered Views
+// No helper functions needed → all seeding inline in on_start()
 
 }  // anonymous namespace
 
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
-void StorageVotePrcSystem::on_start(ecs::Registry& /*registry*/) {
-    log::debug("[StorageVotePrc] Started");
+void StorageEdgeIniSystem::on_start(ecs::Registry& registry) {
+    log::debug("[StorageEdgeIni] Started");
+
+    auto* mgr_ptr = registry.ctx().find<StorageResourceManager*>();
+    if (!mgr_ptr || !(*mgr_ptr)) {
+        log::error("[StorageEdgeIni] StorageResourceManager not in ctx (StorageIniSystem must run first)");
+        return;
+    }
+    auto& mgr = **mgr_ptr;
+
+    // Realm directory tree: edge_binaries with release + keys subdirectories
+    char dir[512];
+    mgr.resolve_path(EDGE_REALM_ID, nullptr, "", dir, 512);
+    mgr.ensure_dir(dir);
+    mgr.resolve_path(EDGE_REALM_ID, nullptr, "release", dir, 512);
+    mgr.ensure_dir(dir);
+    mgr.resolve_path(EDGE_REALM_ID, nullptr, "keys", dir, 512);
+    mgr.ensure_dir(dir);
+    log::info("[StorageEdgeIni] edge_binaries realm directory ready");
+
+    // Realm entity: public platform realm, Enterprise tier, no concealment
+    auto realm_ent = registry.create();
+    auto& relm = registry.emplace<StorageStaRelmComponent>(realm_ent);
+    ase::utils::str_copy(relm.id, MAX_REALM_ID, EDGE_REALM_ID);
+    ase::utils::str_copy(relm.name, MAX_REALM_NAME, "Edge Binary Distribution");
+    relm.default_protection = PROTECTION_PUBLIC;
+    relm.tier = TIER_ENTERPRISE;
+    registry.emplace<StorageRelmPublicTag>(realm_ent);
+    registry.emplace<StorageRelmActiveTag>(realm_ent);
+    log::info("[StorageEdgeIni] edge_binaries realm entity registered (tier=Enterprise, public)");
+
+    // Release-path ACL rule: clearance 0 (public), label released, codeword BINARY
+    auto rule_ent = registry.create();
+    auto& rule = registry.emplace<StorageAcssRuleComponent>(rule_ent);
+    rule.relm_ref = static_cast<uint32_t>(realm_ent);
+    rule.proj_ref = 0;
+    ase::utils::str_copy(rule.path_pattern, MAX_PATH_LEN, "release/*");
+    rule.protection_level = PROTECTION_PUBLIC;
+    ase::utils::str_copy(rule.label, MAX_LABEL_LEN, EDGE_LABEL_RELEASED);
+
+    // Required codeword for the release path (Entity-per-Item)
+    auto cwrd_ent = registry.create();
+    auto& cwrd = registry.emplace<StorageAcssCwrdComponent>(cwrd_ent);
+    cwrd.acss_ref = static_cast<uint32_t>(rule_ent);
+    ase::utils::str_copy(cwrd.required_cwrd, MAX_CODEWORD_LEN, EDGE_CWRD_BINARY);
+
+    log::info("[StorageEdgeIni] release ACL rule ready (label=released codeword=BINARY)");
 }
 
-void StorageVotePrcSystem::tick(ecs::Registry& /*registry*/, float /*dt*/) {
-    // Vote evaluation checks ballot counts against quorum thresholds
+void StorageEdgeIniSystem::tick(ecs::Registry& /*registry*/, float /*dt*/) {
+    // Initialization system has no per-tick logic
 }
 
-void StorageVotePrcSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::debug("[StorageVotePrc] Stopped");
+void StorageEdgeIniSystem::on_stop(ecs::Registry& /*registry*/) {
+    log::debug("[StorageEdgeIni] Stopped");
 }
 
 }  // namespace ase::storage

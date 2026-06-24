@@ -9,7 +9,7 @@
  * @category    process
  * @schedule    Integration
  * @created     2026-04-05
- * @modified    2026-04-05
+ * @modified    2026-06-24
  * @version     1.0.0
  *
  * CAUSAL CHAIN (Workflow Transition)
@@ -28,7 +28,7 @@
  *   │    - Updates label in StorageAcssRuleComp   │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Label transitioned (draft → approved)
+ *          │ Label transitioned (draft → approved → released)
  *          ▼
  *   Asset visible to wider audience per new label
  *
@@ -90,7 +90,7 @@
  * [ ] hub::set() for writes
  * [ ] Method order: on_start → tick → on_stop
  * [ ] ALL THREE METHODS implemented
- * [ ] on_start/on_stop: log::info with system name
+ * [ ] on_start/on_stop: log::debug with system name
  * [ ] log::warn() if value EXISTS but invalid (e.g., health < 0, temp > 1000)
  * [ ] log::error() for EVERY NOT_FOUND check (see ase-log/log.hpp ERR::CAT::*)
  * [ ] Unused params: (void)dt; or commented parameter name
@@ -157,7 +157,7 @@ namespace {
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
 void StorageWflwTranSystem::on_start(ecs::Registry& /*registry*/) {
-    log::info("[StorageWflwTran] Started");
+    log::debug("[StorageWflwTran] Started");
 }
 
 void StorageWflwTranSystem::tick(ecs::Registry& /*registry*/, float /*dt*/) {
@@ -165,7 +165,7 @@ void StorageWflwTranSystem::tick(ecs::Registry& /*registry*/, float /*dt*/) {
 }
 
 void StorageWflwTranSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::info("[StorageWflwTran] Stopped");
+    log::debug("[StorageWflwTran] Stopped");
 }
 
 }  // namespace ase::storage
