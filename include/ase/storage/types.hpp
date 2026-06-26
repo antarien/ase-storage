@@ -193,6 +193,15 @@ constexpr uint32_t QUOTA_ENT_CODEWORDS     = 0xFFFFFFFF;     // Unlimited codewo
 constexpr uint32_t QUOTA_ENT_LATTICE       = 0xFFFFFFFF;     // Unlimited lattice links
 constexpr uint32_t QUOTA_ENT_AUDIT_DAYS    = 0xFFFFFFFF;     // Unlimited audit log retention
 
+// ── A/ACS LADDER PRESETS (§14.1 in-ladder rules, no pre-ladder shortcuts) ─
+// The public realm and the realm-owner power are modelled as proper ladder
+// inputs so every GRANT happens only at step 10, never before step 2.
+
+constexpr const char* ACSS_REALM_PUBLIC_ID = "ase";   // Public 'ase' realm: engine defaults readable by all (PUBLIC protection rule)
+constexpr const char* ACSS_CWRD_WILDCARD   = "ALL";   // Wildcard codeword: owner-preset keycard satisfies every required codeword
+constexpr uint8_t  ACSS_OWNER_CLEARANCE = 9;          // Realm-owner keycard preset clearance (SOVEREIGN, ARCH §:819 "Owner = Clearance 9")
+constexpr uint16_t ACSS_OWNER_PERMS     = 0xFFFF;     // Realm-owner keycard preset permissions (all bitflags, ARCH §:819 "alle Codewörter")
+
 // ── ENTITY REFERENCE ────────────────────────────────────────────────────
 
 constexpr uint32_t INVALID_ENTITY = 0xFFFFFFFF;  // No entity reference (UINT32_MAX sentinel)
@@ -240,5 +249,59 @@ constexpr const char* EDGE_CWRD_METADATA = "METADATA";   // compatibility.json +
 
 constexpr uint8_t EDGE_CLEARANCE_CUSTOMER = 0;   // Customer download-only clearance for released binaries
 constexpr uint8_t EDGE_CLEARANCE_OPERATOR = 5;   // Release-manager full release-workflow clearance
+
+// ── KEYCARD-NOTIFY KEY BUILDING (per-index Hub key construction, Phase 12) ─
+
+constexpr uint32_t NTF_CWRD_PREFIX_LEN = 18;  // length of the literal "SES_KYCD_NTF_CWRD_"
+constexpr uint32_t NTF_KEY_BUF_LEN     = 40;  // SES_KYCD_NTF_CWRD_<i> key scratch buffer chars
+constexpr uint32_t NTF_NUM_BUF_LEN     = 12;  // decimal index scratch buffer chars
+constexpr uint32_t DECIMAL_RADIX       = 10;  // base-10 digit extraction divisor
+
+// ── KEYCARD DURABLE-PERSIST ROUND-TRIP (Phase 12 H-3 — Replica MongoDB) ────
+// A minted keycard is shipped owner-keyed over the Hub WS lane to the Replica,
+// which drains the SES_KYCD_PERSIST_* signals and upserts the keycard document.
+// op distinguishes a fresh/updated keycard from a revocation so issuance and
+// revoke write the SAME durable store keyed by kycd_hash.
+
+constexpr uint8_t KYCD_PST_OP_UPSERT = 0;   // Insert or update the durable keycard document
+constexpr uint8_t KYCD_PST_OP_REVOKE = 1;   // Mark the durable keycard document revoked
+
+// Per-index Hub key construction for durable-persist codeword projection.
+// "SES_KYCD_PERSIST_CWRD_<owner>_<index>" debug-labels carry each codeword
+// string; the owner is hashed_string(issued_to) so records never collide
+// across users (mirrors the SES_KYCD_CWRD_ owner-scoped key scheme).
+constexpr uint32_t PST_KEY_BUF_LEN = 64;    // SES_KYCD_PERSIST_CWRD_<owner>_<i> key scratch chars
+
+// ── EDGE KEYCARD-AUTHZ FETCH LANE (Phase 12 — customer-auth edge download) ──
+// The dist tier (ase-server-dist) validates NOTHING itself: when a customer
+// download arrives with no live local gate session, the dist edge ROUTES
+// (edge_keycard_routes/edge_binary_routes trigger_keycard_fetch) build the
+// BIN_MSG_EDGE_KYCD_REQ frame from the held user_id and push it onto the L1
+// transport outbound queue directly — the user_id is string DATA on the binary
+// wire, never the numeric Hub. The Replica (ReplicaEdgeKycdSystem) FINDs the
+// keycard in MongoDB and ships BIN_MSG_EDGE_KYCD_RES back; StorageEdgeKycdResDrnSystem
+// parses the document and publishes the SES_CLEARANCE + SES_KYCD_PERM +
+// SES_KYCD_CWRD_* session the gate reads. The dist host links NO data client — the
+// SAME split as the edge-daemon connection-token check (ReplicaEdgeRegSystem). The
+// RES BIN_MSG id + frame layout are mirrored from
+// modules/ase-replication/replica_types.hpp; changing either side requires
+// changing both (single contract).
+
+constexpr uint8_t EDGE_KYCD_BIN_MSG_RES = 34;  // Replica → dist: [34][req_id:u64][status:u8][payload_len:u32][payload]
+
+// RES frame layout (mirrors replica_types.hpp RSN_MEM_READ_RES_HDR/PAYLOAD_MAX).
+constexpr uint32_t EDGE_KYCD_RES_HDR     = 14;    // 1 id + 8 req_id + 1 status + 4 payload_len
+constexpr uint32_t EDGE_KYCD_PAYLOAD_MAX = 8192;  // Max keycard-document payload returned per fetch
+
+// RES status enum (mirrors replica_types.hpp RSN_MEM_STATUS_*).
+constexpr uint8_t EDGE_KYCD_STATUS_OK        = 0;  // Keycard found, document payload follows
+constexpr uint8_t EDGE_KYCD_STATUS_NOT_FOUND = 1;  // No matching keycard, payload empty
+constexpr uint8_t EDGE_KYCD_STATUS_ERROR     = 2;  // Backend/serialization error
+
+// Per-index decode codeword key construction. The dist decode rebuilds the
+// identical "SES_KYCD_CWRD_<owner>_<i>" key StorageKycdCwrdPubSystem produces so
+// the edge A/ACS gate reads the recovered codeword set unchanged.
+constexpr uint32_t KYCD_CWRD_KEY_BUF      = 64;  // "SES_KYCD_CWRD_<owner>_<i>" key scratch chars
+constexpr uint32_t KYCD_DECODE_CWRD_MAX   = 64;  // max codewords parsed out of a recovered keycard document
 
 }  // namespace ase::storage

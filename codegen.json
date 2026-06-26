@@ -412,6 +412,57 @@
                 "description": "StorageReqCurComponent - Curator action request from HTTP",
                 "fields": [],
                 "file": "state/storage_req_cur_comp.hpp"
+            },
+            {
+                "name": "StorageBufKycdComponent",
+                "description": "StorageBufKycdComponent - Durable keycard-issuance identity record (Replica round-trip, Phase 12 H-3)",
+                "fields": [
+                    {
+                        "name": "op",
+                        "type": "uint8",
+                        "default": "0",
+                        "description": "KYCD_PST_OP_UPSERT or KYCD_PST_OP_REVOKE"
+                    },
+                    {
+                        "name": "cwrd_count",
+                        "type": "uint32",
+                        "default": "0",
+                        "description": "Number of StorageBufKycdCwrdComponent children"
+                    }
+                ],
+                "file": "state/storage_buf_kycd_comp.hpp"
+            },
+            {
+                "name": "StorageBufKycdAccComponent",
+                "description": "StorageBufKycdAccComponent - Keycard durable-persist accreditation axes (Phase 12 H-3)",
+                "fields": [
+                    {
+                        "name": "relm_ref",
+                        "type": "uint32",
+                        "default": "0",
+                        "description": "Entity ref to realm this keycard grants access to"
+                    },
+                    {
+                        "name": "proj_ref",
+                        "type": "uint32",
+                        "default": "0",
+                        "description": "Entity ref to project (0 = realm-wide access)"
+                    }
+                ],
+                "file": "state/storage_buf_kycd_acc_comp.hpp"
+            },
+            {
+                "name": "StorageBufKycdCwrdComponent",
+                "description": "StorageBufKycdCwrdComponent - Codeword on a keycard persist record (Entity-per-Item, Phase 12 H-3)",
+                "fields": [
+                    {
+                        "name": "pst_ref",
+                        "type": "uint32",
+                        "default": "0",
+                        "description": "Entity ref to parent StorageBufKycdComponent record"
+                    }
+                ],
+                "file": "state/storage_buf_kycd_cwrd_comp.hpp"
             }
         ]
     },

@@ -3,16 +3,21 @@
 /**
  * ASE ECS COMPONENT (STATE)
  *
- * @file        storage_sta_idn_comp.hpp
- * @brief       StorageStaIdnComponent - Authenticated user identity
- * @description Validated identity extracted from keycard JWT claims.
- *              Placed on client entity after successful keycard verification.
+ * @file        storage_buf_kycd_acc_comp.hpp
+ * @brief       StorageBufKycdAccComponent - Keycard durable-persist accreditation axes
+ * @description Sibling of StorageBufKycdComponent on the same persist-record
+ *              entity, carrying the A/ACS accreditation axes (clearance,
+ *              permission, expiry, realm/project binding) of a minted keycard
+ *              for the durable Replica round-trip. Split from the identity
+ *              record to keep each component focused (≤5 fields) per
+ *              WRFL_ASE_COMPONENT_DESIGN.md — Component composition, not a
+ *              God-Component.
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
- * @created     2026-04-04
- * @modified    2026-04-04
+ * @created     2026-06-24
+ * @modified    2026-06-24
  * @version     1.0.0
  *
  * ECS COMPONENT COMPLIANCE
@@ -44,28 +49,26 @@
  * [ ] Component stores ONLY primitive ID (uint32_t) referencing external resource
  */
 
-#include <ase/storage/types.hpp>
 #include <cstdint>
 
 namespace ase::storage {
 
 /**
- * @brief StorageStaIdnComponent - Validated user identity from keycard
+ * @brief StorageBufKycdAccComponent - Keycard durable-persist accreditation axes
  *
- * Developer identity extracted from platform keycard (JWT).
- * Placed on client entity by StgKcdLnkSystem after successful verification.
+ * Emplaced beside StorageBufKycdComponent by StorageKycdPstEmitSystem. The
+ * Replica persists these axes onto the same MongoDB keycard document keyed by
+ * StorageBufKycdComponent.kycd_hash.
  *
  * @hub_reads  none
  * @hub_writes none
  */
-struct StorageStaIdnComponent {
-    char user_id[MAX_OWNER_ID] = {};          // MongoDB ObjectId from JWT "sub" claim
-    uint32_t user_id_hash = 0;                // FNV-1a32 of user_id (== entt::hashed_string); exact gate owner, string-independent
-    char email[MAX_EMAIL_LEN] = {};           // Email address from JWT claims
-    char display_name[MAX_DISPLAY_NAME] = {}; // User display name from JWT claims
-    uint32_t client_id = 0;                   // Network client ID from ase-network WebRTC
-    uint32_t active_keycard = 0;              // Entity ref to active keycard entity
-    uint64_t authenticated_at = 0;            // Unix timestamp when keycard was validated
+struct StorageBufKycdAccComponent {
+    uint32_t relm_ref = 0;                    // Entity ref to realm this keycard grants access to
+    uint32_t proj_ref = 0;                    // Entity ref to project (0 = realm-wide access)
+    uint8_t clrn = 0;                         // Max Schutzstufe this keycard can access (0-9)
+    uint16_t perm = 0;                        // Permission bitflags (PERM_READ|PERM_WRITE|...)
+    uint64_t expires_at = 0;                  // Unix timestamp of expiry (0 = no expiry)
 };
 
 }  // namespace ase::storage

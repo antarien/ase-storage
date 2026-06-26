@@ -1,52 +1,55 @@
 /**
  * ASE ECS SYSTEM IMPLEMENTATION
  *
- * @file        storage_kycd_rev_sys.cpp
- * @brief       StorageKycdRevSystem - Tags revoked keycards
+ * @file        storage_edge_audt_drn_sys.cpp
+ * @brief       StorageEdgeAudtDrnSystem - Drains edge A/ACS gate audit-signals
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
- * @schedule    Preservation
- * @created     2026-04-05
+ * @schedule    Observation
+ * @created     2026-06-24
  * @modified    2026-06-24
  * @version     1.0.0
  *
- * CAUSAL CHAIN (Keycard Revocation)
+ * CAUSAL CHAIN (Edge A/ACS Audit Persistence)
  *
- *   [Admin revokes keycard via API]
+ *   [ase-pl-edge-webserver acl_gate emits a decision]
  *          │
- *          │ StorageStaKycdComponent entity flagged in ECS
+ *          │ owner-keyed Hub signal SES_EDGE_AUDIT_* (owner = hashed_string(user_id)),
+ *          │ SES_EDGE_AUDIT_SEQ bumped once per decision (grant or deny)
  *          ▼
  *   ┌─────────────────────────────────────────────┐
- *   │  THIS SYSTEM: StorageKycdRevSystem          │
+ *   │  THIS SYSTEM: StorageEdgeAudtDrnSystem      │
  *   │                                             │
  *   │  READS:                                     │
- *   │    - StorageStaKycdComponent + KycdRevTag   │
- *   │    - SES_KYCD_PERSIST_SEQ (owner watermark) │
+ *   │    - StorageStaIdnComponent + KycdVldTag    │
+ *   │    - SES_EDGE_AUDIT_SEQ / DRAINED_SEQ       │
+ *   │    - SES_EDGE_AUDIT_ACTION / RESULT / CWRD  │
  *   │                                             │
  *   │  WRITES:                                    │
- *   │    - SES_KYCD_PERSIST_* (op=REVOKE, Hub)    │
- *   │    - StorageKycdRevPstTag (emit-once mark)  │
+ *   │    - StorageBufAudtComponent + AudtPendTag  │
+ *   │    - SES_EDGE_AUDIT_DRAINED_SEQ (watermark) │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Replica updates the durable keycard document (revoked)
+ *          │ Audit entity tagged pending
  *          ▼
- *   StorageAcssChkSystem rejects revoked keycards in-memory meanwhile
+ *   StorageAudtWritSystem (Preservation) persists to MongoDB.
  *
- * HUB Pattern (Active - emits owner-keyed durable-revoke signal)
+ * HUB Pattern (Active - drains edge-gate audit signals)
  *
  * READS (from Hub):
- *   SES_KYCD_PERSIST_SEQ - monotonic emit counter per owner (read-modify-write)
+ *   SES_EDGE_AUDIT_SEQ         — monotonic decision counter per owner
+ *   SES_EDGE_AUDIT_DRAINED_SEQ — drain watermark per owner
+ *   SES_EDGE_AUDIT_ACTION      — action enum of the latest decision
+ *   SES_EDGE_AUDIT_RESULT      — result enum of the latest decision
+ *   SES_EDGE_AUDIT_CWRD        — required-codeword hash (label = codeword string)
  *
  * WRITES (to Hub):
- *   SES_KYCD_PERSIST_SEQ       - bumped once per revoked keycard
- *   SES_KYCD_PERSIST_OP        - KYCD_PST_OP_REVOKE for the revoked keycard
- *   SES_KYCD_PERSIST_KYCD_HASH - durable primary key (label = SHA-256 hex)
+ *   SES_EDGE_AUDIT_DRAINED_SEQ — advanced to SES_EDGE_AUDIT_SEQ after draining
  *
- * FLYWEIGHT PATTERN (N/A - no ResourceManager access)
- *   Revocation rides the SAME durable Hub path issuance uses, keyed by kycd_hash,
- *   so issuance and revoke address one durable store (Phase 12 H-3).
+ * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
+ *   Wall-clock timestamp for audit entries from the resource manager.
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -143,17 +146,20 @@
 // ALLOWED:   <cstdint>, <cmath>, <cassert>, ase-* headers
 
 // Own header FIRST
-#include <ase/storage/systems/keycard/storage_kycd_rev_sys.hpp>
+#include <ase/storage/systems/audit/storage_edge_audt_drn_sys.hpp>
 // Components from same module
-#include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_rev.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_rev_pst.hpp>
-// Module constants (KYCD_PST_OP_REVOKE)
+#include <ase/storage/components/state/storage_sta_idn_comp.hpp>
+#include <ase/storage/components/state/storage_buf_audt_comp.hpp>
+#include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
+#include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
+#include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
-// Hub API for owner-keyed durable-revoke signal
+// Hub API for owner-keyed audit-signal drain
 #include <ase/hub/api.hpp>
 // Types (L0 — is_not_found sentinel check)
 #include <ase/types/types.hpp>
+// Utils (L0 — safe C-string operations)
+#include <ase/utils/strops.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
@@ -164,6 +170,9 @@ using namespace entt::literals;
 namespace ase::storage {
 
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
+// IMPORTANT: Use anonymous namespace, NOT static keyword!
+// NO STRUCTS HERE! Structs = Data = Components!
+// NO View/Query operations in helpers! Only pure math!
 namespace {
 
 // No helper functions needed → all logic inline in tick()
@@ -173,53 +182,96 @@ namespace {
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
-void StorageKycdRevSystem::on_start(ecs::Registry& /*registry*/) {
-    log::debug("[StorageKycdRev] Started");
+void StorageEdgeAudtDrnSystem::on_start(ecs::Registry& /*registry*/) {
+    log::debug("[StorageEdgeAudtDrn] Started");
 }
 
-void StorageKycdRevSystem::tick(ecs::Registry& registry, float /*dt*/) {
-    // The HTTP revoke route (POST /api/realms/:rid/keycards/:id/revoke) emplaces
-    // StorageKycdRevTag on the keycard entity. The 10-step A/ACS check
-    // (ARCH_ASE_STORAGE.md 14.1 step 1) already denies any keycard carrying that
-    // tag in-memory. This system makes the revocation DURABLE: it emits an
-    // owner-keyed SES_KYCD_PERSIST_* signal with op=KYCD_PST_OP_REVOKE so the
-    // Replica updates the SAME keycard MongoDB document the mint upserted (keyed
-    // by kycd_hash) — issuance and revoke address one durable store, not a record
-    // the mint never wrote. StorageKycdRevPstTag makes the emit exactly-once.
-    auto view = registry.view<StorageStaKycdComponent, StorageKycdRevTag>(
-        entt::exclude<StorageKycdRevPstTag>);
-    for (auto [entity, kycd] : view.each()) {
-        // A keycard without a SHA-256 digest has no durable primary key — the
-        // Replica cannot locate its document to mark revoked. Mark done so it is
-        // not re-scanned, and log the malformed state as an error.
-        if (kycd.kycd_hash[0] == '\0') {
-            log::error("[StorageKycdRev] revoked keycard entity={} has empty kycd_hash — not durably revocable",
-                       static_cast<uint32_t>(entity));
-            registry.emplace<StorageKycdRevPstTag>(entity);
+void StorageEdgeAudtDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
+    auto* mgr_ptr = registry.ctx().find<StorageResourceManager*>();
+    if (!mgr_ptr || !(*mgr_ptr)) {
+        return;
+    }
+    auto& mgr = **mgr_ptr;
+    uint64_t now = mgr.get_wall_time_seconds();
+
+    // SINGLE-PASS: each authenticated session is keyed by hashed_string(user_id)
+    // — the identical owner the edge gate writes the SES_EDGE_AUDIT_* signals to.
+    auto view = registry.view<StorageStaIdnComponent, StorageKycdVldTag>();
+    for (auto [session_entity, idn] : view.each()) {
+        (void)session_entity;
+        uint32_t owner = entt::hashed_string{idn.user_id}.value();
+
+        float seq_f = hub::get(registry, owner, "SES_EDGE_AUDIT_SEQ"_hs);
+        if (ase::types::is_not_found(seq_f)) {
+            // No gate decision recorded for this owner yet — nothing to drain.
+            continue;
+        }
+        float drained_f = hub::get(registry, owner, "SES_EDGE_AUDIT_DRAINED_SEQ"_hs, 0.0f);
+        if (ase::types::is_not_found(drained_f)) {
+            drained_f = 0.0f;
+        }
+
+        uint32_t seq = static_cast<uint32_t>(seq_f);
+        uint32_t drained = static_cast<uint32_t>(drained_f);
+        if (seq <= drained) {
+            // Watermark current — no new decisions since the last drain.
             continue;
         }
 
-        uint32_t owner = entt::hashed_string{kycd.issued_to}.value();
-        float seq_f = hub::get(registry, owner, "SES_KYCD_PERSIST_SEQ"_hs, 0.0f);
-        if (ase::types::is_not_found(seq_f)) {
-            seq_f = 0.0f;
+        // Read the latest decision metadata. ACTION/RESULT/CWRD reflect the most
+        // recent decision; `gap` is how many decisions occurred since the last
+        // drain. NO silent reads: a missing ACTION/RESULT is logged as an error,
+        // not skipped, because a bumped SEQ guarantees the gate wrote them.
+        float action_f = hub::get(registry, owner, "SES_EDGE_AUDIT_ACTION"_hs);
+        if (ase::types::is_not_found(action_f)) {
+            log::error("[StorageEdgeAudtDrn] SES_EDGE_AUDIT_ACTION missing for owner={} (seq={})",
+                       owner, seq);
+            action_f = static_cast<float>(AUD_READ);
         }
-        uint32_t seq = static_cast<uint32_t>(seq_f) + 1;
-        hub::set(registry, owner, "SES_KYCD_PERSIST_SEQ"_hs, static_cast<float>(seq));
-        hub::set(registry, owner, "SES_KYCD_PERSIST_OP"_hs, static_cast<float>(KYCD_PST_OP_REVOKE));
+        float result_f = hub::get(registry, owner, "SES_EDGE_AUDIT_RESULT"_hs);
+        if (ase::types::is_not_found(result_f)) {
+            log::error("[StorageEdgeAudtDrn] SES_EDGE_AUDIT_RESULT missing for owner={} (seq={})",
+                       owner, seq);
+            result_f = static_cast<float>(AUD_DENIED);
+        }
+        float cwrd_f = hub::get(registry, owner, "SES_EDGE_AUDIT_CWRD"_hs, 0.0f);
+        if (ase::types::is_not_found(cwrd_f)) {
+            cwrd_f = 0.0f;
+        }
 
-        uint32_t kycd_hash_id = entt::hashed_string{kycd.kycd_hash}.value();
-        hub::set(registry, owner, "SES_KYCD_PERSIST_KYCD_HASH"_hs, static_cast<float>(kycd_hash_id));
-        hub::set_debug_label(registry, kycd_hash_id, kycd.kycd_hash);
+        uint32_t cwrd_hash = static_cast<uint32_t>(cwrd_f);
+        const char* cwrd_str = hub::get_name(registry, cwrd_hash);
+        if (cwrd_str == nullptr) {
+            cwrd_str = "";
+        }
+        uint32_t gap = seq - drained;
 
-        registry.emplace<StorageKycdRevPstTag>(entity);
-        log::info("[StorageKycdRev] owner={} hash='{}' seq={} durable revoke → Replica",
-                  owner, kycd.kycd_hash, seq);
+        // Emit one audit entity carrying the latest decision metadata. The
+        // coalesced decision count rides the reason field so the audit trail
+        // is honest about how many 1Hz-window decisions this record stands for
+        // (no fabricated per-decision metadata, no silent drop).
+        auto aud_ent = registry.create();
+        auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
+        aud.relm_ref = 0;
+        aud.proj_ref = 0;
+        ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, idn.user_id);
+        aud.action = static_cast<uint8_t>(action_f);
+        ase::utils::str_copy(aud.path, MAX_PATH_LEN, EDGE_REALM_ID);
+        aud.timestamp = now;
+        aud.result = static_cast<uint8_t>(result_f);
+        ase::utils::str_copy(aud.reason, MAX_REASON_LEN, cwrd_str);
+        registry.emplace<StorageAudtPendTag>(aud_ent);
+
+        // Advance the watermark so the next tick only drains fresh decisions.
+        hub::set(registry, owner, "SES_EDGE_AUDIT_DRAINED_SEQ"_hs, static_cast<float>(seq));
+
+        log::debug("[StorageEdgeAudtDrn] owner={} user='{}' drained gap={} result={} cwrd='{}'",
+                   owner, idn.user_id, gap, static_cast<uint32_t>(result_f), cwrd_str);
     }
 }
 
-void StorageKycdRevSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::debug("[StorageKycdRev] Stopped");
+void StorageEdgeAudtDrnSystem::on_stop(ecs::Registry& /*registry*/) {
+    log::debug("[StorageEdgeAudtDrn] Stopped");
 }
 
 }  // namespace ase::storage

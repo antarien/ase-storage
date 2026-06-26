@@ -37,7 +37,7 @@
  *
  * Preservation:
  *   StorageKycdExpSystem (checks keycard expiration)
- *   StorageKycdRevSystem (checks keycard revocation)
+ *   StorageKycdRevSystem (emits durable revoke signal to the Replica)
  *     run_after: StorageKycdExpSystem
  *   StorageAudtWritSystem (batch-writes audit entries to MongoDB)
  *   StorageLatcSyncSystem (synchronizes lattice links)
@@ -73,7 +73,13 @@
 #include <ase/storage/systems/keycard/storage_kycd_req_drn_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_vld_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp>
-#include <ase/storage/systems/keycard/storage_kycd_cwrd_pub_sys.hpp>
+// Keycard-keyed gate projection (replaces the session-keyed cwrd_pub): projects a
+// minted keycard's A/ACS axes (clearance + permission + codewords) to the edge gate
+// owner = hashed_string(issued_to) WITHOUT requiring a live validated session.
+
+// Edge keycard-authz response drain (Phase 12 — dist tier customer-auth download).
+// The REQUEST is sent directly by the dist edge routes (no storage emit system).
+#include <ase/storage/systems/keycard/storage_edge_kycd_res_drn_sys.hpp>
 
 // Integration (ACL + Storage)
 #include <ase/storage/systems/acl/storage_acss_chk_sys.hpp>
@@ -97,6 +103,7 @@
 #include <ase/storage/systems/quota/storage_quot_chk_sys.hpp>
 #include <ase/storage/systems/vote/storage_vote_prc_sys.hpp>
 #include <ase/storage/systems/audit/storage_srvl_log_sys.hpp>
+#include <ase/storage/systems/audit/storage_edge_audt_drn_sys.hpp>
 
 namespace ase::storage {
 
@@ -126,11 +133,6 @@ struct StorageModule {
             .run_after("StorageKycdDrnSystem");
         app.add_system_with<StorageKycdLnkSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageKycdVldSystem");
-        // Publish each authenticated session's keycard codewords to the Hub so
-        // the edge-distribution A/ACS gate (ase-pl-edge-webserver) can enforce
-        // them. Runs after the link system populates the validated session.
-        app.add_system_with<StorageKycdCwrdPubSystem>(ecs::Schedule::Ingestion)
-            .run_after("StorageKycdLnkSystem");
 
         // Integration (60Hz): ACL → file ops → workflow → concealment
         app.add_system<StorageAcssChkSystem>(ecs::Schedule::Integration);
@@ -151,11 +153,41 @@ struct StorageModule {
             .run_after("StorageKycdExpSystem");
         app.add_system<StorageAudtWritSystem>(ecs::Schedule::Preservation);
         app.add_system<StorageLatcSyncSystem>(ecs::Schedule::Preservation);
+        // Keycard durable-persist is no longer a storage system: minting a keycard now
+        // ships the full document straight to the Replica from the dist L4 plugin mint
+        // sites (BIN_MSG_EDGE_KYCD_PERSIST, the document rides the wire as DATA). The
+        // former Hub-signal emit (SES_KYCD_PERSIST_*) could not carry the recipient
+        // user_id string across to the Replica — that bridge is removed.
 
         // Observation (1Hz): quota monitoring, vote evaluation, anomaly detection
         app.add_system<StorageQuotChkSystem>(ecs::Schedule::Observation);
         app.add_system<StorageVotePrcSystem>(ecs::Schedule::Observation);
         app.add_system<StorageSrvlLogSystem>(ecs::Schedule::Observation);
+        // Drain edge A/ACS gate audit-signals (SES_EDGE_AUDIT_*) emitted by the
+        // L4 edge-distribution gate into the storage audit buffer so the
+        // Preservation-stage StorageAudtWritSystem persists every gate decision.
+        app.add_system<StorageEdgeAudtDrnSystem>(ecs::Schedule::Observation);
+
+        // Edge keycard-authz REQUEST is no longer a storage system: the dist edge
+        // routes (edge_keycard_routes/edge_binary_routes trigger_keycard_fetch)
+        // build the BIN_MSG_EDGE_KYCD_REQ frame from the held user_id and push it
+        // onto the L1 transport outbound queue directly — the user_id is string
+        // DATA on the binary wire, never the numeric Hub. The RESPONSE drain
+        // (StorageEdgeKycdResDrnSystem) stays: it publishes the SES_CLEARANCE
+        // session the gate reads.
+
+        // The matching receiver: pops BIN_MSG_EDGE_KYCD_RES off the keycard lane,
+        // parses the keycard document the Replica found, and publishes the
+        // SES_CLEARANCE + SES_KYCD_PERM + SES_KYCD_CWRD_* session the gate reads —
+        // owner = hashed_string(user_id), byte-for-byte the StorageKycdCwrdPubSystem
+        // projection. Reception, alongside the kernel WS inbound demux (uniform with
+        // RsnMemResDrnSystem). A NOT_FOUND / revoked keycard publishes nothing.
+        app.add_system<StorageEdgeKycdResDrnSystem>(ecs::Schedule::Reception);
+
+        // Operator bootstrap moved to the dist L4 plugin (EdgeOperSeedSystem):
+        // it mints a DURABLE operator keycard via the SDK pipeline instead of an
+        // in-memory per-launch session — so it survives restarts and the existing
+        // /edge/keycard/session → Replica-fetch chain publishes SES_CLEARANCE.
     }
 };
 

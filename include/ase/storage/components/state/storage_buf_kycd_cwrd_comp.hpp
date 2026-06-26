@@ -3,16 +3,20 @@
 /**
  * ASE ECS COMPONENT (STATE)
  *
- * @file        storage_sta_idn_comp.hpp
- * @brief       StorageStaIdnComponent - Authenticated user identity
- * @description Validated identity extracted from keycard JWT claims.
- *              Placed on client entity after successful keycard verification.
+ * @file        storage_buf_kycd_cwrd_comp.hpp
+ * @brief       StorageBufKycdCwrdComponent - Codeword on a keycard persist record (Entity-per-Item)
+ * @description One entity per codeword carried by a StorageBufKycdComponent
+ *              durable-persist record. Entity-per-Item, mirroring
+ *              StorageKycdCwrdComponent on the live keycard: the Replica
+ *              reconstructs the keycard's codeword grants from these children
+ *              keyed by pst_ref so the durable MongoDB document carries the
+ *              identical codeword set the live keycard enforces.
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
- * @created     2026-04-04
- * @modified    2026-04-04
+ * @created     2026-06-24
+ * @modified    2026-06-24
  * @version     1.0.0
  *
  * ECS COMPONENT COMPLIANCE
@@ -50,22 +54,16 @@
 namespace ase::storage {
 
 /**
- * @brief StorageStaIdnComponent - Validated user identity from keycard
+ * @brief StorageBufKycdCwrdComponent - One codeword on a keycard persist record
  *
- * Developer identity extracted from platform keycard (JWT).
- * Placed on client entity by StgKcdLnkSystem after successful verification.
+ * Entity-per-Item: one entity per codeword on a durable keycard record.
  *
  * @hub_reads  none
  * @hub_writes none
  */
-struct StorageStaIdnComponent {
-    char user_id[MAX_OWNER_ID] = {};          // MongoDB ObjectId from JWT "sub" claim
-    uint32_t user_id_hash = 0;                // FNV-1a32 of user_id (== entt::hashed_string); exact gate owner, string-independent
-    char email[MAX_EMAIL_LEN] = {};           // Email address from JWT claims
-    char display_name[MAX_DISPLAY_NAME] = {}; // User display name from JWT claims
-    uint32_t client_id = 0;                   // Network client ID from ase-network WebRTC
-    uint32_t active_keycard = 0;              // Entity ref to active keycard entity
-    uint64_t authenticated_at = 0;            // Unix timestamp when keycard was validated
+struct StorageBufKycdCwrdComponent {
+    uint32_t pst_ref = 0;                     // Entity ref to parent StorageBufKycdComponent record
+    char cwrd[MAX_CODEWORD_LEN] = {};         // Codeword string (e.g. "BINARY", "ALL")
 };
 
 }  // namespace ase::storage

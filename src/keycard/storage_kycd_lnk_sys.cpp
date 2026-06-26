@@ -68,7 +68,7 @@
  * [ ] Class name derived correctly from filename?
  * [ ] Using Deferred Deletion Pattern? (Tag + Batch Destroy)
  * [ ] NO destroy() on other entities during iteration?
- * [ ] Cleanup System in Schedule::Last?
+ * [ ] Cleanup System in Schedule::Conclusion?
  * [ ] NO local arrays/vectors for collection?
  * [ ] Safe deletion (first collect, then delete)?
  * [ ] Not deleting other entities during iteration?
@@ -206,6 +206,10 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             client_idn.client_id = auth_idn.client_id;
             client_idn.authenticated_at = auth_idn.authenticated_at;
             client_idn.active_keycard = static_cast<uint32_t>(auth_entity);
+            // Carry the EXACT FNV user_hash so the codeword projection (cwrd_pub
+            // reads idn.user_id_hash) lands at the gate owner even if the linked
+            // session entity's user_id string is ever empty/dangling.
+            client_idn.user_id_hash = auth_idn.user_id_hash;
             for (uint32_t ci = 0; ci < 64; ++ci) {
                 client_idn.user_id[ci] = auth_idn.user_id[ci];
                 client_idn.email[ci] = auth_idn.email[ci];

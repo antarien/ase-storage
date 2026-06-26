@@ -64,7 +64,7 @@
  * [ ] Class name derived correctly from filename?
  * [ ] Using Deferred Deletion Pattern? (Tag + Batch Destroy)
  * [ ] NO destroy() on other entities during iteration?
- * [ ] Cleanup System in Schedule::Last?
+ * [ ] Cleanup System in Schedule::Conclusion?
  * [ ] NO local arrays/vectors for collection?
  * [ ] Safe deletion (first collect, then delete)?
  * [ ] Not deleting other entities during iteration?
@@ -153,6 +153,8 @@
 #include <ase/hub/api.hpp>
 // Types (L0 — is_not_found sentinel check)
 #include <ase/types/types.hpp>
+// FNV-1a32 hashing for the exact session owner
+#include <entt/core/hashed_string.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
@@ -195,6 +197,10 @@ void StorageKycdVldSystem::tick(ecs::Registry& registry, float /*dt*/) {
             for (uint32_t ci = 0; ci < 64; ++ci) {
                 idn.user_id[ci] = result.user_id[ci];
             }
+            // Exact FNV owner from the validated JWT user_id — identical to the
+            // edge gate's entt::hashed_string(X-ASE-User-Id).value(). The codeword
+            // projection (cwrd_pub) reads idn.user_id_hash, never re-hashes.
+            idn.user_id_hash = entt::hashed_string(idn.user_id).value();
 
             registry.emplace<StorageKycdVldTag>(entity);
             registry.erase<StorageKycdPendTag>(entity);

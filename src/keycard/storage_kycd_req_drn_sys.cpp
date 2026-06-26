@@ -64,7 +64,7 @@
  * [ ] Class name derived correctly from filename?
  * [ ] Using Deferred Deletion Pattern? (Tag + Batch Destroy)
  * [ ] NO destroy() on other entities during iteration?
- * [ ] Cleanup System in Schedule::Last?
+ * [ ] Cleanup System in Schedule::Conclusion?
  * [ ] NO local arrays/vectors for collection?
  * [ ] Safe deletion (first collect, then delete)?
  * [ ] Not deleting other entities during iteration?
@@ -144,13 +144,19 @@
 #include <ase/storage/systems/keycard/storage_kycd_req_drn_sys.hpp>
 // Components from same module
 #include <ase/storage/components/request/storage_req_kycd_comp.hpp>
+#include <ase/storage/components/request/storage_req_kycd_relm_comp.hpp>
+#include <ase/storage/components/request/storage_req_kycd_cwrd_comp.hpp>
 #include <ase/storage/components/state/storage_sta_idn_comp.hpp>
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
+#include <ase/storage/components/state/storage_kycd_cwrd_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_kycd_pend.hpp>
+#include <ase/storage/components/tag/storage_tag_kycd_pst_pend.hpp>
 // Hub API (discovery tag + counter)
 #include <ase/hub/api.hpp>
 // Types (L0 — is_not_found sentinel check)
 #include <ase/types/types.hpp>
+// Utils (L0 — bounded string copy for codeword grants)
+#include <ase/utils/strops.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
@@ -184,17 +190,61 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
         auto& idn = registry.emplace<StorageStaIdnComponent>(token_entity);
         std::memcpy(idn.user_id, req.user_id, 64);
+        // Carry the EXACT FNV user_hash so the codeword/clearance projection owner
+        // is derived from the hash, never from the (possibly-empty/dangling) string.
+        idn.user_id_hash = req.user_id_hash;
         idn.authenticated_at = req.authenticated_at;
 
         auto& kycd = registry.emplace<StorageStaKycdComponent>(token_entity);
         kycd.clrn = req.clearance;
         kycd.expires_at = req.expires_at;
+        // Bind the keycard recipient: the publisher matches keycard→session via
+        // str_equal(kycd.issued_to, idn.user_id). issued_to was never set before
+        // (only "" == "" matched by accident); set it from the same source so the
+        // match survives once user_id carries the real string.
+        ase::utils::str_copy(kycd.issued_to, sizeof(kycd.issued_to), req.user_id);
+
+        // Optional realm/permission extension (operator edge-keycard mint).
+        // Absent on the legacy auth-gate flow → relm_ref/perm stay 0 (unchanged).
+        const auto* relm_ext = registry.try_get<StorageReqKycdRelmComponent>(req_entity);
+        if (relm_ext != nullptr) {
+            kycd.relm_ref = relm_ext->relm_ref;
+            kycd.perm = relm_ext->perm;
+        }
 
         registry.emplace<StorageKycdPendTag>(token_entity);
+        // Durable persist: this minted keycard lives only in RAM until the
+        // Preservation-stage StorageKycdPstEmitSystem ships it owner-keyed over
+        // the Hub WS lane to the Replica MongoDB authority. The dist host NEVER
+        // links a data client — durability rides the SAME Hub path the edge
+        // audit trail uses (ARCH_ASE_STORAGE.md line 91; Phase 12 H-3). The tag
+        // is set AFTER the codeword grants below so the emit replicates them too.
+        registry.emplace<StorageKycdPstPendTag>(token_entity);
 
-        log::debug("[StorageKycdReqDrn] +StorageKycdPendTag token={} user='{}' clearance={} exp={}",
+        // Codeword grants (Entity-per-Item): single-pass match on req_ref.
+        // Each requested codeword entity is re-purposed in place into a
+        // StorageKycdCwrdComponent grant on the token (request component removed so
+        // it is never re-consumed by a later keycard request). Modifying the
+        // currently-iterated entity is the EnTT-safe case (matches req_entity drain).
+        // No matching entities on the legacy auth-gate flow → no codewords (unchanged).
+        auto cwrd_view = registry.view<StorageReqKycdCwrdComponent>();
+        for (auto cwrd_req_entity : cwrd_view) {
+            const auto& cwrd_req = cwrd_view.get<StorageReqKycdCwrdComponent>(cwrd_req_entity);
+            if (cwrd_req.req_ref != static_cast<uint32_t>(req_entity)) continue;
+            char cwrd_copy[32] = {};
+            ase::utils::str_copy(cwrd_copy, sizeof(cwrd_copy), cwrd_req.cwrd);
+            registry.remove<StorageReqKycdCwrdComponent>(cwrd_req_entity);
+            auto& cwrd = registry.emplace<StorageKycdCwrdComponent>(cwrd_req_entity);
+            cwrd.kycd_ref = static_cast<uint32_t>(token_entity);
+            ase::utils::str_copy(cwrd.cwrd, sizeof(cwrd.cwrd), cwrd_copy);
+            log::debug("[StorageKycdReqDrn] +StorageKycdCwrdComponent kycd={} cwrd='{}'",
+                       static_cast<uint32_t>(token_entity), cwrd.cwrd);
+        }
+
+        log::debug("[StorageKycdReqDrn] +StorageKycdPendTag token={} user='{}' clearance={} relm={} perm={} exp={}",
                    static_cast<uint32_t>(token_entity), req.user_id,
-                   static_cast<uint32_t>(req.clearance), req.expires_at);
+                   static_cast<uint32_t>(req.clearance),
+                   kycd.relm_ref, static_cast<uint32_t>(kycd.perm), req.expires_at);
 
         float issued_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_ISSUED_COUNT"_hs, 0.0f);
         if (ase::types::is_not_found(issued_count)) issued_count = 0.0f;

@@ -43,7 +43,7 @@
  * HUB Pattern (ARCH_ASE_HUB_API v2.0)
  *
  * READS (from Hub):
- *   SES_KYCD_NTF_USER_ID, SES_KYCD_NTF_CLRN,
+ *   SES_KYCD_NTF_USER_ID_HI, SES_KYCD_NTF_USER_ID_LO, SES_KYCD_NTF_CLRN,
  *   SES_KYCD_NTF_REALM_ID, SES_KYCD_NTF_EXP_AT
  *
  * WRITES (to Hub):
@@ -67,7 +67,7 @@
  * [ ] Class name derived correctly from filename?
  * [ ] Using Deferred Deletion Pattern? (Tag + Batch Destroy)
  * [ ] NO destroy() on other entities during iteration?
- * [ ] Cleanup System in Schedule::Last?
+ * [ ] Cleanup System in Schedule::Conclusion?
  * [ ] NO local arrays/vectors for collection?
  * [ ] Safe deletion (first collect, then delete)?
  * [ ] Not deleting other entities during iteration?
@@ -147,10 +147,18 @@
 #include <ase/storage/systems/keycard/storage_kycd_ntfy_drn_sys.hpp>
 // Components from same module (request-side)
 #include <ase/storage/components/request/storage_req_kycd_comp.hpp>
+#include <ase/storage/components/request/storage_req_kycd_relm_comp.hpp>
+#include <ase/storage/components/request/storage_req_kycd_cwrd_comp.hpp>
+#include <ase/storage/components/state/storage_sta_relm_comp.hpp>
+#include <ase/storage/types.hpp>
 // Hub API (discovery tag + notify Hub keys)
 #include <ase/hub/api.hpp>
 // Types (L0 — is_not_found sentinel check)
 #include <ase/types/types.hpp>
+// String ops (L0 — codeword copy)
+#include <ase/utils/strops.hpp>
+
+#include <entt/core/hashed_string.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
@@ -181,9 +189,18 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
     for (auto req_entity : view) {
         uint32_t owner = static_cast<uint32_t>(req_entity);
 
-        float user_hash_f = hub::get(registry, owner, "SES_KYCD_NTF_USER_ID"_hs, 0.0f);
-        if (ase::types::is_not_found(user_hash_f)) {
-            log::error("[StorageKycdNtfyDrn] SES_KYCD_NTF_USER_ID not set on req entity={}", owner);
+        // The SDK carries the exact uint32 FNV user_hash as two 16-bit float
+        // halves (a single float cast would truncate the gate owner via the
+        // 24-bit mantissa). Both halves are <= 65535 → exactly representable, so
+        // the reconstruction below is bit-exact and lands at the gate's owner.
+        float user_hash_hi_f = hub::get(registry, owner, "SES_KYCD_NTF_USER_ID_HI"_hs, 0.0f);
+        if (ase::types::is_not_found(user_hash_hi_f)) {
+            log::error("[StorageKycdNtfyDrn] SES_KYCD_NTF_USER_ID_HI not set on req entity={}", owner);
+            continue;
+        }
+        float user_hash_lo_f = hub::get(registry, owner, "SES_KYCD_NTF_USER_ID_LO"_hs, 0.0f);
+        if (ase::types::is_not_found(user_hash_lo_f)) {
+            log::error("[StorageKycdNtfyDrn] SES_KYCD_NTF_USER_ID_LO not set on req entity={}", owner);
             continue;
         }
         float exp_at_f = hub::get(registry, owner, "SES_KYCD_NTF_EXP_AT"_hs, 0.0f);
@@ -193,12 +210,19 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         }
         float clearance_f = hub::get(registry, owner, "SES_KYCD_NTF_CLRN"_hs, 0.0f);
         if (ase::types::is_not_found(clearance_f)) clearance_f = 0.0f;
-        float realm_hash_f = hub::get(registry, owner, "SES_KYCD_NTF_REALM_ID"_hs, 0.0f);
-        if (ase::types::is_not_found(realm_hash_f)) realm_hash_f = 0.0f;
+        // realm_hash is an FNV uint32 carried as two exact 16-bit halves (the SDK
+        // producer splits it); reconstruct bit-exact so the realm match at line ~246
+        // succeeds and the realm+permission binding is applied (single-float truncated).
+        float realm_hash_hi_f = hub::get(registry, owner, "SES_KYCD_NTF_REALM_ID_HI"_hs, 0.0f);
+        if (ase::types::is_not_found(realm_hash_hi_f)) realm_hash_hi_f = 0.0f;
+        float realm_hash_lo_f = hub::get(registry, owner, "SES_KYCD_NTF_REALM_ID_LO"_hs, 0.0f);
+        if (ase::types::is_not_found(realm_hash_lo_f)) realm_hash_lo_f = 0.0f;
 
-        uint32_t user_hash  = static_cast<uint32_t>(user_hash_f);
+        uint32_t user_hash  = (static_cast<uint32_t>(user_hash_hi_f) << 16)
+                              | static_cast<uint32_t>(user_hash_lo_f);
         uint32_t clearance  = static_cast<uint32_t>(clearance_f);
-        uint32_t realm_hash = static_cast<uint32_t>(realm_hash_f);
+        uint32_t realm_hash = (static_cast<uint32_t>(realm_hash_hi_f) << 16)
+                              | static_cast<uint32_t>(realm_hash_lo_f);
         uint64_t exp_at     = static_cast<uint64_t>(exp_at_f);
 
         const char* user_id_str = hub::get_name(registry, user_hash);
@@ -215,7 +239,50 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         payload.authenticated_at = exp_at > 30 ? (exp_at - 30) : 0;
         payload.expires_at       = exp_at;
         payload.clearance        = static_cast<uint8_t>(clearance);
-        (void)realm_hash;  // retained for downstream pipeline once realm binding lands
+
+        // Realm + permission binding (Phase 12 operator mint): resolve the realm
+        // hash to its realm entity and carry it + permission bits as a sibling
+        // request component. Absent for the legacy auth-gate flow (realm_hash 0).
+        if (realm_hash != 0) {
+            float perm_f = hub::get(registry, owner, "SES_KYCD_NTF_PERM"_hs, 0.0f);
+            if (ase::types::is_not_found(perm_f)) perm_f = 0.0f;
+            uint32_t realm_ref = INVALID_ENTITY;
+            auto relm_view = registry.view<StorageStaRelmComponent>();
+            for (auto [re, rc] : relm_view.each()) {
+                if (entt::hashed_string(rc.id).value() == realm_hash) {
+                    realm_ref = static_cast<uint32_t>(re);
+                    break;
+                }
+            }
+            if (realm_ref != INVALID_ENTITY) {
+                auto& relm_req = registry.emplace<StorageReqKycdRelmComponent>(req_entity);
+                relm_req.relm_ref = realm_ref;
+                relm_req.perm = static_cast<uint16_t>(perm_f);
+            }
+        }
+
+        // Codeword grants (Phase 12 operator mint): SES_KYCD_NTF_CWRD_COUNT +
+        // per-index SES_KYCD_NTF_CWRD_<i> debug labels → one request-codeword
+        // entity each (Entity-per-Item), consumed by StorageKycdReqDrnSystem.
+        float cw_count_f = hub::get(registry, owner, "SES_KYCD_NTF_CWRD_COUNT"_hs, 0.0f);
+        if (ase::types::is_not_found(cw_count_f)) cw_count_f = 0.0f;
+        uint32_t cw_count = static_cast<uint32_t>(cw_count_f);
+        for (uint32_t i = 0; i < cw_count; ++i) {
+            char key[NTF_KEY_BUF_LEN] = "SES_KYCD_NTF_CWRD_";
+            char num[NTF_NUM_BUF_LEN];
+            uint32_t n = i;
+            uint32_t d = 0;
+            do { num[d++] = static_cast<char>('0' + (n % DECIMAL_RADIX)); n /= DECIMAL_RADIX; } while (n > 0);
+            uint32_t k = NTF_CWRD_PREFIX_LEN;
+            while (d > 0) { key[k++] = num[--d]; }
+            key[k] = '\0';
+            const char* cw = hub::get_name(registry, entt::hashed_string(key).value());
+            if (cw == nullptr || cw[0] == '\0') continue;
+            auto cw_ent = registry.create();
+            auto& cwc = registry.emplace<StorageReqKycdCwrdComponent>(cw_ent);
+            cwc.req_ref = static_cast<uint32_t>(req_entity);
+            ase::utils::str_copy(cwc.cwrd, MAX_CODEWORD_LEN, cw);
+        }
 
         log::debug("[StorageKycdNtfyDrn] +StorageReqKycdComponent entity={} user='{}' clearance={} exp={}",
                    owner, user_id_str, clearance, exp_at);

@@ -103,6 +103,8 @@ add_library(${PROJECT_NAME} SHARED
     HTTP-posted request payloads consumed by drain systems.
     ]]
     include/ase/storage/components/request/storage_req_kycd_comp.hpp
+    include/ase/storage/components/request/storage_req_kycd_relm_comp.hpp
+    include/ase/storage/components/request/storage_req_kycd_cwrd_comp.hpp
 
     #[[
     COMPONENTS - TAG
@@ -143,6 +145,7 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/systems/keycard/storage_kycd_vld_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_cwrd_pub_sys.hpp
+    include/ase/storage/systems/keycard/storage_edge_kycd_res_drn_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_exp_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_rev_sys.hpp
 
@@ -173,6 +176,7 @@ add_library(${PROJECT_NAME} SHARED
     ]]
     include/ase/storage/systems/audit/storage_audt_writ_sys.hpp
     include/ase/storage/systems/audit/storage_srvl_log_sys.hpp
+    include/ase/storage/systems/audit/storage_edge_audt_drn_sys.hpp
 
     #[[
     SYSTEMS - LATTICE
@@ -210,6 +214,7 @@ add_library(${PROJECT_NAME} SHARED
     src/keycard/storage_kycd_vld_sys.cpp
     src/keycard/storage_kycd_lnk_sys.cpp
     src/keycard/storage_kycd_cwrd_pub_sys.cpp
+    src/keycard/storage_edge_kycd_res_drn_sys.cpp
     src/keycard/storage_kycd_exp_sys.cpp
     src/keycard/storage_kycd_rev_sys.cpp
 
@@ -239,6 +244,7 @@ add_library(${PROJECT_NAME} SHARED
     ]]
     src/audit/storage_audt_writ_sys.cpp
     src/audit/storage_srvl_log_sys.cpp
+    src/audit/storage_edge_audt_drn_sys.cpp
 
     #[[
     SYSTEM IMPLEMENTATIONS - LATTICE
@@ -287,6 +293,7 @@ target_link_libraries(${PROJECT_NAME}
         ase::containers   # Layer 0 - HashMap/Vector (ResourceManager storage)
         ase::crypto       # Layer 0 - HMAC-SHA256 for keycard validation (OpenSSL wrapper)
         ase::hub          # Hub API 2.0 (client identity via Mirror Tags)
+        ase::transport    # Layer 1 - WS lane queues (edge keycard-authz fetch: emit/drain the BIN_MSG_EDGE_KYCD_REQ/RES frames; the L2 kernel demux owns the socket)
 )
 
 if(ASE_BUILD_TESTS)

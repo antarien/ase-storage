@@ -23,10 +23,13 @@
  *   │                                             │
  *   │  READS:                                     │
  *   │    - StorageReqAcssComponent (requests)     │
+ *   │    - StorageStaRelmComponent (realms)       │
  *   │    - StorageAcssRuleComponent (ACL rules)   │
  *   │    - StorageAcssCwrdComponent (codewords)   │
  *   │    - StorageStaKycdComponent (keycards)     │
  *   │    - StorageKycdCwrdComponent (held cwrds)  │
+ *   │    - StorageLatLnkComponent (lattice links) │
+ *   │    - StorageStaTaskComponent (need-to-know) │
  *   │                                             │
  *   │  WRITES:                                    │
  *   │    - StorageAcssGrantTag or AcssDenyTag     │
@@ -66,7 +69,7 @@
  * [ ] Class name derived correctly from filename?
  * [ ] Using Deferred Deletion Pattern? (Tag + Batch Destroy)
  * [ ] NO destroy() on other entities during iteration?
- * [ ] Cleanup System in Schedule::Last?
+ * [ ] Cleanup System in Schedule::Conclusion?
  * [ ] NO local arrays/vectors for collection?
  * [ ] Safe deletion (first collect, then delete)?
  * [ ] Not deleting other entities during iteration?
@@ -151,10 +154,14 @@
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
 #include <ase/storage/components/state/storage_kycd_cwrd_comp.hpp>
+#include <ase/storage/components/state/storage_lat_lnk_comp.hpp>
+#include <ase/storage/components/state/storage_sta_task_comp.hpp>
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_acss_grant.hpp>
 #include <ase/storage/components/tag/storage_tag_acss_deny.hpp>
 #include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
+#include <ase/storage/components/tag/storage_tag_relm_conceal.hpp>
+#include <ase/storage/components/tag/storage_tag_relm_public.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
 #include <ase/utils/strops.hpp>
@@ -206,118 +213,175 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
     auto& mgr = **mgr_ptr;
     uint64_t now = mgr.get_wall_time_seconds();
 
-    // SINGLE-PASS: evaluate each pending access request
-    // Request entities have pre-resolved clearance + permissions from auth headers
+    // SINGLE-PASS: evaluate each pending access request through the canonical §14.1 ladder.
+    // Request entities carry clearance + permissions pre-resolved from the validated keycard.
+    // The ladder is strictly ordered and every GRANT happens at step 10 ONLY. There are no
+    // pre-ladder shortcut grants: the public realm and the realm-owner power are modelled
+    // INSIDE the ladder (PUBLIC protection rule + owner keycard preset) so they too pass
+    // through clearance/codeword/permission/label/need-to-know/quota.
     auto req_view = registry.view<StorageReqAcssComponent>(entt::exclude<StorageAcssGrantTag, StorageAcssDenyTag>);
     for (auto entity : req_view) {
         auto& req = req_view.get<StorageReqAcssComponent>(entity);
 
-        // Step 1: User authenticated? (user_id set by HTTP route from auth header)
+        // ── Step 1: KEYCARD VALID ─ authenticated identity present
+        // user_id is set by the HTTP route from the keycard JWT (validated by
+        // StorageKycdVldSystem); an empty user_id means no valid keycard reached here.
         if (req.user_id[0] == '\0') {
             registry.emplace<StorageAcssDenyTag>(entity);
             emit_audit(registry, req.relm_ref, req.proj_ref, "", req.action, req.path, now, AUD_DENIED, "not_authenticated");
             continue;
         }
 
-        // Step 1b: ASE shared realm — implicitly readable by ALL authenticated users
-        // Engine assets (shaders, fonts, templates) need no keycard, no codeword, no clearance
-        bool ase_shared = false;
+        // Action → required permission bitflag (used by step 3 lattice and step 6 permission)
+        uint16_t required_perm = PERM_READ;
+        if (req.action == AUD_WRITE)   { required_perm = PERM_WRITE; }
+        if (req.action == AUD_DELETE)  { required_perm = PERM_DELETE; }
+        if (req.action == AUD_PROMOTE) { required_perm = PERM_PROMOTE; }
+        if (req.action == AUD_MANAGE)  { required_perm = PERM_MANAGE; }
+
+        // ── Step 2: REALM MEMBERSHIP + CONCEALMENT ─ resolve the target realm core data
+        char     target_id[MAX_REALM_ID] = {};
+        char     target_owner[MAX_OWNER_ID] = {};
+        uint8_t  target_tier = TIER_INDIE;
+        bool     realm_found = false;
+        bool     public_realm = false;
+        bool     owner_preset = false;
         {
             auto relm_view = registry.view<StorageStaRelmComponent>();
-            for (auto [re, rc] : relm_view.each()) {
-                if (static_cast<uint32_t>(re) == req.relm_ref) {
-                    ase_shared = ase::utils::str_equal(rc.id, "ase", 3) && req.action == AUD_READ;
-                    break;
-                }
+            for (auto re : relm_view) {
+                if (static_cast<uint32_t>(re) != req.relm_ref) { continue; }
+                auto& rc = relm_view.get<StorageStaRelmComponent>(re);
+                realm_found = true;
+                ase::utils::str_copy(target_id, MAX_REALM_ID, rc.id);
+                ase::utils::str_copy(target_owner, MAX_OWNER_ID, rc.owner);
+                target_tier = rc.tier;
+                // Public 'ase' realm by id is the in-ladder PUBLIC protection source
+                public_realm = ase::utils::str_equal(rc.id, ACSS_REALM_PUBLIC_ID, MAX_REALM_ID);
+                // Direct owner of this realm → owner keycard preset (ARCH §:819)
+                owner_preset = ase::utils::str_equal(rc.owner, req.user_id, MAX_OWNER_ID);
+                break;
             }
         }
-        if (ase_shared) {
-            registry.emplace<StorageAcssGrantTag>(entity);
-            emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_GRANTED, "ase_shared");
-            continue;
-        }
-
-        // Step 1c: Realm hierarchy — Owner of parent realm has Admin on all children
-        // e.g. owner of "org/adg" → Admin on "org/adg/projects/aetheria"
-        // StorageStaRelmComponent.owner matches user_id, hierarchy via ID prefix
-        bool is_realm_owner = false;
-        {
-            char target_id[64] = {};
-            auto relm_all = registry.view<StorageStaRelmComponent>();
-            for (auto [re, rc] : relm_all.each()) {
-                if (static_cast<uint32_t>(re) == req.relm_ref) {
-                    ase::utils::str_copy(target_id, 64, rc.id);
-                    // Direct owner of this realm
-                    if (ase::utils::str_equal(rc.owner, req.user_id, 64)) {
-                        is_realm_owner = true;
-                    }
-                    break;
-                }
+        // Public realm classification via Tag-filtered View (a realm carrying the
+        // StorageRelmPublicTag is public regardless of its id naming).
+        if (realm_found && !public_realm) {
+            auto pub_view = registry.view<StorageStaRelmComponent, StorageRelmPublicTag>();
+            for (auto re : pub_view) {
+                if (static_cast<uint32_t>(re) != req.relm_ref) { continue; }
+                public_realm = true;
+                break;
             }
-            // Check parent realms: any realm whose ID is a prefix of target
-            if (!is_realm_owner) {
-                uint32_t target_len = ase::utils::str_len(target_id, 64);
-                for (auto [re, rc] : relm_all.each()) {
-                    uint32_t rc_len = ase::utils::str_len(rc.id, 64);
-                    if (rc_len == 0 || rc_len >= target_len) { continue; }
-                    // rc.id must be a prefix of target_id followed by '/'
+        }
+        // Parent-realm ownership: owner of "org/adg" governs "org/adg/projects/x".
+        if (realm_found && !owner_preset) {
+            uint32_t target_len = ase::utils::str_len(target_id, MAX_REALM_ID);
+            auto relm_view = registry.view<StorageStaRelmComponent>();
+            for (auto re : relm_view) {
+                auto& rc = relm_view.get<StorageStaRelmComponent>(re);
+                uint32_t rc_len = ase::utils::str_len(rc.id, MAX_REALM_ID);
+                if (rc_len < target_len && rc_len > 0u) {
                     bool prefix = true;
                     for (uint32_t i = 0; i < rc_len; ++i) {
                         if (rc.id[i] != target_id[i]) { prefix = false; break; }
                     }
-                    if (prefix && target_id[rc_len] == '/' && ase::utils::str_equal(rc.owner, req.user_id, 64)) {
-                        is_realm_owner = true;
+                    if (prefix && target_id[rc_len] == '/' &&
+                        ase::utils::str_equal(rc.owner, req.user_id, MAX_OWNER_ID)) {
+                        owner_preset = true;
                         break;
                     }
                 }
             }
         }
-        if (is_realm_owner) {
-            registry.emplace<StorageAcssGrantTag>(entity);
-            emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_GRANTED, "realm_owner");
-            continue;
-        }
-
-        // Step 2: Find matching ACL rule for this path (clearance + label + codeword source)
-        uint8_t required_protection = PROTECTION_PUBLIC;
-        uint32_t matched_rule = INVALID_ENTITY;
-        char rule_label[MAX_LABEL_LEN] = {};
-        auto acl_view = registry.view<StorageAcssRuleComponent>();
-        for (auto acl_ent : acl_view) {
-            auto& rule = acl_view.get<StorageAcssRuleComponent>(acl_ent);
-            if (rule.relm_ref != req.relm_ref) { continue; }
-            if (rule.proj_ref != req.proj_ref && rule.proj_ref != 0) { continue; }
-            if (ase::utils::str_equal(rule.path_pattern, req.path, ase::utils::str_len(rule.path_pattern, 256))) {
-                required_protection = rule.protection_level;
-                matched_rule = static_cast<uint32_t>(acl_ent);
-                ase::utils::str_copy(rule_label, MAX_LABEL_LEN, rule.label);
+        // Concealment via Tag-filtered View: a concealed realm is invisible to non-owners.
+        // Public realms are never concealed; the owner-preset always sees its own realm.
+        bool concealed = false;
+        if (realm_found && !public_realm && !owner_preset) {
+            auto cnc_view = registry.view<StorageStaRelmComponent, StorageRelmConcealTag>();
+            for (auto re : cnc_view) {
+                if (static_cast<uint32_t>(re) != req.relm_ref) { continue; }
+                concealed = true;
                 break;
             }
         }
+        if (!realm_found || concealed) {
+            // Concealment leaks nothing: deny as realm_not_found, never access_denied.
+            registry.emplace<StorageAcssDenyTag>(entity);
+            emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "realm_not_found");
+            continue;
+        }
 
-        // Step 3: Clearance sufficient? (pre-resolved from auth header)
-        if (req.clrn < required_protection) {
+        // Effective keycard attributes for the rest of the ladder. The owner preset is the
+        // in-ladder model of former realm_owner power: clearance 9, all permissions, wildcard
+        // codeword. Without the preset, the auth-header values are used verbatim. The public
+        // realm needs no boost — its PUBLIC protection rule lets the auth-header values pass.
+        (void)target_owner;
+        uint8_t  eff_clrn = owner_preset ? ACSS_OWNER_CLEARANCE : req.clrn;
+        uint16_t eff_perm = owner_preset ? ACSS_OWNER_PERMS     : req.perm;
+
+        // ── Step 2 (cont.): match the ACL rule for this path ─ clearance/label/codeword src.
+        // The public realm contributes an implicit PUBLIC protection rule (level 0, no
+        // codewords) so engine defaults stay readable by every authenticated user — this is
+        // the in-ladder replacement of the old pre-ladder "ase_shared" grant.
+        uint8_t  required_protection = PROTECTION_PUBLIC;
+        uint32_t matched_rule = INVALID_ENTITY;
+        char     rule_label[MAX_LABEL_LEN] = {};
+        {
+            auto acl_view = registry.view<StorageAcssRuleComponent>();
+            for (auto acl_ent : acl_view) {
+                auto& rule = acl_view.get<StorageAcssRuleComponent>(acl_ent);
+                if (rule.relm_ref != req.relm_ref) { continue; }
+                if (rule.proj_ref != req.proj_ref && rule.proj_ref != 0) { continue; }
+                if (ase::utils::str_equal(rule.path_pattern, req.path, ase::utils::str_len(rule.path_pattern, MAX_PATH_LEN))) {
+                    required_protection = rule.protection_level;
+                    matched_rule = static_cast<uint32_t>(acl_ent);
+                    ase::utils::str_copy(rule_label, MAX_LABEL_LEN, rule.label);
+                    break;
+                }
+            }
+        }
+
+        // ── Step 3: LATTICE ─ cross-realm access requires a valid, bilateral link.
+        // A request whose path lies in another realm's shared prefix is only admissible
+        // through an approved, unexpired lattice link; the link caps clearance and perms.
+        // Owner-preset access stays within the owner's own realm hierarchy (no link needed).
+        if (!owner_preset) {
+            bool lattice_required = false;
+            bool lattice_ok       = false;
+            auto lat_view = registry.view<StorageLatLnkComponent>();
+            for (auto le : lat_view) {
+                auto& link = lat_view.get<StorageLatLnkComponent>(le);
+                if (!ase::utils::str_equal(link.target_realm, target_id, MAX_REALM_ID)) { continue; }
+                uint32_t pfx_len = ase::utils::str_len(link.path_prefix, MAX_PATH_LEN);
+                if (pfx_len < 1u) { continue; }
+                if (!ase::utils::str_equal(link.path_prefix, req.path, pfx_len)) { continue; }
+                lattice_required = true;
+                bool approved = link.approved_by_source != 0 && link.approved_by_target != 0;
+                bool live     = link.expires_at == 0 || link.expires_at > now;
+                bool perm_ok  = (link.permissions & required_perm) != 0;
+                bool clrn_ok  = required_protection <= link.max_clearance;
+                if (approved && live && perm_ok && clrn_ok) {
+                    lattice_ok = true;
+                    break;
+                }
+            }
+            if (lattice_required && !lattice_ok) {
+                registry.emplace<StorageAcssDenyTag>(entity);
+                emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "no_lattice_link");
+                continue;
+            }
+        }
+
+        // ── Step 4: CLEARANCE ─ vertical Schutzstufe gate (public realm rule keeps PUBLIC)
+        if (eff_clrn < required_protection) {
             registry.emplace<StorageAcssDenyTag>(entity);
             emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "insufficient_clearance");
             continue;
         }
 
-        // Step 4: Permission check (bitflags pre-resolved from auth header)
-        uint16_t required_perm = PERM_READ;
-        if (req.action == AUD_WRITE) { required_perm = PERM_WRITE; }
-        if (req.action == AUD_DELETE) { required_perm = PERM_DELETE; }
-        if (req.action == AUD_PROMOTE) { required_perm = PERM_PROMOTE; }
-        if (req.action == AUD_MANAGE) { required_perm = PERM_MANAGE; }
-
-        if (!(req.perm & required_perm)) {
-            registry.emplace<StorageAcssDenyTag>(entity);
-            emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "permission_denied");
-            continue;
-        }
-
-        // Step 5: Codeword check — keycard must possess EVERY codeword the rule requires
-        // Rules without required codewords are unaffected (no entry → no enforcement)
-        if (matched_rule != INVALID_ENTITY) {
+        // ── Step 5: CODEWORD ─ horizontal gate; keycard must hold EVERY required codeword.
+        // The owner-preset wildcard satisfies any requirement; a held "ALL" codeword too.
+        // The public realm carries no required codewords, so public reads pass unaffected.
+        if (matched_rule != INVALID_ENTITY && !owner_preset) {
             bool missing_codeword = false;
             auto cwrd_view = registry.view<StorageAcssCwrdComponent>();
             for (auto [ce, required] : cwrd_view.each()) {
@@ -325,13 +389,13 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
                 bool held = false;
                 auto kycd_view = registry.view<StorageStaKycdComponent>();
                 for (auto [ke, kc] : kycd_view.each()) {
-                    if (!ase::utils::str_equal(kc.issued_to, req.user_id, 64)) { continue; }
+                    if (!ase::utils::str_equal(kc.issued_to, req.user_id, MAX_OWNER_ID)) { continue; }
                     if (kc.relm_ref != req.relm_ref && kc.relm_ref != 0) { continue; }
                     auto held_view = registry.view<StorageKycdCwrdComponent>();
                     for (auto [he, hc] : held_view.each()) {
                         if (hc.kycd_ref != static_cast<uint32_t>(ke)) { continue; }
                         if (ase::utils::str_equal(hc.cwrd, required.required_cwrd, MAX_CODEWORD_LEN) ||
-                            ase::utils::str_equal(hc.cwrd, "ALL", 3)) {
+                            ase::utils::str_equal(hc.cwrd, ACSS_CWRD_WILDCARD, MAX_CODEWORD_LEN)) {
                             held = true;
                             break;
                         }
@@ -347,8 +411,15 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
         }
 
-        // Step 7: Label (workflow status) gate
-        // retired = withdrawn build (no access); draft/review = team-only (clearance >= TEAM)
+        // ── Step 6: PERMISSION ─ action bitflag gate (owner preset holds all flags)
+        if (!(eff_perm & required_perm)) {
+            registry.emplace<StorageAcssDenyTag>(entity);
+            emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "permission_denied");
+            continue;
+        }
+
+        // ── Step 7: LABEL ─ workflow-status gate.
+        // retired = withdrawn build (no access); draft/review = team-only (clearance >= TEAM).
         if (ase::utils::str_equal(rule_label, EDGE_LABEL_RETIRED, MAX_LABEL_LEN)) {
             registry.emplace<StorageAcssDenyTag>(entity);
             emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "retired_asset");
@@ -356,16 +427,55 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         }
         if ((ase::utils::str_equal(rule_label, EDGE_LABEL_DRAFT, MAX_LABEL_LEN) ||
              ase::utils::str_equal(rule_label, EDGE_LABEL_REVIEW, MAX_LABEL_LEN)) &&
-            req.clrn < PROTECTION_TEAM) {
+            eff_clrn < PROTECTION_TEAM) {
             registry.emplace<StorageAcssDenyTag>(entity);
             emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "label_restricted");
             continue;
         }
 
-        // Steps 6/8/9/10: Lattice, Need-to-Know, Quota are cross-cutting and
-        // evaluated out-of-band by StorageLatcSyncSystem / StorageQuotChkSystem.
+        // ── Step 8: NEED-TO-KNOW ─ active task scoping (Enterprise).
+        // When the assignee has any active need-to-know task in this project, access is
+        // restricted to that task's path scope. Owner-preset governs all and is exempt.
+        if (!owner_preset && req.proj_ref != 0) {
+            bool has_active_task = false;
+            bool path_in_scope   = false;
+            auto task_view = registry.view<StorageStaTaskComponent>();
+            for (auto te : task_view) {
+                auto& task = task_view.get<StorageStaTaskComponent>(te);
+                if (task.proj_ref != req.proj_ref) { continue; }
+                if (!ase::utils::str_equal(task.assignee, req.user_id, MAX_OWNER_ID)) { continue; }
+                bool live = (task.starts_at == 0 || task.starts_at <= now) &&
+                            (task.expires_at == 0 || task.expires_at > now);
+                if (!live) { continue; }
+                has_active_task = true;
+                uint32_t scope_len = ase::utils::str_len(task.path_pattern, MAX_PATH_LEN);
+                if (scope_len > 0u && ase::utils::str_equal(task.path_pattern, req.path, scope_len)) {
+                    path_in_scope = true;
+                    break;
+                }
+            }
+            if (has_active_task && !path_in_scope) {
+                registry.emplace<StorageAcssDenyTag>(entity);
+                emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "need_to_know");
+                continue;
+            }
+        }
 
-        // GRANT
+        // ── Step 9: QUOTA ─ realm storage budget gate (WRITE only).
+        // A write is refused when the realm's measured usage already meets its tier limit.
+        if (req.action == AUD_WRITE) {
+            uint64_t tier_limit = QUOTA_INDIE_STORAGE;
+            if (target_tier == TIER_PRO)        { tier_limit = QUOTA_PRO_STORAGE; }
+            if (target_tier == TIER_ENTERPRISE) { tier_limit = QUOTA_ENT_STORAGE; }
+            uint64_t used = mgr.get_realm_usage(target_id);
+            if (used >= tier_limit) {
+                registry.emplace<StorageAcssDenyTag>(entity);
+                emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "quota_exceeded");
+                continue;
+            }
+        }
+
+        // ── Step 10: GRANT + AUDIT(GRANTED) ─ reached only after every applicable step passed
         registry.emplace<StorageAcssGrantTag>(entity);
         emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_GRANTED, "");
     }

@@ -25,6 +25,9 @@
 #include <ase/storage/components/tag/storage_tag_kycd_rjct.hpp>
 #include <ase/storage/components/tag/storage_tag_kycd_rev.hpp>
 #include <ase/storage/components/tag/storage_tag_kycd_pend.hpp>
+#include <ase/storage/components/tag/storage_tag_kycd_pst_pend.hpp>
+#include <ase/storage/components/tag/storage_tag_kycd_pst_done.hpp>
+#include <ase/storage/components/tag/storage_tag_kycd_rev_pst.hpp>
 #include <ase/storage/components/tag/storage_tag_acss_grant.hpp>
 #include <ase/storage/components/tag/storage_tag_acss_deny.hpp>
 #include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
@@ -50,6 +53,9 @@
 #include <ase/storage/components/state/storage_acss_cwrd_comp.hpp>
 #include <ase/storage/components/state/storage_lat_lnk_comp.hpp>
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
+#include <ase/storage/components/state/storage_buf_kycd_comp.hpp>
+#include <ase/storage/components/state/storage_buf_kycd_acc_comp.hpp>
+#include <ase/storage/components/state/storage_buf_kycd_cwrd_comp.hpp>
 #include <ase/storage/components/state/storage_req_acss_comp.hpp>
 #include <ase/storage/components/state/storage_sta_vote_comp.hpp>
 #include <ase/storage/components/state/storage_vote_cnt_comp.hpp>

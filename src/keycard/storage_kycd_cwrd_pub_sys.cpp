@@ -44,6 +44,10 @@
  * WRITES (to Hub):
  *   SES_KYCD_CWRD_COUNT — number of codewords held by the session keycard
  *   SES_KYCD_CWRD_<i>   — per-index codeword debug labels (i in [0, count))
+ *   SES_CLEARANCE       — keycard clearance, owner = hashed_string(user_id)
+ *   SES_KYCD_PERM       — keycard permission bitflags, same owner
+ *   (clearance + permission co-located with the codewords so the edge A/ACS
+ *    gate reads all three axes against the SAME owner = hashed_string(user_id))
  *
  * FLYWEIGHT PATTERN (N/A — no external resource handles)
  *   Codeword strings live in StorageKycdCwrdComponent (char[]), no ctx handles.
@@ -66,7 +70,7 @@
  * [ ] Class name derived correctly from filename?
  * [ ] Using Deferred Deletion Pattern? (Tag + Batch Destroy)
  * [ ] NO destroy() on other entities during iteration?
- * [ ] Cleanup System in Schedule::Last?
+ * [ ] Cleanup System in Schedule::Conclusion?
  * [ ] NO local arrays/vectors for collection?
  * [ ] Safe deletion (first collect, then delete)?
  * [ ] Not deleting other entities during iteration?
@@ -193,9 +197,16 @@ void append_decimal(char* dst, uint32_t dst_size, uint32_t value) {
     ase::utils::str_append(dst, dst_size, fwd);
 }
 
-// Build the indexed contract key "SES_KYCD_CWRD_<index>" into key.
-void build_cwrd_key(char* key, uint32_t key_size, uint32_t index) {
+// Build the per-owner indexed contract key "SES_KYCD_CWRD_<owner>_<index>".
+// The owner (hashed_string(user_id)) is part of the key so the per-index
+// codeword projection is session-scoped: without it every user collides on the
+// same global Hub name slot, and the edge A/ACS gate would authorize downloads
+// against a FOREIGN user's codewords (cross-tenant leak). The edge-gate consumer
+// builds the identical key from the same owner.
+void build_cwrd_key(char* key, uint32_t key_size, uint32_t owner, uint32_t index) {
     ase::utils::str_copy(key, key_size, "SES_KYCD_CWRD_");
+    append_decimal(key, key_size, owner);
+    ase::utils::str_append(key, key_size, "_");
     append_decimal(key, key_size, index);
 }
 
@@ -215,18 +226,30 @@ void StorageKycdCwrdPubSystem::tick(ecs::Registry& registry, float /*dt*/) {
     auto session_view = registry.view<StorageStaIdnComponent, StorageKycdVldTag>();
     for (auto [session_entity, idn] : session_view.each()) {
         (void)session_entity;
-        // owner = hashed_string(user_id) — identical to the edge-gate consumer's
-        // owner derivation, so SES_CLEARANCE and SES_KYCD_CWRD_* co-locate.
-        uint32_t owner = entt::hashed_string{idn.user_id}.value();
+        // owner = the EXACT carried FNV hash of user_id == the edge-gate consumer's
+        // entt::hashed_string(X-ASE-User-Id).value(), so SES_CLEARANCE and
+        // SES_KYCD_CWRD_* co-locate at the owner the binary gate reads. Deriving
+        // from the carried hash (not re-hashing idn.user_id) keeps the projection
+        // correct even if the string was empty/dangling on the local mint path.
+        uint32_t owner = idn.user_id_hash;
 
         // Locate this session's keycard entity (issued_to == user_id) and
         // publish each held codeword in a single pass per codeword entity.
+        // The same keycard carries the two scalar A/ACS axes the edge gate
+        // reads at this owner — clearance (14.1 step 4) and permission bitflags
+        // (14.1 step 6) — so co-locate all three at hashed_string(user_id):
+        // codewords (step 5) plus SES_CLEARANCE and SES_KYCD_PERM. Without the
+        // co-location the gate's clearance/permission reads at this owner return
+        // NOT_FOUND while only the codewords resolve (axis-split A/ACS = leak).
         auto kycd_view = registry.view<StorageStaKycdComponent>();
         uint32_t count = 0;
         for (auto [kycd_entity, kycd] : kycd_view.each()) {
             if (!ase::utils::str_equal(kycd.issued_to, idn.user_id, MAX_OWNER_ID)) {
                 continue;
             }
+
+            hub::set(registry, owner, "SES_CLEARANCE"_hs, static_cast<float>(kycd.clrn));
+            hub::set(registry, owner, "SES_KYCD_PERM"_hs, static_cast<float>(kycd.perm));
 
             uint32_t kycd_ref = static_cast<uint32_t>(kycd_entity);
             auto cwrd_view = registry.view<StorageKycdCwrdComponent>();
@@ -236,7 +259,7 @@ void StorageKycdCwrdPubSystem::tick(ecs::Registry& registry, float /*dt*/) {
                     continue;
                 }
                 char key[40] = {};
-                build_cwrd_key(key, sizeof(key), count);
+                build_cwrd_key(key, sizeof(key), owner, count);
                 uint32_t key_hash = entt::hashed_string{key}.value();
                 hub::set_debug_label(registry, key_hash, cwrd.cwrd);
                 ++count;
