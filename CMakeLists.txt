@@ -154,7 +154,6 @@ add_library(${PROJECT_NAME} SHARED
     ]]
     include/ase/storage/systems/acl/storage_acss_chk_sys.hpp
     include/ase/storage/systems/acl/storage_cncm_flt_sys.hpp
-    include/ase/storage/systems/acl/storage_relm_proj_sync_sys.hpp
     include/ase/storage/systems/acl/storage_cred_acss_rcv_sys.hpp
     include/ase/storage/systems/acl/storage_cred_acss_rsp_sys.hpp
     include/ase/storage/components/state/storage_cred_acss_pnd_comp.hpp
@@ -227,7 +226,6 @@ add_library(${PROJECT_NAME} SHARED
     ]]
     src/acl/storage_acss_chk_sys.cpp
     src/acl/storage_cncm_flt_sys.cpp
-    src/acl/storage_relm_proj_sync_sys.cpp
     src/acl/storage_cred_acss_rcv_sys.cpp
     src/acl/storage_cred_acss_rsp_sys.cpp
 
