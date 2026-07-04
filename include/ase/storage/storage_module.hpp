@@ -83,6 +83,7 @@
 
 // Integration (ACL + Storage)
 #include <ase/storage/systems/acl/storage_acss_chk_sys.hpp>
+#include <ase/storage/systems/acl/storage_relm_proj_sync_sys.hpp>
 #include <ase/storage/systems/acl/storage_cncm_flt_sys.hpp>
 #include <ase/storage/systems/fs/storage_file_writ_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_tran_sys.hpp>
@@ -133,6 +134,11 @@ struct StorageModule {
             .run_after("StorageKycdDrnSystem");
         app.add_system_with<StorageKycdLnkSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageKycdVldSystem");
+        // Per-project A/ACS realm sync: create a realm (owner = project owner) for each Engine
+        // project so the credential-path A/ACS ladder can resolve project ownership + concealment.
+        // After the hub bridge so ENG_PROJ_* are present; realms exist before the Integration ladder.
+        app.add_system_with<StorageRelmProjSyncSystem>(ecs::Schedule::Ingestion)
+            .run_after("HubRcvDrnSystem");
 
         // Integration (60Hz): ACL → file ops → workflow → concealment
         app.add_system<StorageAcssChkSystem>(ecs::Schedule::Integration);
