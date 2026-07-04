@@ -145,6 +145,9 @@
 #include <ase/storage/components/state/storage_cred_acss_pnd_comp.hpp>
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
+#include <ase/storage/components/tag/storage_tag_relm_personal.hpp>
+#include <ase/storage/components/tag/storage_tag_relm_active.hpp>
+#include <ase/storage/components/tag/storage_tag_relm_conceal.hpp>
 #include <ase/storage/types.hpp>
 // Lower layers
 #include <ase/transport/inbound_queue_resource_manager.hpp>
@@ -220,28 +223,53 @@ void StorageCredAcssRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
         const char* project_id = buf + 14;   // NUL-padded char[64]
         const char* provider = buf + 78;     // NUL-padded char[64]
 
-        // Resolve the session keycard by user_hash (== hashed_string(issued_to)) → user_id + clrn + perm.
-        // No keycard → empty user_id so the ladder denies at step 1 (fail-closed, no silent grant).
+        // Resolve the session keycard by user_hash (== hashed_string(issued_to)) → user_id + clrn + perm
+        // + the realm it grants (A/ACS: Keycard → Realm-Membership). No keycard → empty user_id so the
+        // ladder denies at step 1 (fail-closed, no silent grant).
         char user_id[MAX_OWNER_ID] = {};
         uint8_t clrn = 0u;
         uint16_t perm = 0u;
+        uint32_t kc_relm = 0u;
+        uint32_t kc_proj = 0u;
         for (auto [ke, kc] : registry.view<StorageStaKycdComponent>().each()) {
             (void)ke;
             if (entt::hashed_string(kc.issued_to).value() == user_hash) {
                 ase::utils::str_copy(user_id, MAX_OWNER_ID, kc.issued_to);
                 clrn = kc.clrn;
                 perm = kc.perm;
+                kc_relm = kc.relm_ref;
+                kc_proj = kc.proj_ref;
                 break;
             }
         }
 
-        // Resolve the requested project realm by id == project_id → relm_ref. 0 → the ladder denies
-        // realm_not_found (the requested project has no realm the session can reach).
-        uint32_t relm_ref = 0u;
-        for (auto [re, rc] : registry.view<StorageStaRelmComponent>().each()) {
-            if (ase::utils::str_equal(rc.id, project_id, MAX_REALM_ID)) {
-                relm_ref = static_cast<uint32_t>(re);
-                break;
+        // The A/ACS realm is the one the keycard grants membership to — NOT a per-project realm. An
+        // operator-mint keycard carries an explicit relm_ref; the normal customer auth-gate keycard
+        // carries 0, so bind to the customer's OWN realm: one realm per customer, id = owner = the
+        // account user_id. This IS the anti-tenant isolation (identity binding in the ONE unified store,
+        // org = user_hash), never a per-project/per-org silo. The ladder's owner-preset (rc.owner ==
+        // req.user_id) grants the owner; the ConcealTag denies non-owners realm_not_found (no leak).
+        // project_id/provider stay in the ACL path as the resource label. Resolve-or-create idempotently.
+        uint32_t relm_ref = kc_relm;
+        if (relm_ref == 0u && user_id[0] != '\0') {
+            for (auto [re, rc] : registry.view<StorageStaRelmComponent>().each()) {
+                if (ase::utils::str_equal(rc.id, user_id, MAX_REALM_ID)) {
+                    relm_ref = static_cast<uint32_t>(re);
+                    break;
+                }
+            }
+            if (relm_ref == 0u) {
+                auto realm_ent = registry.create();
+                auto& relm = registry.emplace<StorageStaRelmComponent>(realm_ent);
+                ase::utils::str_copy(relm.id, MAX_REALM_ID, user_id);
+                ase::utils::str_copy(relm.name, MAX_REALM_NAME, user_id);
+                ase::utils::str_copy(relm.owner, MAX_OWNER_ID, user_id);
+                relm.default_protection = PROTECTION_PROTECTED;
+                registry.emplace<StorageRelmPersonalTag>(realm_ent);
+                registry.emplace<StorageRelmActiveTag>(realm_ent);
+                registry.emplace<StorageRelmConcealTag>(realm_ent);
+                relm_ref = static_cast<uint32_t>(realm_ent);
+                log::info("[StorageCredAcssRcv] customer realm created (identity-bound owner='{}')", user_id);
             }
         }
 
@@ -258,7 +286,7 @@ void StorageCredAcssRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
         auto req_ent = registry.create();
         auto& req = registry.emplace<StorageReqAcssComponent>(req_ent);
         req.relm_ref = relm_ref;
-        req.proj_ref = 0u;
+        req.proj_ref = kc_proj;  // keycard project scope (0 = realm-wide access)
         ase::utils::str_copy(req.path, 256u, path);
         req.action = action;   // wire 0/1/2 == AUD_READ/WRITE/DELETE
         req.clrn = clrn;
