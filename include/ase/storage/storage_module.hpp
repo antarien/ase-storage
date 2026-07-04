@@ -85,6 +85,7 @@
 #include <ase/storage/systems/acl/storage_acss_chk_sys.hpp>
 #include <ase/storage/systems/acl/storage_relm_proj_sync_sys.hpp>
 #include <ase/storage/systems/acl/storage_cred_acss_rcv_sys.hpp>
+#include <ase/storage/systems/acl/storage_cred_acss_rsp_sys.hpp>
 #include <ase/storage/systems/acl/storage_cncm_flt_sys.hpp>
 #include <ase/storage/systems/fs/storage_file_writ_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_tran_sys.hpp>
@@ -193,6 +194,9 @@ struct StorageModule {
         // Credential A/ACS access-check: drain CACSS_WIRE_REQ (LANE_CACSS) from the Replica, resolve
         // keycard + project realm, emplace StorageReqAcssComponent so the Integration ladder decides.
         app.add_system<StorageCredAcssRcvSystem>(ecs::Schedule::Reception);
+        // Ship the ladder verdict (Grant/DenyTag) back to the Replica as CACSS_WIRE_RES, after the receiver.
+        app.add_system_with<StorageCredAcssRspSystem>(ecs::Schedule::Reception)
+            .run_after("StorageCredAcssRcvSystem");
 
         // Operator bootstrap moved to the dist L4 plugin (EdgeOperSeedSystem):
         // it mints a DURABLE operator keycard via the SDK pipeline instead of an

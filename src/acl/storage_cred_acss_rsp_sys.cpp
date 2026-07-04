@@ -1,40 +1,40 @@
 /**
  * ASE ECS SYSTEM IMPLEMENTATION
  *
- * @file        storage_file_writ_sys.cpp
- * @brief       StorageFileWritSystem - Filesystem CRUD operations
+ * @file        storage_cred_acss_rsp_sys.cpp
+ * @brief       StorageCredAcssRspSystem - ships the A/ACS verdict back to the Replica
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
- * @schedule    Integration
- * @created     2026-04-05
- * @modified    2026-06-24
+ * @schedule    Reception
+ * @created     2026-07-04
+ * @modified    2026-07-04
  * @version     1.0.0
  *
- * CAUSAL CHAIN (File Write)
+ * CAUSAL CHAIN (Credential A/ACS Verdict Emit)
  *
- *   [Access granted by StorageAcssChkSystem]
+ *   [StorageAcssChkSystem emplaced StorageAcssGrantTag/DenyTag on the request entity]
  *          │
- *          │ Integration schedule processes granted requests
+ *          │ request entity: StorageReqAcssComponent + StorageCredAcssPndComponent + verdict tag
  *          ▼
  *   ┌─────────────────────────────────────────────┐
- *   │  THIS SYSTEM: StorageFileWritSystem          │
+ *   │  THIS SYSTEM: StorageCredAcssRspSystem      │
  *   │                                             │
- *   │  READS:                                     │
- *   │    - StorageReqAcssComponent (file path)    │
- *   │    - StorageAcssGrantTag (granted requests) │
- *   │    - StorageStaRelmComponent (realm info)   │
+ *   │  READS (Tag-filtered Views):                │
+ *   │    - <ReqAcss, CredAcssPnd, AcssGrantTag>   │
+ *   │    - <ReqAcss, CredAcssPnd, AcssDenyTag>    │
  *   │                                             │
- *   │  WRITES:                                    │
- *   │    - File data via ResourceManager I/O      │
+ *   │  WRITES:                                     │
+ *   │    - transport outbound CACSS_WIRE_RES frame│
+ *   │    - destroys the request entity (deferred) │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ File written to realm-scoped path
+ *          │ [87][req_id][verdict][reason] → L2 demux ws->send() → Replica
  *          ▼
- *   HTTP response with write result
+ *   ReplicaRcvSystem correlates req_id → the pending credential request → gate the Vault op.
  *
- * HUB Pattern (N/A - No Hub reads/writes)
+ * HUB Pattern (N/A — transport outbound + components, no Hub values)
  *
  * READS (from Hub):
  *   (none)
@@ -42,8 +42,8 @@
  * WRITES (to Hub):
  *   (none)
  *
- * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
- *   Realm path resolution and filesystem I/O via ResourceManager.
+ * FLYWEIGHT PATTERN (Active — transport::OutboundQueueResourceManager via ctx)
+ *   The L1 outbound queue is a ctx flyweight the L2 demux drains + ws->send()s; this system pushes to it.
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -136,77 +136,83 @@
  */
 
 // INCLUDES - ONLY THESE ARE ALLOWED!
-// FORBIDDEN: <vector>, <map>, <unordered_map>, <optional>, <algorithm>
-// ALLOWED:   <cstdint>, <cmath>, <cassert>, ase-* headers
-
 // Own header FIRST
-#include <ase/storage/systems/fs/storage_file_writ_sys.hpp>
-// Components from same module
+#include <ase/storage/systems/acl/storage_cred_acss_rsp_sys.hpp>
+// Components + tags from same module
 #include <ase/storage/components/state/storage_req_acss_comp.hpp>
-#include <ase/storage/components/state/storage_sta_relm_comp.hpp>
 #include <ase/storage/components/state/storage_cred_acss_pnd_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_acss_grant.hpp>
-#include <ase/storage/storage_resource_manager.hpp>
-#include <ase/utils/strops.hpp>
-// Logging
+#include <ase/storage/components/tag/storage_tag_acss_deny.hpp>
+#include <ase/storage/types.hpp>
+// Lower layers
+#include <ase/transport/outbound_queue_resource_manager.hpp>
+#include <ase/transport/types.hpp>
 #include <ase/log/log.hpp>
+
+#include <cstdint>
+#include <cstring>
 
 using namespace entt::literals;
 
 namespace ase::storage {
 
-// Anonymous namespace for helper FUNCTIONS (NOT static!)
+// Anonymous namespace for helper FUNCTIONS (pure frame build + push, no View/Query).
 namespace {
 
-// No helper functions needed → file I/O delegated to ResourceManager
+// Stage one CACSS_WIRE_RES frame [87][req_id:u64][verdict:u8][reason:u8] onto the outbound queue.
+void emit_verdict(transport::OutboundQueueResourceManager* out, uint64_t req_id, bool granted) {
+    char frame[transport::CACSS_RES_FRAME_SZ] = {};
+    frame[0]  = static_cast<char>(transport::CACSS_WIRE_RES);
+    std::memcpy(frame + 1, &req_id, 8);
+    frame[9]  = static_cast<char>(granted ? transport::CACSS_VERDICT_GRANT : transport::CACSS_VERDICT_DENY);
+    frame[10] = static_cast<char>(granted ? transport::CACSS_REASON_GRANTED : transport::CACSS_REASON_DENIED);
+    out->push_outbound(frame, 11u);
+}
 
 }  // anonymous namespace
 
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
-void StorageFileWritSystem::on_start(ecs::Registry& /*registry*/) {
-    log::debug("[StorageFileWrit] Started");
+void StorageCredAcssRspSystem::on_start(ecs::Registry& registry) {
+    (void)registry;
+    log::debug("[StorageCredAcssRsp] Started");
 }
 
-void StorageFileWritSystem::tick(ecs::Registry& registry, float /*dt*/) {
-    auto* mgr_ptr = registry.ctx().find<StorageResourceManager*>();
-    if (!mgr_ptr || !(*mgr_ptr)) {
-        return;
+void StorageCredAcssRspSystem::tick(ecs::Registry& registry, float /*dt*/) {
+    auto* out = registry.ctx().find<transport::OutboundQueueResourceManager>();
+    if (out == nullptr) return;  // no outbound lane on this tier → nothing to emit
+
+    // Deferred deletion: collect resolved requests, destroy after the pass (never during iteration).
+    entt::entity done[CRED_ACSS_RSP_BATCH];
+    uint32_t done_n = 0u;
+
+    // GRANT verdicts (Tag-filtered View).
+    for (auto [ent, req, pnd] :
+         registry.view<StorageReqAcssComponent, StorageCredAcssPndComponent, StorageAcssGrantTag>().each()) {
+        (void)req;
+        if (done_n >= CRED_ACSS_RSP_BATCH) break;  // bound emits to what we can also destroy (no double-emit)
+        emit_verdict(out, pnd.req_id, true);
+        done[done_n++] = ent;
+        log::info("[StorageCredAcssRsp] verdict req_id={} GRANT", pnd.req_id);
     }
-    auto& mgr = **mgr_ptr;
 
-    // SINGLE-PASS: process each granted access request. Exclude credential A/ACS checks (they carry
-    // StorageCredAcssPndComponent) — those are Vault-credential gate decisions, not filesystem writes;
-    // StorageCredAcssRspSystem consumes their verdict and the Replica performs the Vault op.
-    auto grant_view = registry.view<StorageReqAcssComponent, StorageAcssGrantTag>(
-        entt::exclude<StorageCredAcssPndComponent>);
-    for (auto entity : grant_view) {
-        auto& req = grant_view.get<StorageReqAcssComponent>(entity);
-
-        // Resolve realm-scoped filesystem path via ResourceManager
-        char resolved[512] = {};
-        auto relm_ent = static_cast<entt::entity>(req.relm_ref);
-        if (!registry.valid(relm_ent)) {
-            log::error("[StorageFileWrit] Realm entity invalid for ref={}", req.relm_ref);
-            continue;
-        }
-        auto* relm = registry.try_get<StorageStaRelmComponent>(relm_ent);
-        if (!relm) {
-            log::error("[StorageFileWrit] Realm component missing for ref={}", req.relm_ref);
-            continue;
-        }
-        mgr.resolve_path(relm->id, nullptr, req.path, resolved, 512);
-
-        // Write file via ResourceManager filesystem bridge
-        if (!mgr.write_file(resolved, req.path, ase::utils::str_len(req.path, 256))) {
-            log::error("[StorageFileWrit] Write failed: {}", resolved);
-        }
+    // DENY verdicts (Tag-filtered View). Concealment-safe: coarse reason on the wire, precise in audit.
+    for (auto [ent, req, pnd] :
+         registry.view<StorageReqAcssComponent, StorageCredAcssPndComponent, StorageAcssDenyTag>().each()) {
+        (void)req;
+        if (done_n >= CRED_ACSS_RSP_BATCH) break;
+        emit_verdict(out, pnd.req_id, false);
+        done[done_n++] = ent;
+        log::info("[StorageCredAcssRsp] verdict req_id={} DENY", pnd.req_id);
     }
+
+    for (uint32_t i = 0u; i < done_n; ++i) registry.destroy(done[i]);
 }
 
-void StorageFileWritSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::debug("[StorageFileWrit] Stopped");
+void StorageCredAcssRspSystem::on_stop(ecs::Registry& registry) {
+    (void)registry;
+    log::debug("[StorageCredAcssRsp] Stopped");
 }
 
 }  // namespace ase::storage

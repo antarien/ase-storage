@@ -50,6 +50,7 @@ constexpr uint32_t MAX_PATH_LEN       = 256;   // Filesystem path or glob patter
 constexpr uint32_t MAX_CODEWORD_LEN   = 32;    // Single codeword max chars
 constexpr uint32_t MAX_LABEL_LEN      = 32;    // Workflow label max chars
 constexpr uint32_t MAX_REASON_LEN     = 64;    // Audit deny-reason max chars
+constexpr uint32_t CRED_ACSS_RSP_BATCH = 64;   // Max credential A/ACS verdicts responded per tick (deferred-destroy batch bound)
 constexpr uint32_t MAX_TASK_NAME      = 128;   // Need-to-Know task name max chars
 constexpr uint32_t MAX_KEYCARD_HASH   = 64;    // SHA-256 hex digest max chars
 constexpr uint32_t MAX_EMAIL_LEN      = 64;    // Email address max chars
