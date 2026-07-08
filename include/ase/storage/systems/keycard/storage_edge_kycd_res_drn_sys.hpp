@@ -49,8 +49,9 @@ namespace ase::storage {
  * here. Each tick it pops every queued RES frame, and on a STATUS_OK frame parses
  * the keycard document the Replica FOUND (kycd_hash + user_id + clearance +
  * permission + codewords[]) and publishes the gate session at owner =
- * hashed_string(user_id): SES_CLEARANCE, SES_KYCD_PERM, SES_KYCD_CWRD_COUNT and
- * the per-index SES_KYCD_CWRD_<owner>_<i> debug-labels — byte-for-byte the keys
+ * hashed_string(user_id): SES_CLEARANCE, SES_KYCD_PERM and the owner-scoped
+ * SES_KYCD_HOLDS_<cw> A/ACS hold verdicts (exact codeword compare server-internal, no
+ * codeword string over the Hub) — the same owner-scoped signals
  * StorageKycdCwrdPubSystem emits, so the edge A/ACS gate authorizes the download
  * identically whether the keycard was minted locally or recovered from the
  * Replica. A NOT_FOUND / ERROR frame publishes NOTHING (the gate stays 401), so a
@@ -59,8 +60,9 @@ namespace ase::storage {
  *
  * @schedule Reception - alongside the kernel WS inbound demux
  * @reads    transport::InboundQueueResourceManager LANE_KYC (BIN_MSG_EDGE_KYCD_RES)
- * @writes   SES_CLEARANCE / SES_KYCD_PERM / SES_KYCD_CWRD_COUNT (Hub, owner-keyed)
- *           SES_KYCD_CWRD_<owner>_<i> (Hub debug-labels — the codeword set)
+ * @writes   SES_CLEARANCE / SES_KYCD_PERM (Hub, owner-keyed)
+ *           SES_KYCD_HOLDS_{BINARY,SIG,SBOM,METADATA} (Hub, owner-scoped A/ACS hold
+ *           verdicts — exact codeword compare server-internal, no string over the Hub)
  * @depends  the dist edge routes (trigger_keycard_fetch) ship the matching
  *           BIN_MSG_EDGE_KYCD_REQ directly onto the transport outbound queue
  */

@@ -229,7 +229,8 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             // relays the delta to Replica and downstream consumers.
             uint32_t owner = static_cast<uint32_t>(client_entity);
             uint32_t user_id_hash = entt::hashed_string{auth_idn.user_id}.value();
-            hub::set_debug_label(registry, user_id_hash, auth_idn.user_id);
+            // user_id STRING is NOT registered via set_debug_label (a debug-only channel); the
+            // session identity lives in StorageStaIdnComponent, consumers read the string there.
 
             // user_id_hash is held as raw uint32_t on the session-entity's
             // hub mirror. Hub::set would transport it as float and lose
@@ -251,9 +252,7 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
                     uint32_t realm_hash = (relm != nullptr)
                                           ? entt::hashed_string{relm->id}.value()
                                           : kycd->relm_ref;
-                    if (relm != nullptr) {
-                        hub::set_debug_label(registry, realm_hash, relm->id);
-                    }
+                    // realm id STRING is NOT registered via set_debug_label (debug-only channel).
                     hub::set(registry, owner, "SES_REALM_ID"_hs, static_cast<float>(realm_hash));
                 }
             }

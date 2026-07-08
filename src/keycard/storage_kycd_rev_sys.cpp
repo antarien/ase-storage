@@ -210,7 +210,7 @@ void StorageKycdRevSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
         uint32_t kycd_hash_id = entt::hashed_string{kycd.kycd_hash}.value();
         hub::set(registry, owner, "SES_KYCD_PERSIST_KYCD_HASH"_hs, static_cast<float>(kycd_hash_id));
-        hub::set_debug_label(registry, kycd_hash_id, kycd.kycd_hash);
+        // keycard hash STRING is NOT registered via set_debug_label (a debug-only channel).
 
         registry.emplace<StorageKycdRevPstTag>(entity);
         log::info("[StorageKycdRev] owner={} hash='{}' seq={} durable revoke → Replica",

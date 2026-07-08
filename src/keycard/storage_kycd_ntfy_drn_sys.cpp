@@ -225,8 +225,16 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
                               | static_cast<uint32_t>(realm_hash_lo_f);
         uint64_t exp_at     = static_cast<uint64_t>(exp_at_f);
 
-        const char* user_id_str = hub::get_name(registry, user_hash);
-        if (user_id_str == nullptr) user_id_str = "";
+        // Resolve the user_id STRING the SDK carried on THIS request entity (1:1) via a DIRECT
+        // try_get - NOT get_name(), a debug-only channel that is never a production data source.
+        // try_get on the known req_entity handle is not a view iteration, so it is permitted for
+        // a data-carrying Hub component. Works on first-login issuance (no session identity exists
+        // yet) and operator-mint-for-other alike, because the request always carries the string.
+        const char* user_id_str = "";
+        if (const auto* req_idn = registry.try_get<hub::HubStgKycdIdnComponent>(req_entity);
+            req_idn != nullptr) {
+            user_id_str = req_idn->user_id;
+        }
 
         auto& payload = registry.emplace<StorageReqKycdComponent>(req_entity);
         size_t copy_len = 0;
@@ -261,27 +269,24 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
         }
 
-        // Codeword grants (Phase 12 operator mint): SES_KYCD_NTF_CWRD_COUNT +
-        // per-index SES_KYCD_NTF_CWRD_<i> debug labels → one request-codeword
-        // entity each (Entity-per-Item), consumed by StorageKycdReqDrnSystem.
-        float cw_count_f = hub::get(registry, owner, "SES_KYCD_NTF_CWRD_COUNT"_hs, 0.0f);
-        if (ase::types::is_not_found(cw_count_f)) cw_count_f = 0.0f;
-        uint32_t cw_count = static_cast<uint32_t>(cw_count_f);
-        for (uint32_t i = 0; i < cw_count; ++i) {
-            char key[NTF_KEY_BUF_LEN] = "SES_KYCD_NTF_CWRD_";
-            char num[NTF_NUM_BUF_LEN];
-            uint32_t n = i;
-            uint32_t d = 0;
-            do { num[d++] = static_cast<char>('0' + (n % DECIMAL_RADIX)); n /= DECIMAL_RADIX; } while (n > 0);
-            uint32_t k = NTF_CWRD_PREFIX_LEN;
-            while (d > 0) { key[k++] = num[--d]; }
-            key[k] = '\0';
-            const char* cw = hub::get_name(registry, entt::hashed_string(key).value());
-            if (cw == nullptr || cw[0] == '\0') continue;
+        // Codeword grants (Phase 12 operator mint): the mint request carries the fixed edge
+        // codewords as owner-scoped SES_KYCD_NTF_GRANT_<CW> flags (Hub VALUES, never the codeword
+        // string over a debug-label - that is a debug-only channel). For each set flag, emplace a
+        // StorageReqKycdCwrdComponent grant with the exact fixed codeword string mapped here,
+        // server-internal. Codewords outside this fixed edge set travel only on the durable
+        // keycard-persist path (they are not part of the edge download A/ACS gate anyway).
+        const char* grant_keys[] = { "SES_KYCD_NTF_GRANT_BINARY", "SES_KYCD_NTF_GRANT_SIG",
+                                     "SES_KYCD_NTF_GRANT_SBOM", "SES_KYCD_NTF_GRANT_METADATA" };
+        const char* grant_cwrd[] = { EDGE_CWRD_BINARY, EDGE_CWRD_SIG, EDGE_CWRD_SBOM,
+                                     EDGE_CWRD_METADATA };
+        for (uint32_t gi = 0; gi < sizeof(grant_keys) / sizeof(grant_keys[0]); ++gi) {
+            float grant_f = hub::get(registry, owner, entt::hashed_string(grant_keys[gi]).value(), 0.0f);
+            if (ase::types::is_not_found(grant_f)) continue;
+            if (grant_f < 0.5f) continue;
             auto cw_ent = registry.create();
             auto& cwc = registry.emplace<StorageReqKycdCwrdComponent>(cw_ent);
             cwc.req_ref = static_cast<uint32_t>(req_entity);
-            ase::utils::str_copy(cwc.cwrd, MAX_CODEWORD_LEN, cw);
+            ase::utils::str_copy(cwc.cwrd, MAX_CODEWORD_LEN, grant_cwrd[gi]);
         }
 
         log::debug("[StorageKycdNtfyDrn] +StorageReqKycdComponent entity={} user='{}' clearance={} exp={}",

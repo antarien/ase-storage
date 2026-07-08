@@ -43,7 +43,7 @@
  *   SES_EDGE_AUDIT_DRAINED_SEQ — drain watermark per owner
  *   SES_EDGE_AUDIT_ACTION      — action enum of the latest decision
  *   SES_EDGE_AUDIT_RESULT      — result enum of the latest decision
- *   SES_EDGE_AUDIT_CWRD        — required-codeword hash (label = codeword string)
+ *   SES_EDGE_AUDIT_CWRD        — required-codeword index (1=BINARY 2=SIG 3=SBOM 4=METADATA)
  *
  * WRITES (to Hub):
  *   SES_EDGE_AUDIT_DRAINED_SEQ — advanced to SES_EDGE_AUDIT_SEQ after draining
@@ -239,11 +239,13 @@ void StorageEdgeAudtDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
             cwrd_f = 0.0f;
         }
 
-        uint32_t cwrd_hash = static_cast<uint32_t>(cwrd_f);
-        const char* cwrd_str = hub::get_name(registry, cwrd_hash);
-        if (cwrd_str == nullptr) {
-            cwrd_str = "";
-        }
+        // Map the required-codeword INDEX (1=BINARY, 2=SIG, 3=SBOM, 4=METADATA; 0=other) the
+        // gate recorded back to its name for the audit reason field — no debug-label / get_name
+        // path, no float32-lossy hash. Local lookup table, bounded by a single comparison.
+        const char* cwrd_names[] = { "", EDGE_CWRD_BINARY, EDGE_CWRD_SIG, EDGE_CWRD_SBOM,
+                                     EDGE_CWRD_METADATA };
+        uint32_t cwrd_idx = static_cast<uint32_t>(cwrd_f);
+        const char* cwrd_str = (cwrd_idx < 5u) ? cwrd_names[cwrd_idx] : "";
         uint32_t gap = seq - drained;
 
         // Emit one audit entity carrying the latest decision metadata. The

@@ -180,7 +180,7 @@ struct StorageModule {
 
         // The matching receiver: pops BIN_MSG_EDGE_KYCD_RES off the keycard lane,
         // parses the keycard document the Replica found, and publishes the
-        // SES_CLEARANCE + SES_KYCD_PERM + SES_KYCD_CWRD_* session the gate reads —
+        // SES_CLEARANCE + SES_KYCD_PERM + SES_KYCD_HOLDS_* session the gate reads —
         // owner = hashed_string(user_id), byte-for-byte the StorageKycdCwrdPubSystem
         // projection. Reception, alongside the kernel WS inbound demux (uniform with
         // RsnMemResDrnSystem). A NOT_FOUND / revoked keycard publishes nothing.

@@ -251,11 +251,8 @@ constexpr const char* EDGE_CWRD_METADATA = "METADATA";   // compatibility.json +
 constexpr uint8_t EDGE_CLEARANCE_CUSTOMER = 0;   // Customer download-only clearance for released binaries
 constexpr uint8_t EDGE_CLEARANCE_OPERATOR = 5;   // Release-manager full release-workflow clearance
 
-// ── KEYCARD-NOTIFY KEY BUILDING (per-index Hub key construction, Phase 12) ─
+// ── DIGIT EXTRACTION (base-10 helpers) ──────────────────────────────────
 
-constexpr uint32_t NTF_CWRD_PREFIX_LEN = 18;  // length of the literal "SES_KYCD_NTF_CWRD_"
-constexpr uint32_t NTF_KEY_BUF_LEN     = 40;  // SES_KYCD_NTF_CWRD_<i> key scratch buffer chars
-constexpr uint32_t NTF_NUM_BUF_LEN     = 12;  // decimal index scratch buffer chars
 constexpr uint32_t DECIMAL_RADIX       = 10;  // base-10 digit extraction divisor
 
 // ── KEYCARD DURABLE-PERSIST ROUND-TRIP (Phase 12 H-3 — Replica MongoDB) ────
@@ -282,7 +279,7 @@ constexpr uint32_t PST_KEY_BUF_LEN = 64;    // SES_KYCD_PERSIST_CWRD_<owner>_<i>
 // wire, never the numeric Hub. The Replica (ReplicaEdgeKycdSystem) FINDs the
 // keycard in MongoDB and ships BIN_MSG_EDGE_KYCD_RES back; StorageEdgeKycdResDrnSystem
 // parses the document and publishes the SES_CLEARANCE + SES_KYCD_PERM +
-// SES_KYCD_CWRD_* session the gate reads. The dist host links NO data client — the
+// SES_KYCD_HOLDS_* session the gate reads. The dist host links NO data client — the
 // SAME split as the edge-daemon connection-token check (ReplicaEdgeRegSystem). The
 // RES BIN_MSG id + frame layout are mirrored from
 // modules/ase-replication/replica_types.hpp; changing either side requires
@@ -299,10 +296,10 @@ constexpr uint8_t EDGE_KYCD_STATUS_OK        = 0;  // Keycard found, document pa
 constexpr uint8_t EDGE_KYCD_STATUS_NOT_FOUND = 1;  // No matching keycard, payload empty
 constexpr uint8_t EDGE_KYCD_STATUS_ERROR     = 2;  // Backend/serialization error
 
-// Per-index decode codeword key construction. The dist decode rebuilds the
-// identical "SES_KYCD_CWRD_<owner>_<i>" key StorageKycdCwrdPubSystem produces so
-// the edge A/ACS gate reads the recovered codeword set unchanged.
-constexpr uint32_t KYCD_CWRD_KEY_BUF      = 64;  // "SES_KYCD_CWRD_<owner>_<i>" key scratch chars
+// Max codewords parsed out of a recovered keycard document (bounds the dist decode loop).
+// Each parsed codeword is compared EXACTLY, server-internal, against the fixed edge codewords
+// and projected only as an owner-scoped SES_KYCD_HOLDS_<cw> boolean verdict — never a string
+// or per-index key over the Hub.
 constexpr uint32_t KYCD_DECODE_CWRD_MAX   = 64;  // max codewords parsed out of a recovered keycard document
 
 }  // namespace ase::storage

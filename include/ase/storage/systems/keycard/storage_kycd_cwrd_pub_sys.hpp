@@ -42,8 +42,8 @@ namespace ase::storage {
  * @reads    StorageStaIdnComponent + StorageKycdVldTag (authenticated session)
  *           StorageStaKycdComponent (keycard issued_to match)
  *           StorageKycdCwrdComponent (codewords by kycd_ref)
- * @writes   SES_KYCD_CWRD_COUNT (Hub, per-session owner)
- *           SES_KYCD_CWRD_<i> debug labels (Hub)
+ * @writes   SES_KYCD_HOLDS_{BINARY,SIG,SBOM,METADATA} (Hub, owner-scoped A/ACS hold
+ *           verdicts — exact codeword compare server-internal, no string over the Hub)
  *           SES_CLEARANCE (Hub, owner = hashed_string(user_id) — edge-gate axis)
  *           SES_KYCD_PERM (Hub, owner = hashed_string(user_id) — edge-gate axis)
  * @depends  StorageKycdLnkSystem links validated identity to client entity

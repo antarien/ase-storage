@@ -27,8 +27,9 @@
  *   │    - StorageKycdCwrdComponent (kycd_ref)    │
  *   │                                             │
  *   │  WRITES (to Hub):                           │
- *   │    - SES_KYCD_CWRD_COUNT (per-session owner)│
- *   │    - SES_KYCD_CWRD_<i> debug labels         │
+ *   │    - SES_KYCD_HOLDS_{BINARY,SIG,SBOM,META}   │
+ *   │      owner-scoped A/ACS hold verdicts (0/1)  │
+ *   │    (codeword STRING never leaves this tier)  │
  *   └─────────────────────────────────────────────┘
  *          │
  *          │ owner = hashed_string(user_id) — same owner the
@@ -42,8 +43,9 @@
  *   (none)
  *
  * WRITES (to Hub):
- *   SES_KYCD_CWRD_COUNT — number of codewords held by the session keycard
- *   SES_KYCD_CWRD_<i>   — per-index codeword debug labels (i in [0, count))
+ *   SES_KYCD_HOLDS_<cw> — owner-scoped A/ACS hold verdict (1.0 iff the keycard holds
+ *                         the exact edge codeword; exact-string compare server-internal,
+ *                         the codeword STRING never crosses to the L4 gate over the Hub)
  *   SES_CLEARANCE       — keycard clearance, owner = hashed_string(user_id)
  *   SES_KYCD_PERM       — keycard permission bitflags, same owner
  *   (clearance + permission co-located with the codewords so the edge A/ACS
@@ -176,38 +178,24 @@ namespace ase::storage {
 // NO View/Query operations in helpers! Only pure math!
 namespace {
 
-// Write the decimal representation of value into dst (bounded by dst_size).
-// Mirrors std::to_string(value) digit-for-digit so the resulting
-// "SES_KYCD_CWRD_<i>" hash matches the edge-gate consumer exactly.
-// Pure math — no views, no components. The do-while always emits at least
-// one digit, so value zero yields "0" without an equality check.
-void append_decimal(char* dst, uint32_t dst_size, uint32_t value) {
-    char tmp[11] = {};  // uint32_t max = 4294967295 → 10 digits + null
-    uint32_t di = 0;
-    do {
-        tmp[di++] = static_cast<char>('0' + (value % 10));
-        value /= 10;
-    } while (value > 0 && di < 10);
-    // tmp holds digits reversed — emit a forward-ordered string for str_append.
-    char fwd[11] = {};
-    for (uint32_t fi = 0; fi < di; ++fi) {
-        fwd[fi] = tmp[di - 1 - fi];
+// Compare one held codeword against the fixed edge-distribution codewords (EXACT string, via
+// str_equal which checks the null terminator — never a prefix match) and, on a match, set the
+// matching owner-scoped A/ACS hold-verdict boolean. The codeword STRING is compared HERE
+// (server-internal, A/ACS step 5) and NEVER crosses to the L4 edge gate: only these fixed,
+// contract-registered booleans do. NEVER an FNV hash — a hash collision would be a false-grant.
+void set_edge_cwrd_hold(ecs::Registry& registry, uint32_t owner, const char* cwrd) {
+    if (ase::utils::str_equal(cwrd, EDGE_CWRD_BINARY, MAX_CODEWORD_LEN)) {
+        hub::set(registry, owner, "SES_KYCD_HOLDS_BINARY"_hs, 1.0f);
     }
-    fwd[di] = '\0';
-    ase::utils::str_append(dst, dst_size, fwd);
-}
-
-// Build the per-owner indexed contract key "SES_KYCD_CWRD_<owner>_<index>".
-// The owner (hashed_string(user_id)) is part of the key so the per-index
-// codeword projection is session-scoped: without it every user collides on the
-// same global Hub name slot, and the edge A/ACS gate would authorize downloads
-// against a FOREIGN user's codewords (cross-tenant leak). The edge-gate consumer
-// builds the identical key from the same owner.
-void build_cwrd_key(char* key, uint32_t key_size, uint32_t owner, uint32_t index) {
-    ase::utils::str_copy(key, key_size, "SES_KYCD_CWRD_");
-    append_decimal(key, key_size, owner);
-    ase::utils::str_append(key, key_size, "_");
-    append_decimal(key, key_size, index);
+    if (ase::utils::str_equal(cwrd, EDGE_CWRD_SIG, MAX_CODEWORD_LEN)) {
+        hub::set(registry, owner, "SES_KYCD_HOLDS_SIG"_hs, 1.0f);
+    }
+    if (ase::utils::str_equal(cwrd, EDGE_CWRD_SBOM, MAX_CODEWORD_LEN)) {
+        hub::set(registry, owner, "SES_KYCD_HOLDS_SBOM"_hs, 1.0f);
+    }
+    if (ase::utils::str_equal(cwrd, EDGE_CWRD_METADATA, MAX_CODEWORD_LEN)) {
+        hub::set(registry, owner, "SES_KYCD_HOLDS_METADATA"_hs, 1.0f);
+    }
 }
 
 }  // anonymous namespace
@@ -221,14 +209,15 @@ void StorageKycdCwrdPubSystem::on_start(ecs::Registry& /*registry*/) {
 
 void StorageKycdCwrdPubSystem::tick(ecs::Registry& registry, float /*dt*/) {
     // For each authenticated session (same set StorageKycdLnkSystem publishes
-    // SES_CLEARANCE for), publish the codewords held by its keycard so the
-    // edge A/ACS gate (ase-pl-edge-webserver) can enforce them.
+    // SES_CLEARANCE for), publish the owner-scoped A/ACS hold verdicts for the
+    // codewords its keycard holds so the edge gate (ase-pl-edge-webserver) can
+    // enforce them WITHOUT the codeword string ever crossing the Hub.
     auto session_view = registry.view<StorageStaIdnComponent, StorageKycdVldTag>();
     for (auto [session_entity, idn] : session_view.each()) {
         (void)session_entity;
         // owner = the EXACT carried FNV hash of user_id == the edge-gate consumer's
         // entt::hashed_string(X-ASE-User-Id).value(), so SES_CLEARANCE and
-        // SES_KYCD_CWRD_* co-locate at the owner the binary gate reads. Deriving
+        // SES_KYCD_HOLDS_* verdicts co-locate at the owner the binary gate reads. Deriving
         // from the carried hash (not re-hashing idn.user_id) keeps the projection
         // correct even if the string was empty/dangling on the local mint path.
         uint32_t owner = idn.user_id_hash;
@@ -241,6 +230,13 @@ void StorageKycdCwrdPubSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // codewords (step 5) plus SES_CLEARANCE and SES_KYCD_PERM. Without the
         // co-location the gate's clearance/permission reads at this owner return
         // NOT_FOUND while only the codewords resolve (axis-split A/ACS = leak).
+        // Reset the owner-scoped edge A/ACS hold-verdicts before the pass so a revoked or
+        // re-issued keycard cannot leave a stale grant (the gate reads only these booleans).
+        hub::set(registry, owner, "SES_KYCD_HOLDS_BINARY"_hs, 0.0f);
+        hub::set(registry, owner, "SES_KYCD_HOLDS_SIG"_hs, 0.0f);
+        hub::set(registry, owner, "SES_KYCD_HOLDS_SBOM"_hs, 0.0f);
+        hub::set(registry, owner, "SES_KYCD_HOLDS_METADATA"_hs, 0.0f);
+
         auto kycd_view = registry.view<StorageStaKycdComponent>();
         uint32_t count = 0;
         for (auto [kycd_entity, kycd] : kycd_view.each()) {
@@ -258,15 +254,13 @@ void StorageKycdCwrdPubSystem::tick(ecs::Registry& registry, float /*dt*/) {
                 if (cwrd.kycd_ref != kycd_ref) {
                     continue;
                 }
-                char key[40] = {};
-                build_cwrd_key(key, sizeof(key), owner, count);
-                uint32_t key_hash = entt::hashed_string{key}.value();
-                hub::set_debug_label(registry, key_hash, cwrd.cwrd);
+                // Exact-string A/ACS compare, server-internal — the codeword string never
+                // crosses to the L4 edge gate; only the fixed hold-verdict booleans do.
+                set_edge_cwrd_hold(registry, owner, cwrd.cwrd);
                 ++count;
             }
         }
 
-        hub::set(registry, owner, "SES_KYCD_CWRD_COUNT"_hs, static_cast<float>(count));
         log::debug("[StorageKycdCwrdPub] owner={} user='{}' codewords={}",
                    owner, idn.user_id, count);
     }
