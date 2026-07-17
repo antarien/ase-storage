@@ -90,6 +90,9 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/state/storage_acss_cwrd_comp.hpp
     include/ase/storage/components/state/storage_lat_lnk_comp.hpp
     include/ase/storage/components/state/storage_buf_audt_comp.hpp
+    include/ase/storage/components/state/storage_wflw_edge_comp.hpp
+    include/ase/storage/components/state/storage_buf_wflw_comp.hpp
+    include/ase/storage/components/state/storage_wflw_retr_comp.hpp
     include/ase/storage/components/state/storage_req_acss_comp.hpp
     include/ase/storage/components/state/storage_vote_cnt_comp.hpp
     include/ase/storage/components/state/storage_bllt_vote_comp.hpp
@@ -105,6 +108,7 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/request/storage_req_kycd_comp.hpp
     include/ase/storage/components/request/storage_req_kycd_relm_comp.hpp
     include/ase/storage/components/request/storage_req_kycd_cwrd_comp.hpp
+    include/ase/storage/components/request/storage_req_wflw_tran_comp.hpp
 
     #[[
     COMPONENTS - TAG
@@ -119,6 +123,10 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/tag/storage_tag_acss_grant.hpp
     include/ase/storage/components/tag/storage_tag_acss_deny.hpp
     include/ase/storage/components/tag/storage_tag_audt_pend.hpp
+    include/ase/storage/components/tag/storage_tag_wflw_pend.hpp
+    include/ase/storage/components/tag/storage_tag_wflw_gate.hpp
+    include/ase/storage/components/tag/storage_tag_wflw_pst_pend.hpp
+    include/ase/storage/components/tag/storage_tag_wflw_retr.hpp
     include/ase/storage/components/tag/storage_tag_vot_pend.hpp
     include/ase/storage/components/tag/storage_tag_relm_personal.hpp
     include/ase/storage/components/tag/storage_tag_relm_org.hpp
@@ -166,7 +174,11 @@ add_library(${PROJECT_NAME} SHARED
     #[[
     SYSTEMS - WORKFLOW
     ]]
+    include/ase/storage/systems/workflow/storage_wflw_drn_sys.hpp
+    include/ase/storage/systems/workflow/storage_wflw_gate_sys.hpp
     include/ase/storage/systems/workflow/storage_wflw_tran_sys.hpp
+    include/ase/storage/systems/workflow/storage_wflw_pst_sys.hpp
+    include/ase/storage/systems/workflow/storage_wflw_cln_sys.hpp
 
     #[[
     SYSTEMS - EDGE DISTRIBUTION
@@ -237,7 +249,12 @@ add_library(${PROJECT_NAME} SHARED
     #[[
     SYSTEM IMPLEMENTATIONS - WORKFLOW
     ]]
+    src/workflow/storage_wflw_drn_sys.cpp
+    src/workflow/storage_edge_wflw_fwd_rcv_sys.cpp
+    src/workflow/storage_wflw_gate_sys.cpp
     src/workflow/storage_wflw_tran_sys.cpp
+    src/workflow/storage_wflw_pst_sys.cpp
+    src/workflow/storage_wflw_cln_sys.cpp
 
     #[[
     SYSTEM IMPLEMENTATIONS - EDGE DISTRIBUTION

@@ -1,48 +1,52 @@
 /**
  * ASE ECS SYSTEM IMPLEMENTATION
  *
- * @file        storage_quot_chk_sys.cpp
- * @brief       StorageQuotChkSystem - Quota monitoring per realm
+ * @file        storage_wflw_gate_sys.cpp
+ * @brief       StorageWflwGateSystem - released-gate companion-artifact check
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
- * @schedule    Observation
- * @created     2026-04-05
- * @modified    2026-06-24
+ * @schedule    Integration
+ * @created     2026-07-11
+ * @modified    2026-07-11
  * @version     1.0.0
  *
- * CAUSAL CHAIN (Quota Check)
+ * CAUSAL CHAIN (released-Gate Precondition)
  *
- *   [Realm entities with tier data]
+ *   [StorageWflwDrnSystem staged a request targeting "released"]
  *          │
- *          │ Observation schedule checks usage at 1Hz
+ *          │ Integration schedule runs the Tag-filtered artifact check
  *          ▼
  *   ┌─────────────────────────────────────────────┐
- *   │  THIS SYSTEM: StorageQuotChkSystem          │
+ *   │  THIS SYSTEM: StorageWflwGateSystem         │
  *   │                                             │
  *   │  READS:                                     │
- *   │    - StorageStaRelmComponent (tier limits)  │
- *   │    - ResourceManager (realm usage bytes)    │
+ *   │    - StorageReqWflwTranComponent            │
+ *   │    - StorageWflwPendTag + StorageWflwGateTag│
+ *   │    - StorageStaRelmComponent (audit ref)    │
+ *   │    - StorageResourceManager (file_exists)   │
  *   │                                             │
  *   │  WRITES:                                    │
- *   │    - log::warn when usage exceeds 80%       │
+ *   │    - pass: removes StorageWflwGateTag       │
+ *   │    - fail: STG_WFLW_RES = DENIED_GATE +     │
+ *   │      StorageBufAudtComponent + AudtPendTag  │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Quota warnings emitted for near-limit realms
+ *          │ Gate passed → transition; failed → request destroyed
  *          ▼
- *   Administrators notified of storage pressure
+ *   StorageWflwTranSystem (excludes StorageWflwGateTag)
  *
- * HUB Pattern (N/A - No Hub reads/writes)
+ * HUB Pattern (Active)
  *
  * READS (from Hub):
  *   (none)
  *
  * WRITES (to Hub):
- *   (none)
+ *   - STG_WFLW_RES (owner = hashed_string(path)): WFLW_RES_DENIED_GATE on fail
  *
  * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
- *   Realm usage calculation via ResourceManager filesystem scan.
+ *   Realm path resolution + artifact existence checks via the manager.
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -139,16 +143,20 @@
 // ALLOWED:   <cstdint>, <cmath>, <cassert>, ase-* headers
 
 // Own header FIRST
-#include <ase/storage/systems/quota/storage_quot_chk_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_gate_sys.hpp>
 // Components from same module
+#include <ase/storage/components/request/storage_req_wflw_tran_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_active.hpp>
+#include <ase/storage/components/state/storage_buf_audt_comp.hpp>
+#include <ase/storage/components/tag/storage_tag_wflw_pend.hpp>
+#include <ase/storage/components/tag/storage_tag_wflw_gate.hpp>
+#include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
-// Hub API (widget broadcast, change-based)
+// Hub API (verdict publish)
 #include <ase/hub/api.hpp>
-// Types (L0 — is_not_found sentinel check on hub::get reads)
-#include <ase/types/types.hpp>
+// String ops (L0)
+#include <ase/utils/strops.hpp>
 
 #include <entt/core/hashed_string.hpp>
 // Logging
@@ -161,15 +169,32 @@ namespace ase::storage {
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 namespace {
 
-// Change-based publish of one Hub value: read-validate-compare-set, so the
-// 1Hz Observation scan never floods the Hub broadcast with unchanged values.
-void publish_changed(ecs::Registry& registry, uint32_t owner, uint32_t value_id, float value) {
-    float current = hub::get(registry, owner, value_id, 0.0f);
-    if (ase::types::is_not_found(current)) {
-        current = -1.0f;  // unpublished — force the first publish
-    }
-    if (current == value) return;
-    hub::set(registry, owner, value_id, value);
+// Audit record for a gate decision (mirror storage_acss_chk_sys emit_audit):
+// one entity per decision, marked pending for the Preservation batch-writer.
+void emit_gate_audit(ecs::Registry& registry, uint32_t relm_ref, const char* user_id,
+                     const char* path, uint64_t timestamp, uint8_t result,
+                     const char* reason) {
+    auto aud_ent = registry.create();
+    auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
+    aud.relm_ref = relm_ref;
+    aud.proj_ref = 0;
+    ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, user_id);
+    aud.action = AUD_PROMOTE;
+    ase::utils::str_copy(aud.path, MAX_PATH_LEN, path);
+    aud.timestamp = timestamp;
+    aud.result = result;
+    ase::utils::str_copy(aud.reason, MAX_REASON_LEN, reason);
+    registry.emplace<StorageAudtPendTag>(aud_ent);
+}
+
+// Companion-artifact presence: <asset-abs-path><suffix> must exist. Pure
+// string composition + manager query, no views.
+bool artifact_present(const StorageResourceManager& mgr, const char* asset_abs,
+                      const char* suffix) {
+    char art[600] = {};
+    ase::utils::str_copy(art, 600, asset_abs);
+    ase::utils::str_append(art, 600, suffix);
+    return mgr.file_exists(art);
 }
 
 }  // anonymous namespace
@@ -177,11 +202,11 @@ void publish_changed(ecs::Registry& registry, uint32_t owner, uint32_t value_id,
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
-void StorageQuotChkSystem::on_start(ecs::Registry& /*registry*/) {
-    log::debug("[StorageQuotChk] Started");
+void StorageWflwGateSystem::on_start(ecs::Registry& /*registry*/) {
+    log::debug("[StorageWflwGate] Started");
 }
 
-void StorageQuotChkSystem::tick(ecs::Registry& registry, float dt) {
+void StorageWflwGateSystem::tick(ecs::Registry& registry, float dt) {
     (void)dt;
 
     auto* mgr_ptr = registry.ctx().find<StorageResourceManager*>();
@@ -190,49 +215,74 @@ void StorageQuotChkSystem::tick(ecs::Registry& registry, float dt) {
     }
     auto& mgr = **mgr_ptr;
 
-    const uint64_t now = mgr.get_wall_time_seconds();
+    // Deferred deletion: gate-failed requests are collected, destroyed after the loop.
+    ecs::Entity failed[WFLW_REQ_BATCH];
+    uint32_t failed_n = 0;
 
-    auto relm_view = registry.view<StorageStaRelmComponent, StorageRelmActiveTag>();
-    for (auto [relm_ent, relm] : relm_view.each()) {
-        (void)relm_ent;
-        if (relm.quota_bytes < 1u) continue;  // no ceiling configured for this realm
+    auto gate_view = registry.view<StorageReqWflwTranComponent, StorageWflwPendTag,
+                                   StorageWflwGateTag>();
+    for (auto [req_ent, req] : gate_view.each()) {
+        if (failed_n >= WFLW_REQ_BATCH) break;
 
-        // Pace the recursive FS scan: at most one scan per QUOTA_SCAN_INTERVAL_S
-        // per realm (the pacing state is DATA on the realm, the system stays
-        // stateless). First pass (usage_scanned_at == 0) scans immediately.
-        if (relm.usage_scanned_at > 0u) {
-            const uint64_t since_scan = now - relm.usage_scanned_at;
-            if (since_scan < QUOTA_SCAN_INTERVAL_S) {
-                continue;
+        // Edge realm entity ref for the audit record (single-pass inline lookup).
+        uint32_t relm_ref = 0;
+        auto relm_view = registry.view<StorageStaRelmComponent>();
+        for (auto [relm_ent, relm] : relm_view.each()) {
+            if (ase::utils::str_equal(relm.id, EDGE_REALM_ID, MAX_REALM_ID)) {
+                relm_ref = static_cast<uint32_t>(relm_ent);
+                break;
             }
         }
-        relm.usage_scanned_at = now;
 
-        // The filesystem IS the byte authority for realm storage: the measured
-        // scan result rehydrates the in-memory mirror (ground truth, NEVER a
-        // display echo — the Hub values below are derived FROM this, not vice versa).
-        const uint64_t used = mgr.get_realm_usage(relm.id);
-        relm.used_bytes = used;
+        char asset_abs[512] = {};
+        mgr.resolve_path(EDGE_REALM_ID, nullptr, req.path, asset_abs, 512);
 
-        // Widget broadcast over the Hub (NO engine HTTP endpoint): exact uint64
-        // byte counts ride as two float-safe 24-bit words each — Hub values are
-        // float32 and a single cast corrupts anything above 2^24; the client
-        // widget reconstructs HI*2^24 + LO to the exact byte.
-        const uint32_t owner = entt::hashed_string(relm.id).value();
-        publish_changed(registry, owner, "STG_RELM_USED_HI"_hs, static_cast<float>(used >> 24));
-        publish_changed(registry, owner, "STG_RELM_USED_LO"_hs, static_cast<float>(used & 0xFFFFFFu));
-        publish_changed(registry, owner, "STG_RELM_QUOTA_HI"_hs, static_cast<float>(relm.quota_bytes >> 24));
-        publish_changed(registry, owner, "STG_RELM_QUOTA_LO"_hs, static_cast<float>(relm.quota_bytes & 0xFFFFFFu));
-
-        if (used > relm.quota_bytes) {
-            log::warn("[StorageQuotChk] realm {} OVER QUOTA: used {} bytes exceeds ceiling {} bytes",
-                      relm.id, used, relm.quota_bytes);
+        // The asset itself plus ALL FOUR companion artifacts must be present.
+        // The first missing piece is named in the audit reason (no silent deny).
+        const char* missing = nullptr;
+        if (!mgr.file_exists(asset_abs)) {
+            missing = "asset";
+        } else if (!artifact_present(mgr, asset_abs, WFLW_ART_SIG)) {
+            missing = WFLW_ART_SIG;
+        } else if (!artifact_present(mgr, asset_abs, WFLW_ART_SHA)) {
+            missing = WFLW_ART_SHA;
+        } else if (!artifact_present(mgr, asset_abs, WFLW_ART_SBOM)) {
+            missing = WFLW_ART_SBOM;
+        } else if (!artifact_present(mgr, asset_abs, WFLW_ART_SMOKE)) {
+            missing = WFLW_ART_SMOKE;
         }
+
+        if (missing == nullptr) {
+            // Gate passed: the transition system may now process this request.
+            registry.remove<StorageWflwGateTag>(req_ent);
+            log::info("[StorageWflwGate] released-gate PASSED for {} (sig+sha256+sbom+smoke present)", req.path);
+            continue;
+        }
+
+        // Gate failed: verdict + attributed audit + request destroyed.
+        const uint32_t owner = entt::hashed_string(req.path).value();
+        hub::set(registry, owner, "STG_WFLW_RES"_hs, static_cast<float>(WFLW_RES_DENIED_GATE));
+
+        char reason[MAX_REASON_LEN] = {};
+        ase::utils::str_copy(reason, MAX_REASON_LEN, "wflw_gate(");
+        ase::utils::str_append(reason, MAX_REASON_LEN, missing);
+        ase::utils::str_append(reason, MAX_REASON_LEN, ")");
+        emit_gate_audit(registry, relm_ref, req.requested_by, req.path,
+                        mgr.get_wall_time_seconds(), AUD_DENIED, reason);
+
+        log::warn("[StorageWflwGate] released-gate DENIED for {} — missing {}", req.path, missing);
+
+        failed[failed_n] = req_ent;
+        ++failed_n;
+    }
+
+    for (uint32_t i = 0; i < failed_n; ++i) {
+        registry.destroy(failed[i]);
     }
 }
 
-void StorageQuotChkSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::debug("[StorageQuotChk] Stopped");
+void StorageWflwGateSystem::on_stop(ecs::Registry& /*registry*/) {
+    log::debug("[StorageWflwGate] Stopped");
 }
 
 }  // namespace ase::storage

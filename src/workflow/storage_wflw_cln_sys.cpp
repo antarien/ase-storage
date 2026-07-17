@@ -1,37 +1,40 @@
 /**
  * ASE ECS SYSTEM IMPLEMENTATION
  *
- * @file        storage_quot_chk_sys.cpp
- * @brief       StorageQuotChkSystem - Quota monitoring per realm
+ * @file        storage_wflw_cln_sys.cpp
+ * @brief       StorageWflwClnSystem - retired-build retention cleanup (90 days)
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Observation
- * @created     2026-04-05
- * @modified    2026-06-24
+ * @created     2026-07-11
+ * @modified    2026-07-11
  * @version     1.0.0
  *
- * CAUSAL CHAIN (Quota Check)
+ * CAUSAL CHAIN (Retired-Build Retention Cleanup)
  *
- *   [Realm entities with tier data]
+ *   [StorageWflwTranSystem applied a transition INTO retired]
  *          │
- *          │ Observation schedule checks usage at 1Hz
+ *          │ Observation schedule sweeps the retention records
  *          ▼
  *   ┌─────────────────────────────────────────────┐
- *   │  THIS SYSTEM: StorageQuotChkSystem          │
+ *   │  THIS SYSTEM: StorageWflwClnSystem          │
  *   │                                             │
  *   │  READS:                                     │
- *   │    - StorageStaRelmComponent (tier limits)  │
- *   │    - ResourceManager (realm usage bytes)    │
+ *   │    - StorageWflwRetrComponent + RetrTag     │
+ *   │    - StorageStaRelmComponent (audit ref)    │
+ *   │    - StorageResourceManager (delete_file)   │
  *   │                                             │
  *   │  WRITES:                                    │
- *   │    - log::warn when usage exceeds 80%       │
+ *   │    - removes asset + companion artifacts    │
+ *   │    - destroys retired rule + record entity  │
+ *   │    - StorageBufAudtComponent (AUD_DELETE)   │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Quota warnings emitted for near-limit realms
+ *          │ retired > 90d: files gone, realm stays small (not the quota ceiling)
  *          ▼
- *   Administrators notified of storage pressure
+ *   StorageQuotChkSystem measures the freed bytes on its next scan
  *
  * HUB Pattern (N/A - No Hub reads/writes)
  *
@@ -42,7 +45,7 @@
  *   (none)
  *
  * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
- *   Realm usage calculation via ResourceManager filesystem scan.
+ *   Realm path resolution + file removal + wall time via the manager.
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -139,16 +142,17 @@
 // ALLOWED:   <cstdint>, <cmath>, <cassert>, ase-* headers
 
 // Own header FIRST
-#include <ase/storage/systems/quota/storage_quot_chk_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_cln_sys.hpp>
 // Components from same module
+#include <ase/storage/components/state/storage_wflw_retr_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_active.hpp>
+#include <ase/storage/components/state/storage_buf_audt_comp.hpp>
+#include <ase/storage/components/tag/storage_tag_wflw_retr.hpp>
+#include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
-// Hub API (widget broadcast, change-based)
-#include <ase/hub/api.hpp>
-// Types (L0 — is_not_found sentinel check on hub::get reads)
-#include <ase/types/types.hpp>
+// String ops (L0)
+#include <ase/utils/strops.hpp>
 
 #include <entt/core/hashed_string.hpp>
 // Logging
@@ -161,15 +165,34 @@ namespace ase::storage {
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 namespace {
 
-// Change-based publish of one Hub value: read-validate-compare-set, so the
-// 1Hz Observation scan never floods the Hub broadcast with unchanged values.
-void publish_changed(ecs::Registry& registry, uint32_t owner, uint32_t value_id, float value) {
-    float current = hub::get(registry, owner, value_id, 0.0f);
-    if (ase::types::is_not_found(current)) {
-        current = -1.0f;  // unpublished — force the first publish
+// Remove one on-disk file if present (bounded path composition, manager I/O).
+// Missing companions are NOT an error — older releases shipped fewer artifacts.
+void remove_if_present(StorageResourceManager& mgr, const char* asset_abs, const char* suffix) {
+    char target[600] = {};
+    ase::utils::str_copy(target, 600, asset_abs);
+    if (suffix != nullptr) {
+        ase::utils::str_append(target, 600, suffix);
     }
-    if (current == value) return;
-    hub::set(registry, owner, value_id, value);
+    if (!mgr.file_exists(target)) return;
+    if (!mgr.delete_file(target)) {
+        log::warn("[StorageWflwCln] could not remove {} (kept; retried next sweep)", target);
+    }
+}
+
+// Audit record for a retention removal (mirror storage_acss_chk_sys emit_audit).
+void emit_cln_audit(ecs::Registry& registry, uint32_t relm_ref, const char* path,
+                    uint64_t timestamp) {
+    auto aud_ent = registry.create();
+    auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
+    aud.relm_ref = relm_ref;
+    aud.proj_ref = 0;
+    ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, "system:wflw_cln");
+    aud.action = AUD_DELETE;
+    ase::utils::str_copy(aud.path, MAX_PATH_LEN, path);
+    aud.timestamp = timestamp;
+    aud.result = AUD_GRANTED;
+    ase::utils::str_copy(aud.reason, MAX_REASON_LEN, "wflw_retention(90d)");
+    registry.emplace<StorageAudtPendTag>(aud_ent);
 }
 
 }  // anonymous namespace
@@ -177,11 +200,11 @@ void publish_changed(ecs::Registry& registry, uint32_t owner, uint32_t value_id,
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
-void StorageQuotChkSystem::on_start(ecs::Registry& /*registry*/) {
-    log::debug("[StorageQuotChk] Started");
+void StorageWflwClnSystem::on_start(ecs::Registry& /*registry*/) {
+    log::debug("[StorageWflwCln] Started");
 }
 
-void StorageQuotChkSystem::tick(ecs::Registry& registry, float dt) {
+void StorageWflwClnSystem::tick(ecs::Registry& registry, float dt) {
     (void)dt;
 
     auto* mgr_ptr = registry.ctx().find<StorageResourceManager*>();
@@ -192,47 +215,67 @@ void StorageQuotChkSystem::tick(ecs::Registry& registry, float dt) {
 
     const uint64_t now = mgr.get_wall_time_seconds();
 
-    auto relm_view = registry.view<StorageStaRelmComponent, StorageRelmActiveTag>();
-    for (auto [relm_ent, relm] : relm_view.each()) {
-        (void)relm_ent;
-        if (relm.quota_bytes < 1u) continue;  // no ceiling configured for this realm
+    // Deferred deletion: expired records AND their retired ACL rules are
+    // collected during the Tag-filtered sweep, destroyed after the loop.
+    ecs::Entity done[WFLW_REQ_BATCH];
+    uint32_t done_n = 0;
+    ecs::Entity rules[WFLW_REQ_BATCH];
+    uint32_t rules_n = 0;
 
-        // Pace the recursive FS scan: at most one scan per QUOTA_SCAN_INTERVAL_S
-        // per realm (the pacing state is DATA on the realm, the system stays
-        // stateless). First pass (usage_scanned_at == 0) scans immediately.
-        if (relm.usage_scanned_at > 0u) {
-            const uint64_t since_scan = now - relm.usage_scanned_at;
-            if (since_scan < QUOTA_SCAN_INTERVAL_S) {
-                continue;
+    auto retr_view = registry.view<StorageWflwRetrComponent, StorageWflwRetrTag>();
+    for (auto [retr_ent, retr] : retr_view.each()) {
+        if (done_n >= WFLW_REQ_BATCH) break;
+        if (retr.retired_at > now) {
+            log::warn("[StorageWflwCln] record for {} carries a FUTURE retire time {} — skipped",
+                      retr.path, retr.retired_at);
+            continue;
+        }
+        const uint64_t age = now - retr.retired_at;
+        if (age < WFLW_RETIRED_RETENTION_S) continue;
+
+        // Edge realm entity ref for the audit record (single-pass inline lookup).
+        uint32_t relm_ref = 0;
+        auto relm_view = registry.view<StorageStaRelmComponent>();
+        for (auto [relm_ent, relm] : relm_view.each()) {
+            if (ase::utils::str_equal(relm.id, EDGE_REALM_ID, MAX_REALM_ID)) {
+                relm_ref = static_cast<uint32_t>(relm_ent);
+                break;
             }
         }
-        relm.usage_scanned_at = now;
 
-        // The filesystem IS the byte authority for realm storage: the measured
-        // scan result rehydrates the in-memory mirror (ground truth, NEVER a
-        // display echo — the Hub values below are derived FROM this, not vice versa).
-        const uint64_t used = mgr.get_realm_usage(relm.id);
-        relm.used_bytes = used;
+        // Remove the asset and every companion artifact (missing ones are fine).
+        char asset_abs[512] = {};
+        mgr.resolve_path(EDGE_REALM_ID, nullptr, retr.path, asset_abs, 512);
+        remove_if_present(mgr, asset_abs, nullptr);
+        remove_if_present(mgr, asset_abs, WFLW_ART_SIG);
+        remove_if_present(mgr, asset_abs, WFLW_ART_SHA);
+        remove_if_present(mgr, asset_abs, WFLW_ART_SBOM);
+        remove_if_present(mgr, asset_abs, WFLW_ART_SMOKE);
 
-        // Widget broadcast over the Hub (NO engine HTTP endpoint): exact uint64
-        // byte counts ride as two float-safe 24-bit words each — Hub values are
-        // float32 and a single cast corrupts anything above 2^24; the client
-        // widget reconstructs HI*2^24 + LO to the exact byte.
-        const uint32_t owner = entt::hashed_string(relm.id).value();
-        publish_changed(registry, owner, "STG_RELM_USED_HI"_hs, static_cast<float>(used >> 24));
-        publish_changed(registry, owner, "STG_RELM_USED_LO"_hs, static_cast<float>(used & 0xFFFFFFu));
-        publish_changed(registry, owner, "STG_RELM_QUOTA_HI"_hs, static_cast<float>(relm.quota_bytes >> 24));
-        publish_changed(registry, owner, "STG_RELM_QUOTA_LO"_hs, static_cast<float>(relm.quota_bytes & 0xFFFFFFu));
+        emit_cln_audit(registry, relm_ref, retr.path, now);
+        log::info("[StorageWflwCln] retired build {} removed after {}s retention", retr.path, age);
 
-        if (used > relm.quota_bytes) {
-            log::warn("[StorageQuotChk] realm {} OVER QUOTA: used {} bytes exceeds ceiling {} bytes",
-                      relm.id, used, relm.quota_bytes);
+        // The retiring ACL rule dies with its files (collected, destroyed below).
+        auto rule_ent = static_cast<ecs::Entity>(retr.rule_ref);
+        if (registry.valid(rule_ent) && rules_n < WFLW_REQ_BATCH) {
+            rules[rules_n] = rule_ent;
+            ++rules_n;
         }
+
+        done[done_n] = retr_ent;
+        ++done_n;
+    }
+
+    for (uint32_t i = 0; i < rules_n; ++i) {
+        registry.destroy(rules[i]);
+    }
+    for (uint32_t i = 0; i < done_n; ++i) {
+        registry.destroy(done[i]);
     }
 }
 
-void StorageQuotChkSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::debug("[StorageQuotChk] Stopped");
+void StorageWflwClnSystem::on_stop(ecs::Registry& /*registry*/) {
+    log::debug("[StorageWflwCln] Stopped");
 }
 
 }  // namespace ase::storage

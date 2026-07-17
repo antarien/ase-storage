@@ -87,7 +87,12 @@
 #include <ase/storage/systems/acl/storage_cred_acss_rsp_sys.hpp>
 #include <ase/storage/systems/acl/storage_cncm_flt_sys.hpp>
 #include <ase/storage/systems/fs/storage_file_writ_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_drn_sys.hpp>
+#include <ase/storage/systems/workflow/storage_edge_wflw_fwd_rcv_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_gate_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_tran_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_pst_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_cln_sys.hpp>
 
 // Initialization (Edge Distribution)
 #include <ase/storage/systems/edge/storage_edge_ini_sys.hpp>
@@ -135,13 +140,23 @@ struct StorageModule {
             .run_after("StorageKycdDrnSystem");
         app.add_system_with<StorageKycdLnkSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageKycdVldSystem");
+        // Workflow-promote Hub-bridge drain: converts HubStgWflwReqComponent bridge
+        // entities (sdk::emplace_workflow_promote_request) into module-local
+        // StorageReqWflwTranComponent requests (+ released-gate tag).
+        app.add_system_with<StorageWflwDrnSystem>(ecs::Schedule::Ingestion)
+            .run_after("HubRcvDrnSystem");
 
         // Integration (60Hz): ACL → file ops → workflow → concealment
         app.add_system<StorageAcssChkSystem>(ecs::Schedule::Integration);
         app.add_system_with<StorageFileWritSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssChkSystem");
-        app.add_system_with<StorageWflwTranSystem>(ecs::Schedule::Integration)
+        // released-gate artifact precondition runs BEFORE the transition system:
+        // requests targeting "released" keep StorageWflwGateTag until the
+        // .sig/.sha256/.spdx.json/.smoke companions are verified on disk.
+        app.add_system_with<StorageWflwGateSystem>(ecs::Schedule::Integration)
             .run_after("StorageFileWritSystem");
+        app.add_system_with<StorageWflwTranSystem>(ecs::Schedule::Integration)
+            .run_after("StorageWflwGateSystem");
         app.add_system_with<StorageCncmFltSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssChkSystem");
 
@@ -155,6 +170,10 @@ struct StorageModule {
             .run_after("StorageKycdExpSystem");
         app.add_system<StorageAudtWritSystem>(ecs::Schedule::Preservation);
         app.add_system<StorageLatcSyncSystem>(ecs::Schedule::Preservation);
+        // Workflow-label durable persist: drains the applied-transition buffers
+        // (StorageBufWflwComponent + StorageWflwPstPendTag) into frame-112
+        // REPLACE-upserts (storage_workflow_labels, keyed {realm,path}).
+        app.add_system<StorageWflwPstSystem>(ecs::Schedule::Preservation);
         // Keycard durable-persist is no longer a storage system: minting a keycard now
         // ships the full document straight to the Replica from the dist L4 plugin mint
         // sites (BIN_MSG_EDGE_KYCD_PERSIST, the document rides the wire as DATA). The
@@ -163,6 +182,9 @@ struct StorageModule {
 
         // Observation (1Hz): quota monitoring, vote evaluation, anomaly detection
         app.add_system<StorageQuotChkSystem>(ecs::Schedule::Observation);
+        // Retired-build retention sweep (Tag-filtered, 90 days): the cleanup —
+        // not the quota ceiling — is what keeps the edge_binaries realm small.
+        app.add_system<StorageWflwClnSystem>(ecs::Schedule::Observation);
         app.add_system<StorageVotePrcSystem>(ecs::Schedule::Observation);
         app.add_system<StorageSrvlLogSystem>(ecs::Schedule::Observation);
         // Drain edge A/ACS gate audit-signals (SES_EDGE_AUDIT_*) emitted by the
@@ -185,6 +207,12 @@ struct StorageModule {
         // projection. Reception, alongside the kernel WS inbound demux (uniform with
         // RsnMemResDrnSystem). A NOT_FOUND / revoked keycard publishes nothing.
         app.add_system<StorageEdgeKycdResDrnSystem>(ecs::Schedule::Reception);
+        // Operator release-workflow WS console receiver (Phase 12): pops BIN_MSG_EDGE_WFLW_FWD off
+        // LANE_WFLW (the Replica already verified the operator YK-JWT), deposits the hub workflow-bridge
+        // request for a promote (StorageWflwDrn/Gate/Tran/Pst drive it) or reads STG_WFLW_STAGE/RES for a
+        // status, and ships BIN_MSG_EDGE_WFLW_RES back for the Replica to relay to the ase-cli. Reception,
+        // alongside the kernel WS inbound demux, mirror of StorageEdgeKycdResDrnSystem.
+        app.add_system<StorageEdgeWflwFwdRcvSystem>(ecs::Schedule::Reception);
         // Credential A/ACS access-check: drain CACSS_WIRE_REQ (LANE_CACSS) from the Replica, resolve
         // keycard + project realm, emplace StorageReqAcssComponent so the Integration ladder decides.
         app.add_system<StorageCredAcssRcvSystem>(ecs::Schedule::Reception);

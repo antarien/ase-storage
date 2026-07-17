@@ -207,6 +207,13 @@ constexpr uint16_t ACSS_OWNER_PERMS     = 0xFFFF;     // Realm-owner keycard pre
 
 constexpr uint32_t INVALID_ENTITY = 0xFFFFFFFF;  // No entity reference (UINT32_MAX sentinel)
 
+// ── ACL RULE MATCHING (path_pattern semantics) ──────────────────────────
+// A LEADING '*' makes a rule a SUFFIX rule ("*.sig" governs companion artifacts
+// that sit BESIDE binaries — prefix patterns cannot express them); any other
+// pattern is the established prefix rule. Specificity ranking: suffix rules
+// outrank every prefix rule; among equals the LONGER pattern wins.
+constexpr uint32_t ACSS_MATCH_SUFFIX_BONUS = 1000;  // score bonus lifting suffix rules above all prefix rules
+
 // ── FAHNE FLAGS (SharedHeader UI zone identifiers) ──────────────────────
 
 constexpr uint8_t FLAG_ORG  = 0;    // Organization and realm context zone
@@ -250,6 +257,62 @@ constexpr const char* EDGE_CWRD_METADATA = "METADATA";   // compatibility.json +
 
 constexpr uint8_t EDGE_CLEARANCE_CUSTOMER = 0;   // Customer download-only clearance for released binaries
 constexpr uint8_t EDGE_CLEARANCE_OPERATOR = 5;   // Release-manager full release-workflow clearance
+
+// ── WORKFLOW TRANSITION ENGINE (Phase 12 Task 12.3) ─────────────────────
+// The label chain draft→review→approved→released→retired is DATA: each allowed
+// edge is a seeded StorageWflwEdgeComponent entity (StorageEdgeIniSystem), and
+// StorageWflwTranSystem validates a requested transition purely by matching the
+// request against those edge entities — no switch/if-chain dispatch.
+
+// Result codes — published owner-scoped (owner = hashed_string(path)) as the Hub
+// value STG_WFLW_RES once a promote request is processed; the dist plugin route
+// reads them back via sdk::get without any ase-storage include.
+constexpr uint8_t WFLW_RES_PENDING     = 0;   // Request staged, not yet processed
+constexpr uint8_t WFLW_RES_APPLIED     = 1;   // Edge allowed: label written + audited + persisted
+constexpr uint8_t WFLW_RES_DENIED_EDGE = 2;   // Requested edge not in the seeded transition graph
+constexpr uint8_t WFLW_RES_DENIED_GATE = 3;   // released-gate companion artifact missing
+constexpr uint8_t WFLW_RES_DENIED_PERM = 4;   // Requester keycard lacks PERM_PROMOTE
+constexpr uint8_t WFLW_RES_NOT_FOUND   = 5;   // No ACL rule for the path and no on-disk asset to bootstrap draft
+
+// Stage ordinals — published owner-scoped as STG_WFLW_STAGE for display widgets
+// (float-safe small integers; the label STRING never rides the numeric Hub).
+constexpr uint8_t WFLW_STAGE_DRAFT    = 0;   // EDGE_LABEL_DRAFT ordinal
+constexpr uint8_t WFLW_STAGE_REVIEW   = 1;   // EDGE_LABEL_REVIEW ordinal
+constexpr uint8_t WFLW_STAGE_APPROVED = 2;   // EDGE_LABEL_APPROVED ordinal
+constexpr uint8_t WFLW_STAGE_RELEASED = 3;   // EDGE_LABEL_RELEASED ordinal
+constexpr uint8_t WFLW_STAGE_RETIRED  = 4;   // EDGE_LABEL_RETIRED ordinal
+
+// released-gate companion artifacts — promotion to released is refused unless ALL
+// FOUR exist beside the asset in the realm. Checked by the Tag-filtered
+// StorageWflwGateSystem (StorageWflwGateTag), never inside the transition system.
+constexpr const char* WFLW_ART_SIG   = ".sig";        // ES256 signature over the binary
+constexpr const char* WFLW_ART_SHA   = ".sha256";     // SHA-256 checksum file
+constexpr const char* WFLW_ART_SBOM  = ".spdx.json";  // SPDX SBOM document
+constexpr const char* WFLW_ART_SMOKE = ".smoke";      // Operator smoke-test marker (health-check passed)
+
+// Durable persist — every APPLIED transition ships as a workflow-label document to
+// the Replica (REPLACE-upsert into storage_workflow_labels keyed {realm,path}). The
+// BIN_MSG id + frame layout are mirrored from modules/ase-replication/replica_types.hpp
+// (SSOT registration: ase-network types.hpp); changing either side requires changing
+// both (single contract, same envelope as the keycard persist frame 35).
+constexpr uint8_t  EDGE_WFLW_BIN_MSG_PERSIST = 112;   // dist → Replica: [112][req_id:u64][doc_len:u32][doc]
+constexpr uint32_t WFLW_PST_DOC_BUF          = 1024;  // workflow-label persist document scratch bytes (mirror EDGE_WFLW_PERSIST_DOC_MAX)
+constexpr uint32_t WFLW_REQ_BATCH            = 16;    // max workflow entities drained/denied/persisted per tick (deferred-destroy batch bound)
+
+// ── EDGE-REALM QUOTA + RETIRED RETENTION (Phase 12 Task 12.14 / R14) ────────
+// SIZING (R14 verification, MEASURED 2026-07-11 against the LIVE realm): one
+// linux-x86_64 release = daemon binary 2,028,760 B (~1.9 MB) + bundled
+// libdatachannel 3,916,432 B (~3.7 MB) + .sig (72 B) + SPDX SBOM (~1.6 KB)
+// + .sha256/.smoke (<1 KB) ≈ 6 MB; whole live realm with one release =
+// 5,968,931 B. 10 GB therefore holds ~1700 full releases — years of runway even
+// at daily releases across 5 platforms, because the 90-day retired-cleanup
+// (StorageWflwClnSystem), not the ceiling, is what keeps the realm small. The
+// earlier "Enterprise (500GB)" figure (PLAN PHASE_12:70 / RISKS R14) was an
+// UNVERIFIED tier template, not a sizing decision — corrected in both
+// documents; never copy it back here.
+constexpr uint64_t EDGE_REALM_QUOTA_BYTES   = 10737418240ULL;  // 10 GB edge_binaries realm ceiling
+constexpr uint64_t QUOTA_SCAN_INTERVAL_S    = 60;              // seconds between realm-usage FS scans (Observation pacing)
+constexpr uint64_t WFLW_RETIRED_RETENTION_S = 7776000;         // 90 days: retired builds older than this are deleted
 
 // ── DIGIT EXTRACTION (base-10 helpers) ──────────────────────────────────
 
@@ -301,5 +364,27 @@ constexpr uint8_t EDGE_KYCD_STATUS_ERROR     = 2;  // Backend/serialization erro
 // and projected only as an owner-scoped SES_KYCD_HOLDS_<cw> boolean verdict — never a string
 // or per-index key over the Hub.
 constexpr uint32_t KYCD_DECODE_CWRD_MAX   = 64;  // max codewords parsed out of a recovered keycard document
+
+// ── Operator release-workflow WS console forward (Phase 12) ──────────────────
+// The operator drives promote/status from `ase edge` over the ase-cli WS console to
+// the Replica; the Replica verifies the operator YK-JWT and forwards the command here
+// as BIN_MSG_EDGE_WFLW_FWD(113). StorageEdgeWflwFwdRcvSystem pops LANE_WFLW, and for a
+// promote deposits the SAME hub workflow-bridge request the /admin/workflow/promote
+// route uses (StorageWflwDrn/Gate/Tran/Pst then drive it), or for a status reads the
+// live STG_WFLW_STAGE/RES, then replies BIN_MSG_EDGE_WFLW_RES(114) to the Replica which
+// relays it to the CLI. Mirror of ase-network / ase-replication types.hpp (SSOT there);
+// changing either side requires changing both (single wire contract).
+constexpr uint8_t  EDGE_WFLW_BIN_MSG_FWD = 113;  // Replica → dist: [113][cli_conn:u32][op:u8][path_len:u16][path][label_len:u16][label][by_len:u16][by]
+constexpr uint8_t  EDGE_WFLW_BIN_MSG_RES = 114;  // dist → Replica → CLI: [114][cli_conn:u32][status:u8][json_len:u32][json]
+constexpr uint32_t EDGE_WFLW_FWD_HDR = 5u;   // [113] + cli_conn(4)
+constexpr uint32_t EDGE_WFLW_RES_HDR = 10u;  // [114] + cli_conn(4) + status(1) + json_len(4)
+constexpr uint8_t  EDGE_WFLW_OP_PROMOTE = 0u;  // op byte: drive the release-workflow promote
+constexpr uint8_t  EDGE_WFLW_OP_STATUS  = 1u;  // op byte: read the live workflow stage/result
+constexpr uint8_t  EDGE_WFLW_STATUS_OK          = 0u;  // verdict shipped / promote staged / status found
+constexpr uint8_t  EDGE_WFLW_STATUS_NOT_AUTHED  = 1u;  // (Replica-side only; the dist never emits it)
+constexpr uint8_t  EDGE_WFLW_STATUS_NO_DIST     = 2u;  // (Replica-side only)
+constexpr uint8_t  EDGE_WFLW_STATUS_BAD_REQUEST = 3u;  // malformed forward frame (missing path/target)
+constexpr uint8_t  EDGE_WFLW_STATUS_NOT_FOUND   = 4u;  // status: no workflow state staged for this path
+constexpr uint32_t EDGE_WFLW_JSON_MAX  = 512u;  // verdict JSON payload bytes
 
 }  // namespace ase::storage

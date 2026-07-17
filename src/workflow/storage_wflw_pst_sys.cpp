@@ -1,37 +1,38 @@
 /**
  * ASE ECS SYSTEM IMPLEMENTATION
  *
- * @file        storage_quot_chk_sys.cpp
- * @brief       StorageQuotChkSystem - Quota monitoring per realm
+ * @file        storage_wflw_pst_sys.cpp
+ * @brief       StorageWflwPstSystem - durable workflow-label persist (frame 112)
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
- * @schedule    Observation
- * @created     2026-04-05
- * @modified    2026-06-24
+ * @schedule    Preservation
+ * @created     2026-07-11
+ * @modified    2026-07-11
  * @version     1.0.0
  *
- * CAUSAL CHAIN (Quota Check)
+ * CAUSAL CHAIN (Workflow-Label Durable Persist)
  *
- *   [Realm entities with tier data]
+ *   [StorageWflwTranSystem applied a transition + staged a persist buffer]
  *          │
- *          │ Observation schedule checks usage at 1Hz
+ *          │ Preservation schedule drains the persist buffers
  *          ▼
  *   ┌─────────────────────────────────────────────┐
- *   │  THIS SYSTEM: StorageQuotChkSystem          │
+ *   │  THIS SYSTEM: StorageWflwPstSystem          │
  *   │                                             │
  *   │  READS:                                     │
- *   │    - StorageStaRelmComponent (tier limits)  │
- *   │    - ResourceManager (realm usage bytes)    │
+ *   │    - StorageBufWflwComponent                │
+ *   │    - StorageWflwPstPendTag (filter)         │
  *   │                                             │
  *   │  WRITES:                                    │
- *   │    - log::warn when usage exceeds 80%       │
+ *   │    - [112][req_id:u64][doc_len:u32][doc]    │
+ *   │      onto OutboundQueueResourceManager      │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Quota warnings emitted for near-limit realms
+ *          │ Replica REPLACE-upserts storage_workflow_labels keyed {realm,path}
  *          ▼
- *   Administrators notified of storage pressure
+ *   ReplicaEdgeWflwPstSystem (ase-replication, Preservation)
  *
  * HUB Pattern (N/A - No Hub reads/writes)
  *
@@ -39,10 +40,10 @@
  *   (none)
  *
  * WRITES (to Hub):
- *   (none)
+ *   (none — the document rides the binary wire as string DATA, never the Hub)
  *
- * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
- *   Realm usage calculation via ResourceManager filesystem scan.
+ * FLYWEIGHT PATTERN (Active - transport::OutboundQueueResourceManager via ctx)
+ *   Frame staging onto the L1 transport outbound queue.
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -139,37 +140,66 @@
 // ALLOWED:   <cstdint>, <cmath>, <cassert>, ase-* headers
 
 // Own header FIRST
-#include <ase/storage/systems/quota/storage_quot_chk_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_pst_sys.hpp>
 // Components from same module
-#include <ase/storage/components/state/storage_sta_relm_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_active.hpp>
-#include <ase/storage/storage_resource_manager.hpp>
+#include <ase/storage/components/state/storage_buf_wflw_comp.hpp>
+#include <ase/storage/components/tag/storage_tag_wflw_pst_pend.hpp>
 #include <ase/storage/types.hpp>
-// Hub API (widget broadcast, change-based)
-#include <ase/hub/api.hpp>
-// Types (L0 — is_not_found sentinel check on hub::get reads)
-#include <ase/types/types.hpp>
+// Transport (L1 via ctx — outbound frame staging, mirror StorageCredAcssRspSystem)
+#include <ase/transport/outbound_queue_resource_manager.hpp>
+#include <ase/transport/types.hpp>
+// String ops (L0)
+#include <ase/utils/strops.hpp>
 
 #include <entt/core/hashed_string.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
+#include <cstdint>
+#include <cstring>
+
 using namespace entt::literals;
 
 namespace ase::storage {
 
-// Anonymous namespace for helper FUNCTIONS (NOT static!)
+// Anonymous namespace for helper FUNCTIONS (pure frame/doc build, no View/Query).
 namespace {
 
-// Change-based publish of one Hub value: read-validate-compare-set, so the
-// 1Hz Observation scan never floods the Hub broadcast with unchanged values.
-void publish_changed(ecs::Registry& registry, uint32_t owner, uint32_t value_id, float value) {
-    float current = hub::get(registry, owner, value_id, 0.0f);
-    if (ase::types::is_not_found(current)) {
-        current = -1.0f;  // unpublished — force the first publish
+// Append an unsigned decimal to a bounded string buffer. Pure string math
+// (base-10 digit extraction via DECIMAL_RADIX; the do-while emits at least one
+// digit, so a zero value renders as "0" without a special case).
+void append_u64_decimal(char* out, uint32_t out_size, uint64_t v) {
+    char digits[21] = {};
+    uint32_t n = 0;
+    do {
+        digits[n] = static_cast<char>('0' + (v % DECIMAL_RADIX));
+        ++n;
+        v /= DECIMAL_RADIX;
+    } while (v > 0 && n < 20);
+    char rev[21] = {};
+    for (uint32_t i = 0; i < n; ++i) {
+        rev[i] = digits[n - 1 - i];
     }
-    if (current == value) return;
-    hub::set(registry, owner, value_id, value);
+    rev[n] = '\0';
+    ase::utils::str_append(out, out_size, rev);
+}
+
+// Serialize one workflow-label document ({"realm","path","label","updated_by",
+// "updated_at"}). All string fields were sanitized at drain time (quotes and
+// backslashes stripped), so plain concatenation yields valid JSON.
+void build_wflw_doc(char* doc, uint32_t doc_size, const char* realm, const char* path,
+                    const char* label, const char* updated_by, uint64_t updated_at) {
+    ase::utils::str_copy(doc, doc_size, "{\"realm\":\"");
+    ase::utils::str_append(doc, doc_size, realm);
+    ase::utils::str_append(doc, doc_size, "\",\"path\":\"");
+    ase::utils::str_append(doc, doc_size, path);
+    ase::utils::str_append(doc, doc_size, "\",\"label\":\"");
+    ase::utils::str_append(doc, doc_size, label);
+    ase::utils::str_append(doc, doc_size, "\",\"updated_by\":\"");
+    ase::utils::str_append(doc, doc_size, updated_by);
+    ase::utils::str_append(doc, doc_size, "\",\"updated_at\":");
+    append_u64_decimal(doc, doc_size, updated_at);
+    ase::utils::str_append(doc, doc_size, "}");
 }
 
 }  // anonymous namespace
@@ -177,62 +207,54 @@ void publish_changed(ecs::Registry& registry, uint32_t owner, uint32_t value_id,
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
-void StorageQuotChkSystem::on_start(ecs::Registry& /*registry*/) {
-    log::debug("[StorageQuotChk] Started");
+void StorageWflwPstSystem::on_start(ecs::Registry& /*registry*/) {
+    log::debug("[StorageWflwPst] Started");
 }
 
-void StorageQuotChkSystem::tick(ecs::Registry& registry, float dt) {
+void StorageWflwPstSystem::tick(ecs::Registry& registry, float dt) {
     (void)dt;
 
-    auto* mgr_ptr = registry.ctx().find<StorageResourceManager*>();
-    if (!mgr_ptr || !(*mgr_ptr)) {
-        return;  // manager not up yet (StorageIniSystem seeds it at Initialization)
+    auto* out = registry.ctx().find<transport::OutboundQueueResourceManager>();
+    if (out == nullptr) return;  // no outbound lane on this tier → buffers stay queued
+
+    // Deferred deletion: collect shipped buffers, destroy after the loop.
+    ecs::Entity done[WFLW_REQ_BATCH];
+    uint32_t done_n = 0;
+
+    auto buf_view = registry.view<StorageBufWflwComponent, StorageWflwPstPendTag>();
+    for (auto [buf_ent, buf] : buf_view.each()) {
+        if (done_n >= WFLW_REQ_BATCH) break;
+
+        char doc[WFLW_PST_DOC_BUF] = {};
+        build_wflw_doc(doc, WFLW_PST_DOC_BUF, buf.realm, buf.path, buf.label,
+                       buf.updated_by, buf.updated_at);
+        const uint32_t doc_len = ase::utils::str_len(doc, WFLW_PST_DOC_BUF);
+
+        // [112][req_id:u64][doc_len:u32][doc] — same envelope as the keycard
+        // persist frame 35; req_id = hashed_string(path) is a correlation token
+        // only, the Replica upsert keys on the parsed {realm,path}.
+        char frame[13 + WFLW_PST_DOC_BUF] = {};
+        frame[0] = static_cast<char>(EDGE_WFLW_BIN_MSG_PERSIST);
+        const uint64_t req_id = static_cast<uint64_t>(entt::hashed_string(buf.path).value());
+        std::memcpy(frame + 1, &req_id, 8);
+        std::memcpy(frame + 9, &doc_len, 4);
+        std::memcpy(frame + 13, doc, doc_len);
+        out->push_outbound(frame, 13u + doc_len);
+
+        log::info("[StorageWflwPst] persisted workflow label {} for {} (frame 112, {} bytes)",
+                  buf.label, buf.path, 13u + doc_len);
+
+        done[done_n] = buf_ent;
+        ++done_n;
     }
-    auto& mgr = **mgr_ptr;
 
-    const uint64_t now = mgr.get_wall_time_seconds();
-
-    auto relm_view = registry.view<StorageStaRelmComponent, StorageRelmActiveTag>();
-    for (auto [relm_ent, relm] : relm_view.each()) {
-        (void)relm_ent;
-        if (relm.quota_bytes < 1u) continue;  // no ceiling configured for this realm
-
-        // Pace the recursive FS scan: at most one scan per QUOTA_SCAN_INTERVAL_S
-        // per realm (the pacing state is DATA on the realm, the system stays
-        // stateless). First pass (usage_scanned_at == 0) scans immediately.
-        if (relm.usage_scanned_at > 0u) {
-            const uint64_t since_scan = now - relm.usage_scanned_at;
-            if (since_scan < QUOTA_SCAN_INTERVAL_S) {
-                continue;
-            }
-        }
-        relm.usage_scanned_at = now;
-
-        // The filesystem IS the byte authority for realm storage: the measured
-        // scan result rehydrates the in-memory mirror (ground truth, NEVER a
-        // display echo — the Hub values below are derived FROM this, not vice versa).
-        const uint64_t used = mgr.get_realm_usage(relm.id);
-        relm.used_bytes = used;
-
-        // Widget broadcast over the Hub (NO engine HTTP endpoint): exact uint64
-        // byte counts ride as two float-safe 24-bit words each — Hub values are
-        // float32 and a single cast corrupts anything above 2^24; the client
-        // widget reconstructs HI*2^24 + LO to the exact byte.
-        const uint32_t owner = entt::hashed_string(relm.id).value();
-        publish_changed(registry, owner, "STG_RELM_USED_HI"_hs, static_cast<float>(used >> 24));
-        publish_changed(registry, owner, "STG_RELM_USED_LO"_hs, static_cast<float>(used & 0xFFFFFFu));
-        publish_changed(registry, owner, "STG_RELM_QUOTA_HI"_hs, static_cast<float>(relm.quota_bytes >> 24));
-        publish_changed(registry, owner, "STG_RELM_QUOTA_LO"_hs, static_cast<float>(relm.quota_bytes & 0xFFFFFFu));
-
-        if (used > relm.quota_bytes) {
-            log::warn("[StorageQuotChk] realm {} OVER QUOTA: used {} bytes exceeds ceiling {} bytes",
-                      relm.id, used, relm.quota_bytes);
-        }
+    for (uint32_t i = 0; i < done_n; ++i) {
+        registry.destroy(done[i]);
     }
 }
 
-void StorageQuotChkSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::debug("[StorageQuotChk] Stopped");
+void StorageWflwPstSystem::on_stop(ecs::Registry& /*registry*/) {
+    log::debug("[StorageWflwPst] Stopped");
 }
 
 }  // namespace ase::storage

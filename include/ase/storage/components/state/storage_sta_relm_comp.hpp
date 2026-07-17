@@ -75,6 +75,9 @@ struct StorageStaRelmComponent {
     char owner[64] = {};                      // Creator user ID (MongoDB ObjectId hex)
     uint8_t default_protection = 0;           // Default Schutzstufe for new assets (0-9)
     uint8_t tier = 0;                         // License tier (0=indie, 1=pro, 2=enterprise)
+    uint64_t quota_bytes = 0;                 // Realm storage ceiling in bytes (seeded from types.hpp, 0 = unset)
+    uint64_t used_bytes = 0;                  // Measured realm usage in bytes (StorageQuotChkSystem FS scan)
+    uint64_t usage_scanned_at = 0;            // Unix time of the last usage scan (paces the Observation rescan)
 };
 
 }  // namespace ase::storage

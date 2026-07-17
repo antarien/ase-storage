@@ -326,17 +326,38 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         uint32_t matched_rule = INVALID_ENTITY;
         char     rule_label[MAX_LABEL_LEN] = {};
         {
+            // Pattern semantics (types.hpp ACSS_MATCH_SUFFIX_BONUS): a LEADING '*'
+            // makes the rule a SUFFIX rule ("*.sig" governs companion artifacts that
+            // sit BESIDE binaries — a prefix cannot express them); anything else is
+            // the established prefix rule. The MOST SPECIFIC rule wins (suffix over
+            // prefix, longer pattern over shorter) — never first-iteration order,
+            // which is storage-order dependent and would let a broad "release/"
+            // prefix swallow the "*.sig" codeword requirement.
+            uint32_t best_score = 0;
             auto acl_view = registry.view<StorageAcssRuleComponent>();
             for (auto acl_ent : acl_view) {
                 auto& rule = acl_view.get<StorageAcssRuleComponent>(acl_ent);
                 if (rule.relm_ref != req.relm_ref) { continue; }
                 if (rule.proj_ref != req.proj_ref && rule.proj_ref != 0) { continue; }
-                if (ase::utils::str_equal(rule.path_pattern, req.path, ase::utils::str_len(rule.path_pattern, MAX_PATH_LEN))) {
-                    required_protection = rule.protection_level;
-                    matched_rule = static_cast<uint32_t>(acl_ent);
-                    ase::utils::str_copy(rule_label, MAX_LABEL_LEN, rule.label);
-                    break;
+                uint32_t plen = ase::utils::str_len(rule.path_pattern, MAX_PATH_LEN);
+                if (plen < 1u) { continue; }
+                bool is_suffix = rule.path_pattern[0] == '*';
+                bool match = false;
+                if (is_suffix) {
+                    uint32_t slen = plen - 1u;
+                    uint32_t alen = ase::utils::str_len(req.path, MAX_PATH_LEN);
+                    match = slen >= 1u && alen >= slen &&
+                            ase::utils::str_equal(req.path + (alen - slen), rule.path_pattern + 1, slen);
+                } else {
+                    match = ase::utils::str_equal(rule.path_pattern, req.path, plen);
                 }
+                if (!match) { continue; }
+                uint32_t score = (is_suffix ? ACSS_MATCH_SUFFIX_BONUS : 1u) + plen;
+                if (score <= best_score) { continue; }
+                best_score = score;
+                required_protection = rule.protection_level;
+                matched_rule = static_cast<uint32_t>(acl_ent);
+                ase::utils::str_copy(rule_label, MAX_LABEL_LEN, rule.label);
             }
         }
 

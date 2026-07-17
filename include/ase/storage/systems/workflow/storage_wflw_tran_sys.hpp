@@ -5,7 +5,8 @@
  *
  * @file        storage_wflw_tran_sys.hpp
  * @brief       StorageWflwTranSystem - Asset workflow label transitions
- * @description Handles label changes: draft to review to approved to published
+ * @description Handles label changes: draft to review to approved to released to
+ *              retired — validated data-driven against seeded edge entities
  *
  * @module      ase-storage
  * @layer       3 (Modules)
@@ -37,10 +38,14 @@ namespace ase::storage {
 /**
  * @brief StorageWflwTranSystem - Label transition engine
  *
- * @schedule Integration - run_after StorageFileWritSystem
- * @reads    StorageAcssRuleComponent (label field), StorageReqAcssComponent
- * @writes   Updates label field in StorageAcssRuleComponent
- * @depends  ACL grants with PERM_PROMOTE permission
+ * @schedule Integration - run_after StorageWflwGateSystem (released-gate first)
+ * @reads    StorageReqWflwTranComponent + StorageWflwPendTag (excl. StorageWflwGateTag),
+ *           StorageWflwEdgeComponent (allowed edges), StorageAcssRuleComponent (label),
+ *           StorageStaRelmComponent, SES_KYCD_PERM (PERM_PROMOTE axis)
+ * @writes   StorageAcssRuleComponent.label, STG_WFLW_RES/STG_WFLW_STAGE (owner-scoped),
+ *           StorageBufAudtComponent + StorageAudtPendTag (attributed audit),
+ *           StorageBufWflwComponent + StorageWflwPstPendTag (frame-112 persist)
+ * @depends  StorageWflwDrnSystem staged requests; StorageEdgeIniSystem seeded edges
  */
 class StorageWflwTranSystem : public ecs::System {
 public:

@@ -1,1 +1,42 @@
-add_test(NAME ase-storage-placeholder COMMAND echo ok)
+#[[
+ASE TEST CONFIGURATION
+
+@file        tests/CMakeLists.txt
+@brief       Test configuration for ase-storage
+@description Unit tests with doctest framework (workflow transition engine).
+
+@module      ase-storage
+@layer       3 (Module)
+@created     2026-07-11
+@modified    2026-07-11
+@version     1.0.0
+
+CMAKE TEST COMPLIANCE
+
+[ ] add_executable() with explicit test file list
+[ ] NO file(GLOB ...) for test files!
+[ ] target_link_libraries() with module and doctest::doctest
+[ ] set_target_properties() with RUNTIME_OUTPUT_DIRECTORY
+[ ] add_test() for CTest integration
+[ ] Test executable name: ${PROJECT_NAME}-test
+]]
+
+add_executable(${PROJECT_NAME}-test
+    #[[
+    TEST FILES
+    Unit test source files (explicit, no GLOB).
+    ]]
+    test_storage_wflw.cpp
+)
+
+target_link_libraries(${PROJECT_NAME}-test
+    PRIVATE
+        ase::storage
+        doctest::doctest
+)
+
+set_target_properties(${PROJECT_NAME}-test PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+)
+
+add_test(NAME ${PROJECT_NAME}-test COMMAND ${PROJECT_NAME}-test)

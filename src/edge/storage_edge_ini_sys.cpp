@@ -147,13 +147,18 @@
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
 #include <ase/storage/components/state/storage_acss_rule_comp.hpp>
 #include <ase/storage/components/state/storage_acss_cwrd_comp.hpp>
+#include <ase/storage/components/state/storage_wflw_edge_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_relm_public.hpp>
 #include <ase/storage/components/tag/storage_tag_relm_active.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
 #include <ase/utils/strops.hpp>
+// Hub publish for the drill's initial workflow stage (edge-download gate reads it).
+#include <ase/hub/api.hpp>
 // Logging
 #include <ase/log/log.hpp>
+
+#include <entt/core/hashed_string.hpp>
 
 using namespace entt::literals;
 
@@ -165,7 +170,33 @@ namespace ase::storage {
 // NO View/Query operations in helpers! Only pure math!
 namespace {
 
-// No helper functions needed → all seeding inline in on_start()
+// One workflow-transition edge entity (die Kante). The transition graph is
+// DATA: StorageWflwTranSystem validates promote requests purely against these
+// entities — a new allowed transition = one more seed call, never system code.
+void seed_wflw_edge(ecs::Registry& registry, const char* from_label, const char* to_label) {
+    auto edge_ent = registry.create();
+    auto& edge = registry.emplace<StorageWflwEdgeComponent>(edge_ent);
+    ase::utils::str_copy(edge.from_label, MAX_LABEL_LEN, from_label);
+    ase::utils::str_copy(edge.to_label, MAX_LABEL_LEN, to_label);
+}
+
+// One ACL rule + its required codeword (Entity-per-Item pair). Pattern semantics
+// per types.hpp ACSS_MATCH_SUFFIX_BONUS: leading '*' = suffix rule.
+void seed_acss_rule(ecs::Registry& registry, uint32_t relm_ref, const char* pattern,
+                    const char* label, const char* required_cwrd) {
+    auto rule_ent = registry.create();
+    auto& rule = registry.emplace<StorageAcssRuleComponent>(rule_ent);
+    rule.relm_ref = relm_ref;
+    rule.proj_ref = 0;
+    ase::utils::str_copy(rule.path_pattern, MAX_PATH_LEN, pattern);
+    rule.protection_level = PROTECTION_PUBLIC;
+    ase::utils::str_copy(rule.label, MAX_LABEL_LEN, label);
+
+    auto cwrd_ent = registry.create();
+    auto& cwrd = registry.emplace<StorageAcssCwrdComponent>(cwrd_ent);
+    cwrd.acss_ref = static_cast<uint32_t>(rule_ent);
+    ase::utils::str_copy(cwrd.required_cwrd, MAX_CODEWORD_LEN, required_cwrd);
+}
 
 }  // anonymous namespace
 
@@ -192,33 +223,57 @@ void StorageEdgeIniSystem::on_start(ecs::Registry& registry) {
     mgr.ensure_dir(dir);
     log::info("[StorageEdgeIni] edge_binaries realm directory ready");
 
-    // Realm entity: public platform realm, Enterprise tier, no concealment
+    // Realm entity: public platform realm, Enterprise tier, no concealment.
+    // quota_bytes = the MEASURED 10 GB ceiling (types.hpp EDGE_REALM_QUOTA_BYTES,
+    // R14 sizing) — the retired-cleanup keeps the realm small, not the ceiling.
     auto realm_ent = registry.create();
     auto& relm = registry.emplace<StorageStaRelmComponent>(realm_ent);
     ase::utils::str_copy(relm.id, MAX_REALM_ID, EDGE_REALM_ID);
     ase::utils::str_copy(relm.name, MAX_REALM_NAME, "Edge Binary Distribution");
     relm.default_protection = PROTECTION_PUBLIC;
     relm.tier = TIER_ENTERPRISE;
+    relm.quota_bytes = EDGE_REALM_QUOTA_BYTES;
     registry.emplace<StorageRelmPublicTag>(realm_ent);
     registry.emplace<StorageRelmActiveTag>(realm_ent);
-    log::info("[StorageEdgeIni] edge_binaries realm entity registered (tier=Enterprise, public)");
+    log::info("[StorageEdgeIni] edge_binaries realm entity registered (tier=Enterprise, public, quota={} bytes)",
+              relm.quota_bytes);
 
-    // Release-path ACL rule: clearance 0 (public), label released, codeword BINARY
-    auto rule_ent = registry.create();
-    auto& rule = registry.emplace<StorageAcssRuleComponent>(rule_ent);
-    rule.relm_ref = static_cast<uint32_t>(realm_ent);
-    rule.proj_ref = 0;
-    ase::utils::str_copy(rule.path_pattern, MAX_PATH_LEN, "release/*");
-    rule.protection_level = PROTECTION_PUBLIC;
-    ase::utils::str_copy(rule.label, MAX_LABEL_LEN, EDGE_LABEL_RELEASED);
+    // A/ACS rules (Entity-per-Item pairs rule+codeword). ALL FOUR edge codeword
+    // axes are realm ACL DATA — not just BINARY with suffix-only enforcement in
+    // the download gate: *.sig/*.spdx.json are SUFFIX rules (companions sit
+    // beside binaries), version/compatibility manifests carry METADATA.
+    const uint32_t relm_ref = static_cast<uint32_t>(realm_ent);
+    seed_acss_rule(registry, relm_ref, "release/*", EDGE_LABEL_RELEASED, EDGE_CWRD_BINARY);
+    seed_acss_rule(registry, relm_ref, "*.sig", EDGE_LABEL_RELEASED, EDGE_CWRD_SIG);
+    seed_acss_rule(registry, relm_ref, "*.spdx.json", EDGE_LABEL_RELEASED, EDGE_CWRD_SBOM);
+    seed_acss_rule(registry, relm_ref, "release/version.json", EDGE_LABEL_RELEASED, EDGE_CWRD_METADATA);
+    seed_acss_rule(registry, relm_ref, "release/compatibility.json", EDGE_LABEL_RELEASED, EDGE_CWRD_METADATA);
+    // Phase-12 Task-12.3 workflow-drill asset: one designated per-asset rule seeded at
+    // DRAFT so an operator can promote it draft to review to approved to released live
+    // (the pattern rules above sit at RELEASED). Most-specific-wins gives this full-path
+    // rule to the drill asset only; named test fixture for the E2E demonstration.
+    const char* drill_path = "release/linux-x86_64/ase-edge-daemon-drill";
+    seed_acss_rule(registry, relm_ref, drill_path, EDGE_LABEL_DRAFT, EDGE_CWRD_BINARY);
+    // Publish the drill's initial workflow stage (display) AND the customer-public serving verdict
+    // to the Hub. The serving verdict STG_WFLW_PUB is computed HERE, from the SAME SSOT rule as the
+    // promote path (public iff label == EDGE_LABEL_RELEASED, ARCH_ASE_REASONING_EDGE §6.4) — draft is
+    // NOT public, so the edge-download gate denies the drill until an operator promotes it to released.
+    // StorageWflwTranSystem republishes both keys (same owner=hashed_string(path)) on every promote.
+    // The pattern rules above stay unpublished (a pattern is not a concrete request path), so the
+    // statically-released assets keep serving on the realm default — no regression.
+    const uint32_t drill_owner = entt::hashed_string(drill_path).value();
+    hub::set(registry, drill_owner, "STG_WFLW_STAGE"_hs, static_cast<float>(WFLW_STAGE_DRAFT));
+    hub::set(registry, drill_owner, "STG_WFLW_PUB"_hs,
+             ase::utils::str_equal(EDGE_LABEL_DRAFT, EDGE_LABEL_RELEASED, MAX_LABEL_LEN) ? 1.0f : 0.0f);
+    log::info("[StorageEdgeIni] edge ACL rules ready (BINARY release/*, SIG *.sig, SBOM *.spdx.json, METADATA manifests; drill asset at draft)");
 
-    // Required codeword for the release path (Entity-per-Item)
-    auto cwrd_ent = registry.create();
-    auto& cwrd = registry.emplace<StorageAcssCwrdComponent>(cwrd_ent);
-    cwrd.acss_ref = static_cast<uint32_t>(rule_ent);
-    ase::utils::str_copy(cwrd.required_cwrd, MAX_CODEWORD_LEN, EDGE_CWRD_BINARY);
-
-    log::info("[StorageEdgeIni] release ACL rule ready (label=released codeword=BINARY)");
+    // Workflow-transition graph (Phase 12 Task 12.3) — the release pipeline
+    // draft → review → approved → released → retired as seeded edge entities.
+    seed_wflw_edge(registry, EDGE_LABEL_DRAFT, EDGE_LABEL_REVIEW);
+    seed_wflw_edge(registry, EDGE_LABEL_REVIEW, EDGE_LABEL_APPROVED);
+    seed_wflw_edge(registry, EDGE_LABEL_APPROVED, EDGE_LABEL_RELEASED);
+    seed_wflw_edge(registry, EDGE_LABEL_RELEASED, EDGE_LABEL_RETIRED);
+    log::info("[StorageEdgeIni] workflow transition graph seeded (4 edges: draft->review->approved->released->retired)");
 }
 
 void StorageEdgeIniSystem::tick(ecs::Registry& /*registry*/, float /*dt*/) {

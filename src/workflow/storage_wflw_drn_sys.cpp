@@ -1,48 +1,50 @@
 /**
  * ASE ECS SYSTEM IMPLEMENTATION
  *
- * @file        storage_quot_chk_sys.cpp
- * @brief       StorageQuotChkSystem - Quota monitoring per realm
+ * @file        storage_wflw_drn_sys.cpp
+ * @brief       StorageWflwDrnSystem - Drains Hub-bridge workflow-promote requests
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
- * @schedule    Observation
- * @created     2026-04-05
- * @modified    2026-06-24
+ * @schedule    Ingestion
+ * @created     2026-07-11
+ * @modified    2026-07-11
  * @version     1.0.0
  *
- * CAUSAL CHAIN (Quota Check)
+ * CAUSAL CHAIN (Workflow Promote Drain)
  *
- *   [Realm entities with tier data]
+ *   [POST /admin/workflow/promote → sdk::emplace_workflow_promote_request]
  *          │
- *          │ Observation schedule checks usage at 1Hz
+ *          │ Ingestion schedule drains the Hub bridge
  *          ▼
  *   ┌─────────────────────────────────────────────┐
- *   │  THIS SYSTEM: StorageQuotChkSystem          │
+ *   │  THIS SYSTEM: StorageWflwDrnSystem          │
  *   │                                             │
  *   │  READS:                                     │
- *   │    - StorageStaRelmComponent (tier limits)  │
- *   │    - ResourceManager (realm usage bytes)    │
+ *   │    - hub::HubStgWflwReqComponent            │
+ *   │    - hub::HubStgWflwPendTag (filter)        │
  *   │                                             │
  *   │  WRITES:                                    │
- *   │    - log::warn when usage exceeds 80%       │
+ *   │    - StorageReqWflwTranComponent (new)      │
+ *   │    - StorageWflwPendTag (new entity)        │
+ *   │    - StorageWflwGateTag (target=released)   │
+ *   │    - STG_WFLW_RES = PENDING (owner-scoped)  │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Quota warnings emitted for near-limit realms
+ *          │ Bridge entity destroyed, request staged
  *          ▼
- *   Administrators notified of storage pressure
+ *   StorageWflwGateSystem / StorageWflwTranSystem (Integration)
  *
- * HUB Pattern (N/A - No Hub reads/writes)
+ * HUB Pattern (Active)
  *
  * READS (from Hub):
- *   (none)
+ *   (none — the bridge payload rides the typed HubStgWflwReqComponent)
  *
  * WRITES (to Hub):
- *   (none)
+ *   - STG_WFLW_RES (owner = hashed_string(path)): WFLW_RES_PENDING
  *
- * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
- *   Realm usage calculation via ResourceManager filesystem scan.
+ * FLYWEIGHT PATTERN (N/A - no external resources)
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -139,16 +141,16 @@
 // ALLOWED:   <cstdint>, <cmath>, <cassert>, ase-* headers
 
 // Own header FIRST
-#include <ase/storage/systems/quota/storage_quot_chk_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_drn_sys.hpp>
 // Components from same module
-#include <ase/storage/components/state/storage_sta_relm_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_active.hpp>
-#include <ase/storage/storage_resource_manager.hpp>
+#include <ase/storage/components/request/storage_req_wflw_tran_comp.hpp>
+#include <ase/storage/components/tag/storage_tag_wflw_pend.hpp>
+#include <ase/storage/components/tag/storage_tag_wflw_gate.hpp>
 #include <ase/storage/types.hpp>
-// Hub API (widget broadcast, change-based)
+// Hub API (bridge component + discovery tag + verdict publish)
 #include <ase/hub/api.hpp>
-// Types (L0 — is_not_found sentinel check on hub::get reads)
-#include <ase/types/types.hpp>
+// String ops (L0 — sanitized copy)
+#include <ase/utils/strops.hpp>
 
 #include <entt/core/hashed_string.hpp>
 // Logging
@@ -161,15 +163,19 @@ namespace ase::storage {
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 namespace {
 
-// Change-based publish of one Hub value: read-validate-compare-set, so the
-// 1Hz Observation scan never floods the Hub broadcast with unchanged values.
-void publish_changed(ecs::Registry& registry, uint32_t owner, uint32_t value_id, float value) {
-    float current = hub::get(registry, owner, value_id, 0.0f);
-    if (ase::types::is_not_found(current)) {
-        current = -1.0f;  // unpublished — force the first publish
+// Sanitized bounded copy: JSON-breaking bytes ('"', '\\') and ASCII control
+// bytes are SKIPPED during the copy so every downstream consumer (audit reason,
+// frame-112 persist document) can embed the strings verbatim. Pure string math.
+void sanitized_copy(char* dst, uint32_t dst_size, const char* src) {
+    uint32_t w = 0;
+    for (uint32_t r = 0; src[r] != '\0' && w + 1 < dst_size; ++r) {
+        char c = src[r];
+        if (c == '"' || c == '\\') continue;
+        if (static_cast<unsigned char>(c) < 32u) continue;
+        dst[w] = c;
+        ++w;
     }
-    if (current == value) return;
-    hub::set(registry, owner, value_id, value);
+    dst[w] = '\0';
 }
 
 }  // anonymous namespace
@@ -177,62 +183,60 @@ void publish_changed(ecs::Registry& registry, uint32_t owner, uint32_t value_id,
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
-void StorageQuotChkSystem::on_start(ecs::Registry& /*registry*/) {
-    log::debug("[StorageQuotChk] Started");
+void StorageWflwDrnSystem::on_start(ecs::Registry& /*registry*/) {
+    log::debug("[StorageWflwDrn] Started");
 }
 
-void StorageQuotChkSystem::tick(ecs::Registry& registry, float dt) {
+void StorageWflwDrnSystem::tick(ecs::Registry& registry, float dt) {
     (void)dt;
 
-    auto* mgr_ptr = registry.ctx().find<StorageResourceManager*>();
-    if (!mgr_ptr || !(*mgr_ptr)) {
-        return;  // manager not up yet (StorageIniSystem seeds it at Initialization)
+    // Deferred deletion: collect drained bridge entities, destroy after the loop
+    // (bounded batch per tick, mirror StorageCredAcssRspSystem).
+    ecs::Entity done[WFLW_REQ_BATCH];
+    uint32_t done_n = 0;
+
+    auto bridge_view = registry.view<hub::HubStgWflwReqComponent, hub::HubStgWflwPendTag>();
+    for (auto [bridge_ent, breq] : bridge_view.each()) {
+        if (done_n >= WFLW_REQ_BATCH) break;
+
+        if (breq.path[0] == '\0' || breq.target_label[0] == '\0' || breq.requested_by[0] == '\0') {
+            log::error("[StorageWflwDrn] NOT_FOUND: bridge request with empty field dropped (path/target/requester required)");
+            done[done_n] = bridge_ent;
+            ++done_n;
+            continue;
+        }
+
+        auto req_ent = registry.create();
+        auto& req = registry.emplace<StorageReqWflwTranComponent>(req_ent);
+        sanitized_copy(req.path, MAX_PATH_LEN, breq.path);
+        sanitized_copy(req.target_label, MAX_LABEL_LEN, breq.target_label);
+        sanitized_copy(req.requested_by, MAX_OWNER_ID, breq.requested_by);
+        registry.emplace<StorageWflwPendTag>(req_ent);
+
+        // released-gate: the artifact precondition runs as a SEPARATE Tag-filtered
+        // check (StorageWflwGateSystem) — the transition system never re-tests it.
+        if (ase::utils::str_equal(req.target_label, EDGE_LABEL_RELEASED, MAX_LABEL_LEN)) {
+            registry.emplace<StorageWflwGateTag>(req_ent);
+        }
+
+        // Publish the staged verdict so the route's poll sees the request landed.
+        const uint32_t owner = entt::hashed_string(req.path).value();
+        hub::set(registry, owner, "STG_WFLW_RES"_hs, static_cast<float>(WFLW_RES_PENDING));
+
+        log::info("[StorageWflwDrn] Promote request staged: {} -> {} (by {})",
+                  req.path, req.target_label, req.requested_by);
+
+        done[done_n] = bridge_ent;
+        ++done_n;
     }
-    auto& mgr = **mgr_ptr;
 
-    const uint64_t now = mgr.get_wall_time_seconds();
-
-    auto relm_view = registry.view<StorageStaRelmComponent, StorageRelmActiveTag>();
-    for (auto [relm_ent, relm] : relm_view.each()) {
-        (void)relm_ent;
-        if (relm.quota_bytes < 1u) continue;  // no ceiling configured for this realm
-
-        // Pace the recursive FS scan: at most one scan per QUOTA_SCAN_INTERVAL_S
-        // per realm (the pacing state is DATA on the realm, the system stays
-        // stateless). First pass (usage_scanned_at == 0) scans immediately.
-        if (relm.usage_scanned_at > 0u) {
-            const uint64_t since_scan = now - relm.usage_scanned_at;
-            if (since_scan < QUOTA_SCAN_INTERVAL_S) {
-                continue;
-            }
-        }
-        relm.usage_scanned_at = now;
-
-        // The filesystem IS the byte authority for realm storage: the measured
-        // scan result rehydrates the in-memory mirror (ground truth, NEVER a
-        // display echo — the Hub values below are derived FROM this, not vice versa).
-        const uint64_t used = mgr.get_realm_usage(relm.id);
-        relm.used_bytes = used;
-
-        // Widget broadcast over the Hub (NO engine HTTP endpoint): exact uint64
-        // byte counts ride as two float-safe 24-bit words each — Hub values are
-        // float32 and a single cast corrupts anything above 2^24; the client
-        // widget reconstructs HI*2^24 + LO to the exact byte.
-        const uint32_t owner = entt::hashed_string(relm.id).value();
-        publish_changed(registry, owner, "STG_RELM_USED_HI"_hs, static_cast<float>(used >> 24));
-        publish_changed(registry, owner, "STG_RELM_USED_LO"_hs, static_cast<float>(used & 0xFFFFFFu));
-        publish_changed(registry, owner, "STG_RELM_QUOTA_HI"_hs, static_cast<float>(relm.quota_bytes >> 24));
-        publish_changed(registry, owner, "STG_RELM_QUOTA_LO"_hs, static_cast<float>(relm.quota_bytes & 0xFFFFFFu));
-
-        if (used > relm.quota_bytes) {
-            log::warn("[StorageQuotChk] realm {} OVER QUOTA: used {} bytes exceeds ceiling {} bytes",
-                      relm.id, used, relm.quota_bytes);
-        }
+    for (uint32_t i = 0; i < done_n; ++i) {
+        registry.destroy(done[i]);
     }
 }
 
-void StorageQuotChkSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::debug("[StorageQuotChk] Stopped");
+void StorageWflwDrnSystem::on_stop(ecs::Registry& /*registry*/) {
+    log::debug("[StorageWflwDrn] Stopped");
 }
 
 }  // namespace ase::storage

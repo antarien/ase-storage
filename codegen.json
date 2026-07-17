@@ -282,7 +282,26 @@
             {
                 "name": "StorageStaRelmComponent",
                 "description": "StorageStaRelmComponent - Realm entity core data",
-                "fields": [],
+                "fields": [
+                    {
+                        "name": "quota_bytes",
+                        "type": "uint64",
+                        "default": "0",
+                        "description": "Realm storage ceiling in bytes (seeded from types.hpp, 0 = unset)"
+                    },
+                    {
+                        "name": "used_bytes",
+                        "type": "uint64",
+                        "default": "0",
+                        "description": "Measured realm usage in bytes (StorageQuotChkSystem FS scan)"
+                    },
+                    {
+                        "name": "usage_scanned_at",
+                        "type": "uint64",
+                        "default": "0",
+                        "description": "Unix time of the last usage scan (paces the Observation rescan)"
+                    }
+                ],
                 "file": "state/storage_sta_relm_comp.hpp"
             },
             {
@@ -463,6 +482,44 @@
                     }
                 ],
                 "file": "state/storage_buf_kycd_cwrd_comp.hpp"
+            },
+            {
+                "name": "StorageWflwEdgeComponent",
+                "description": "StorageWflwEdgeComponent - one allowed workflow-label transition edge (Entity-per-Item, Phase 12 Task 12.3)",
+                "fields": [],
+                "file": "state/storage_wflw_edge_comp.hpp"
+            },
+            {
+                "name": "StorageBufWflwComponent",
+                "description": "StorageBufWflwComponent - applied workflow transition awaiting frame-112 durable persist (Phase 12 Task 12.3)",
+                "fields": [
+                    {
+                        "name": "updated_at",
+                        "type": "uint64",
+                        "default": "0",
+                        "description": "Unix time the transition was applied"
+                    }
+                ],
+                "file": "state/storage_buf_wflw_comp.hpp"
+            },
+            {
+                "name": "StorageWflwRetrComponent",
+                "description": "StorageWflwRetrComponent - retired build awaiting 90-day retention cleanup (Entity-per-Item, Phase 12 Task 12.14)",
+                "fields": [
+                    {
+                        "name": "rule_ref",
+                        "type": "uint32",
+                        "default": "0",
+                        "description": "Entity ref to the retired StorageAcssRuleComponent"
+                    },
+                    {
+                        "name": "retired_at",
+                        "type": "uint64",
+                        "default": "0",
+                        "description": "Unix time the retired label was applied"
+                    }
+                ],
+                "file": "state/storage_wflw_retr_comp.hpp"
             }
         ]
     },
