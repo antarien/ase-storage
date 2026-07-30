@@ -73,6 +73,7 @@
 #include <ase/storage/systems/keycard/storage_kycd_req_drn_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_vld_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp>
+#include <ase/storage/systems/keycard/storage_kycd_sess_cln_sys.hpp>
 // Keycard-keyed gate projection (replaces the session-keyed cwrd_pub): projects a
 // minted keycard's A/ACS axes (clearance + permission + codewords) to the edge gate
 // owner = hashed_string(issued_to) WITHOUT requiring a live validated session.
@@ -170,6 +171,13 @@ struct StorageModule {
             .run_after("StorageKycdExpSystem");
         app.add_system<StorageAudtWritSystem>(ecs::Schedule::Preservation);
         app.add_system<StorageLatcSyncSystem>(ecs::Schedule::Preservation);
+        // Session hub-family retirement: StorageKycdLnkSystem publishes six SES_*
+        // keys with owner = client entity, NetworkHubSyncSystem retires only the
+        // three it wrote itself. Without this system clearance, realm and the user
+        // hash of every session that ever authenticated stay in the hub for the
+        // life of the process — and HubSessLifeClnSystem, which waits for the
+        // owner's value count to reach zero, never releases HubSessLifeTag.
+        app.add_system<StorageKycdSessClnSystem>(ecs::Schedule::Preservation);
         // Workflow-label durable persist: drains the applied-transition buffers
         // (StorageBufWflwComponent + StorageWflwPstPendTag) into frame-112
         // REPLACE-upserts (storage_workflow_labels, keyed {realm,path}).

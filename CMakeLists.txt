@@ -152,6 +152,7 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/systems/keycard/storage_kycd_req_drn_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_vld_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp
+    include/ase/storage/systems/keycard/storage_kycd_sess_cln_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_cwrd_pub_sys.hpp
     include/ase/storage/systems/keycard/storage_edge_kycd_res_drn_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_exp_sys.hpp
@@ -228,6 +229,7 @@ add_library(${PROJECT_NAME} SHARED
     src/keycard/storage_kycd_req_drn_sys.cpp
     src/keycard/storage_kycd_vld_sys.cpp
     src/keycard/storage_kycd_lnk_sys.cpp
+    src/keycard/storage_kycd_sess_cln_sys.cpp
     src/keycard/storage_kycd_cwrd_pub_sys.cpp
     src/keycard/storage_edge_kycd_res_drn_sys.cpp
     src/keycard/storage_kycd_exp_sys.cpp

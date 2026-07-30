@@ -169,7 +169,25 @@ namespace ase::storage {
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 namespace {
 
-// No helper functions needed → all logic inline in tick()
+/** Remove the full SES_KYCD_NTF_* family a keycard mint/issuance request published for one owner.
+ *  Mirrors remove_peer_family (replication_tlmt_peer_rmv_sys.cpp): these owner-scoped Hub values are
+ *  transient SDK to drain IPC (set in sdk_keycard_notify.cpp, read in storage_kycd_ntfy_drn_sys.cpp).
+ *  Each value lives on a separate hub-internal entity, so destroying the request entity does NOT
+ *  clear it. Without this the 7 fixed keys plus the GRANT flags orphan and pollute every hub_values
+ *  snapshot (immortal ghosts, the same defect class the peer family already fixed via hub::remove). */
+void remove_keycard_ntf_family(ecs::Registry& registry, uint32_t owner) {
+    hub::remove(registry, owner, "SES_KYCD_NTF_USER_ID_HI"_hs);
+    hub::remove(registry, owner, "SES_KYCD_NTF_USER_ID_LO"_hs);
+    hub::remove(registry, owner, "SES_KYCD_NTF_CLRN"_hs);
+    hub::remove(registry, owner, "SES_KYCD_NTF_PERM"_hs);
+    hub::remove(registry, owner, "SES_KYCD_NTF_REALM_ID_HI"_hs);
+    hub::remove(registry, owner, "SES_KYCD_NTF_REALM_ID_LO"_hs);
+    hub::remove(registry, owner, "SES_KYCD_NTF_EXP_AT"_hs);
+    hub::remove(registry, owner, "SES_KYCD_NTF_GRANT_BINARY"_hs);
+    hub::remove(registry, owner, "SES_KYCD_NTF_GRANT_SIG"_hs);
+    hub::remove(registry, owner, "SES_KYCD_NTF_GRANT_SBOM"_hs);
+    hub::remove(registry, owner, "SES_KYCD_NTF_GRANT_METADATA"_hs);
+}
 
 }  // anonymous namespace
 
@@ -250,6 +268,10 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         if (ase::types::is_not_found(issued_count)) issued_count = 0.0f;
         hub::set(registry, hub::GLOBAL, "STG_KYCD_ISSUED_COUNT"_hs, issued_count + 1.0f);
 
+        // Clear the transient SES_KYCD_NTF_* IPC values BEFORE releasing the request entity:
+        // they sit on separate hub-internal entities and would otherwise orphan into every
+        // hub_values snapshot (the preloader-flood the user reported). See helper above.
+        remove_keycard_ntf_family(registry, static_cast<uint32_t>(req_entity));
         registry.destroy(req_entity);
     }
 }

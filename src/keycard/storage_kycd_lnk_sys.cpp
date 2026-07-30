@@ -34,18 +34,31 @@
  *          │ Client entity: identity + valid tag
  *          ▼
  *   StorageAcssChkSystem uses identity for ACL checks.
- *   Session hub publication lives now in ase-session (Replica-scoped):
- *   the Engine→Replica keycard-sync bridge (Phase 3) will populate the
- *   session-side SessionStaIdnComponent + SessionStaAthzComponent, and
- *   SessionIdnHubWritSystem will publish SES_* hub values from there.
+ *   THIS system is the session hub publisher — it writes the SES_* family
+ *   directly with owner = client entity. An earlier comment here pointed at
+ *   ase-session's SessionIdnHubWritSystem; that system was deleted (ase-session
+ *   ab7d3a9) and never had a producer for its input components, so it published
+ *   nothing. ase-session is a lifecycle-marker skeleton today.
+ *
+ *   The values leave this module by TWO independent senders, neither of which
+ *   this system chooses: HubNetBctReqSystem carries key creation to the browser,
+ *   ReplicaHubSndSystem carries the full dirty set to the orchestrator peer over
+ *   the binary WS. hub::set itself is storage, not transport.
  *
  * HUB Pattern
  *
  * READS (from Hub):
  *   NET_CLAI_ID — per-client session identity anchor
  *
- * WRITES (to Hub):
- *   (none — session hub publication moved to ase-session, Replica-scoped)
+ * WRITES (to Hub, owner = client entity):
+ *   SES_IS_AUTHENTICATED  1.0f once the keycard is linked
+ *   SES_CLEARANCE         keycard clearance level
+ *   SES_EXP_AT            keycard expiry (Unix seconds)
+ *   SES_REALM_ID          FNV-1a32 hash of the realm id string
+ *   SES_USER_ID_HI/_LO    user_id FNV-1a32 hash in exact-carry halves
+ *
+ *   StorageKycdSesClnSystem retires this exact family when the session dies.
+ *   Adding a key here without adding it there strands it in the hub forever.
  *
  * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
  *   Identity data transferred from token entity to client entity.
@@ -223,24 +236,37 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             if (types::is_not_found(lnk_count)) lnk_count = 0.0f;
             hub::set(registry, hub::GLOBAL, "STG_KYCD_LNK_COUNT"_hs, lnk_count + 1.0f);
 
-            // Publish SES_* hub contract keys for the newly-validated session
-            // (ARCH_ASE_REP_LYR unified hub-centric pattern). Broadcast is
-            // automatic via HubValDtyTag on value-change; ReplicationHubBctSystem
-            // relays the delta to Replica and downstream consumers.
+            // Publish the SES_* hub contract keys for the newly-validated
+            // session. hub::set writes HubDatValComponent and sets HubValDtyTag —
+            // nothing more. WHICH sender picks the dirty value up is decided by
+            // the reader, not here: HubNetBctReqSystem takes key creation to the
+            // browser, ReplicaHubSndSystem takes the full dirty set to the peer
+            // over the binary WS. There is no flag on hub::set and no generic
+            // relay system in between.
             uint32_t owner = static_cast<uint32_t>(client_entity);
             uint32_t user_id_hash = entt::hashed_string{auth_idn.user_id}.value();
             // user_id STRING is NOT registered via set_debug_label (a debug-only channel); the
             // session identity lives in StorageStaIdnComponent, consumers read the string there.
 
-            // user_id_hash is held as raw uint32_t on the session-entity's
-            // hub mirror. Hub::set would transport it as float and lose
-            // precision for hashes > 2^24 (ARCH_ASE_HUB_API.md). Consumers
-            // read this field directly from the component.
+            // Server-side consumers read the exact uint32_t from the mirror
+            // component: a hub value is float32 and silently corrupts integers
+            // above 2^24 (ARCH_ASE_HUB_API.md).
             if (auto* mirror = registry.try_get<hub::HubStaClaiIdntComponent>(client_entity);
                 mirror != nullptr) {
                 mirror->user_id_hash = user_id_hash;
             }
             hub::set(registry, owner, "SES_IS_AUTHENTICATED"_hs, 1.0f);
+
+            // The browser has no mirror component, so the hash travels in two
+            // exact-carry halves — each below 2^16 and therefore lossless in a
+            // float32 hub value. Same split as SES_KYCD_NTF_USER_ID_HI/_LO
+            // (sdk_keycard_notify.cpp:109-110); useSessionStore.ts reassembles
+            // (HI << 16) | LO. Before this, useSessionStore read a bare
+            // SES_USER_ID that no producer ever wrote and always saw 0.
+            hub::set(registry, owner, "SES_USER_ID_HI"_hs,
+                     static_cast<float>(user_id_hash >> 16));
+            hub::set(registry, owner, "SES_USER_ID_LO"_hs,
+                     static_cast<float>(user_id_hash & 0xFFFFu));
 
             auto* kycd = registry.try_get<StorageStaKycdComponent>(auth_entity);
             if (kycd != nullptr) {

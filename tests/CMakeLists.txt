@@ -27,6 +27,10 @@ add_executable(${PROJECT_NAME}-test
     Unit test source files (explicit, no GLOB).
     ]]
     test_storage_wflw.cpp
+    #[[ Backlog #111: the SES_* family a dead session used to leave behind.
+        test_storage_wflw.cpp owns DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN for this
+        executable — this file must NOT define a second main. ]]
+    test_storage_sess_cln.cpp
 )
 
 target_link_libraries(${PROJECT_NAME}-test
