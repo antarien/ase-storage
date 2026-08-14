@@ -194,14 +194,14 @@ constexpr uint32_t QUOTA_ENT_CODEWORDS     = 0xFFFFFFFF;     // Unlimited codewo
 constexpr uint32_t QUOTA_ENT_LATTICE       = 0xFFFFFFFF;     // Unlimited lattice links
 constexpr uint32_t QUOTA_ENT_AUDIT_DAYS    = 0xFFFFFFFF;     // Unlimited audit log retention
 
-// ── A/ACS LADDER PRESETS (§14.1 in-ladder rules, no pre-ladder shortcuts) ─
+// ── A/ACS LADDER PRESETS (Section 14.1 in-ladder rules, no pre-ladder shortcuts) ─
 // The public realm and the realm-owner power are modelled as proper ladder
 // inputs so every GRANT happens only at step 10, never before step 2.
 
 constexpr const char* ACSS_REALM_PUBLIC_ID = "ase";   // Public 'ase' realm: engine defaults readable by all (PUBLIC protection rule)
 constexpr const char* ACSS_CWRD_WILDCARD   = "ALL";   // Wildcard codeword: owner-preset keycard satisfies every required codeword
-constexpr uint8_t  ACSS_OWNER_CLEARANCE = 9;          // Realm-owner keycard preset clearance (SOVEREIGN, ARCH §:819 "Owner = Clearance 9")
-constexpr uint16_t ACSS_OWNER_PERMS     = 0xFFFF;     // Realm-owner keycard preset permissions (all bitflags, ARCH §:819 "alle Codewörter")
+constexpr uint8_t  ACSS_OWNER_CLEARANCE = 9;          // Realm-owner keycard preset clearance (SOVEREIGN, ARCH :819 "Owner = Clearance 9")
+constexpr uint16_t ACSS_OWNER_PERMS     = 0xFFFF;     // Realm-owner keycard preset permissions (all bitflags, ARCH :819 "alle Codewörter")
 
 // ── ENTITY REFERENCE ────────────────────────────────────────────────────
 

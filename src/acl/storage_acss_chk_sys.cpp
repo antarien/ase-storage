@@ -213,7 +213,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
     auto& mgr = **mgr_ptr;
     uint64_t now = mgr.get_wall_time_seconds();
 
-    // SINGLE-PASS: evaluate each pending access request through the canonical §14.1 ladder.
+    // SINGLE-PASS: evaluate each pending access request through the canonical Section 14.1 ladder.
     // Request entities carry clearance + permissions pre-resolved from the validated keycard.
     // The ladder is strictly ordered and every GRANT happens at step 10 ONLY. There are no
     // pre-ladder shortcut grants: the public realm and the realm-owner power are modelled
@@ -257,7 +257,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
                 target_tier = rc.tier;
                 // Public 'ase' realm by id is the in-ladder PUBLIC protection source
                 public_realm = ase::utils::str_equal(rc.id, ACSS_REALM_PUBLIC_ID, MAX_REALM_ID);
-                // Direct owner of this realm → owner keycard preset (ARCH §:819)
+                // Direct owner of this realm → owner keycard preset (ARCH :819)
                 owner_preset = ase::utils::str_equal(rc.owner, req.user_id, MAX_OWNER_ID);
                 break;
             }

@@ -361,7 +361,7 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
 
         hub::set(registry, owner, "STG_WFLW_RES"_hs, static_cast<float>(WFLW_RES_APPLIED));
         hub::set(registry, owner, "STG_WFLW_STAGE"_hs, stage_ordinal(rule.label));
-        // Public-servable verdict — the SINGLE place this policy lives (ARCH_ASE_REASONING_EDGE §6.4:
+        // Public-servable verdict — the SINGLE place this policy lives (ARCH_ASE_REASONING_EDGE Section 6.4:
         // download-access runs over the ase-storage A/ACS infrastructure). A customer download is
         // public ONLY at the released stage (EDGE_LABEL_RELEASED = "Public download", types.hpp). The
         // edge-webserver serving gate READS this boolean; it never re-decides the label policy itself.

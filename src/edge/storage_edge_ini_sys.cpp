@@ -256,7 +256,7 @@ void StorageEdgeIniSystem::on_start(ecs::Registry& registry) {
     seed_acss_rule(registry, relm_ref, drill_path, EDGE_LABEL_DRAFT, EDGE_CWRD_BINARY);
     // Publish the drill's initial workflow stage (display) AND the customer-public serving verdict
     // to the Hub. The serving verdict STG_WFLW_PUB is computed HERE, from the SAME SSOT rule as the
-    // promote path (public iff label == EDGE_LABEL_RELEASED, ARCH_ASE_REASONING_EDGE §6.4) — draft is
+    // promote path (public iff label == EDGE_LABEL_RELEASED, ARCH_ASE_REASONING_EDGE Section 6.4) — draft is
     // NOT public, so the edge-download gate denies the drill until an operator promotes it to released.
     // StorageWflwTranSystem republishes both keys (same owner=hashed_string(path)) on every promote.
     // The pattern rules above stay unpublished (a pattern is not a concrete request path), so the
