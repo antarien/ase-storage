@@ -1,12 +1,36 @@
 #pragma once
 
 /**
- * ASE MODULE UMBRELLA HEADER
+ * ASE MODULE INCLUDE HEADER (SSOT)
  *
  * @file        storage.hpp
- * @brief       Single include for all ase-storage types, components, and tags
+ * @brief       Single entry point for ase-storage
+ * @description Include this header to use the module.
+ *              Exports ALL components, ALL systems, and types.
+ *
  * @module      ase-storage
- * @layer       3 (Modules)
+ * @layer       3 (Module)
+ * @created     2026-04-06
+ * @modified    2026-08-15
+ * @version     1.0.0
+ *
+ * USAGE:
+ *   #include <ase/storage/storage.hpp>
+ *   app.add_module<ase::storage::StorageModule>();
+ *
+ * ECS MODULE/PLUGIN INCLUDE COMPLIANCE
+ *
+ * [ ] types.hpp included FIRST (SSOT for constants)
+ * [ ] Module/Plugin definition included ({Module}Module or {Plugin}Plugin)
+ * [ ] ALL data components exported
+ * [ ] ALL state components exported
+ * [ ] ALL tag components exported
+ * [ ] ALL input components exported (L4 plugins: Hub sync targets)
+ * [ ] ALL systems exported
+ * [ ] Components grouped by category with section comments
+ * [ ] Systems grouped by category with section comments
+ * [ ] No circular dependencies
+ * [ ] No duplicate includes
  */
 
 // Types (SSOT)
