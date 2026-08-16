@@ -17,6 +17,16 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    communication/request
+ * @parity      server_only
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   Die BITTE um ein Codewort, nicht das erteilte Codewort. Die Operator-Mint-Route
+ *   legt je Codewort eine Zeile an; Pass 2 von StorageKycdReqDrnSystem uebersetzt jede
+ *   in ein StorageKycdCwrdComponent auf derselben Entity und raeumt die Anfrage-Zeile
+ *   unmittelbar danach per remove() ueber die Grant-View ab. Der ERTEILTE Grant traegt
+ *   kycd_ref + cwrd_hash und ist die Komponente, die den Client erreicht; diese hier ist
+ *   im naechsten Frame nicht mehr vorhanden. Eine gespiegelte Zeile waere drueben ein
+ *   Zustand ohne Schreiber und ohne Leser.
  * @created     2026-06-24
  * @modified    2026-06-24
  * @version     1.0.0

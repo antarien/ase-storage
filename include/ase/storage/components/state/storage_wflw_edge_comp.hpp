@@ -49,6 +49,8 @@
  * [ ] Component stores ONLY primitive ID (uint32_t) referencing external resource
  */
 
+#include <cstdint>
+
 namespace ase::storage {
 
 /**
@@ -63,7 +65,9 @@ namespace ase::storage {
  */
 struct StorageWflwEdgeComponent {
     char from_label[32] = {};                 // Current label the rule must hold ("draft", ...)
+    uint32_t from_label_hash = 0;             // entt::hashed_string of from_label - the ONLY form compared
     char to_label[32] = {};                   // Label this edge permits transitioning to
+    uint32_t to_label_hash = 0;               // entt::hashed_string of to_label - the ONLY form compared
 };
 
 }  // namespace ase::storage

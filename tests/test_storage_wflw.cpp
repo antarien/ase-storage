@@ -21,6 +21,10 @@
 #include <ase/storage/components/state/storage_wflw_edge_comp.hpp>
 #include <ase/storage/components/state/storage_acss_rule_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
+#include <ase/storage/components/state/storage_relm_idn_comp.hpp>
+#include <ase/storage/components/state/storage_rule_idn_comp.hpp>
+#include <ase/storage/components/tag/storage_relm_edge_tag.hpp>
+#include <ase/storage/systems/acl/storage_acss_idx_sys.hpp>
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
 #include <ase/storage/components/state/storage_buf_wflw_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_wflw_pend.hpp>
@@ -58,15 +62,25 @@ void seed_edges(Registry& reg) {
         auto e = reg.create();
         auto& edge = reg.emplace<StorageWflwEdgeComponent>(e);
         ase::utils::str_copy(edge.from_label, MAX_LABEL_LEN, chain_from[i]);
+        edge.from_label_hash = entt::hashed_string(chain_from[i]).value();
         ase::utils::str_copy(edge.to_label, MAX_LABEL_LEN, chain_to[i]);
+        edge.to_label_hash = entt::hashed_string(chain_to[i]).value();
     }
 }
 
 // Edge realm + per-asset rule at the given starting label; returns the rule entity.
+// Seeded EXACTLY as StorageEdgeIniSystem seeds it: the identity hashes and the edge
+// realm tag are part of the production shape, not extras. A realm without the tag is
+// invisible to the transition system, and a rule without its identity component cannot
+// be gated - the test would then assert against a system that never saw its data.
 Entity seed_realm_and_rule(Registry& reg, const char* start_label) {
     auto relm_ent = reg.create();
     auto& relm = reg.emplace<StorageStaRelmComponent>(relm_ent);
     ase::utils::str_copy(relm.id, MAX_REALM_ID, EDGE_REALM_ID);
+    auto& relm_idn = reg.emplace<StorageRelmIdnComponent>(relm_ent);
+    relm_idn.id_hash = EDGE_REALM_HASH;
+    reg.emplace<StorageRelmEdgeTag>(relm_ent);
+
     auto rule_ent = reg.create();
     auto& rule = reg.emplace<StorageAcssRuleComponent>(rule_ent);
     rule.relm_ref = static_cast<uint32_t>(relm_ent);
@@ -74,6 +88,12 @@ Entity seed_realm_and_rule(Registry& reg, const char* start_label) {
     ase::utils::str_copy(rule.path_pattern, MAX_PATH_LEN, kAsset);
     rule.protection_level = PROTECTION_PUBLIC;
     ase::utils::str_copy(rule.label, MAX_LABEL_LEN, start_label);
+    auto& rule_idn = reg.emplace<StorageRuleIdnComponent>(rule_ent);
+    // The asset pattern carries no wildcard, so pattern and literal match coincide.
+    rule_idn.pattern_hash = entt::hashed_string(kAsset).value();
+    rule_idn.match_hash = rule_idn.pattern_hash;
+    rule_idn.match_len = ase::utils::str_len(kAsset, MAX_PATH_LEN);
+    rule_idn.label_hash = entt::hashed_string(start_label).value();
     return rule_ent;
 }
 
@@ -105,7 +125,12 @@ float read_verdict(Registry& reg) {
 TEST_CASE("workflow edges: allowed transition applies label + attributed audit + persist buffer") {
     App app;
     app.set_source("ase-storage");
-    app.add_system<StorageWflwTranSystem>(Schedule::Integration);
+    // The index is production wiring, not test scaffolding: StorageWflwTranSystem reads
+    // its realm rules from it, so a run without it would exercise a system that finds
+    // nothing and would pass or fail for the wrong reason.
+    app.add_system<StorageAcssIdxSystem>(Schedule::Integration);
+    app.add_system_with<StorageWflwTranSystem>(Schedule::Integration)
+        .run_after("StorageAcssIdxSystem");
     app.startup();
     auto& reg = app.registry();
     auto* mgr = new StorageResourceManager();
@@ -151,7 +176,12 @@ TEST_CASE("workflow edges: allowed transition applies label + attributed audit +
 TEST_CASE("workflow edges: forbidden edge (draft to released) is denied, label untouched") {
     App app;
     app.set_source("ase-storage");
-    app.add_system<StorageWflwTranSystem>(Schedule::Integration);
+    // The index is production wiring, not test scaffolding: StorageWflwTranSystem reads
+    // its realm rules from it, so a run without it would exercise a system that finds
+    // nothing and would pass or fail for the wrong reason.
+    app.add_system<StorageAcssIdxSystem>(Schedule::Integration);
+    app.add_system_with<StorageWflwTranSystem>(Schedule::Integration)
+        .run_after("StorageAcssIdxSystem");
     app.startup();
     auto& reg = app.registry();
     auto* mgr = new StorageResourceManager();
@@ -186,7 +216,12 @@ TEST_CASE("workflow edges: forbidden edge (draft to released) is denied, label u
 TEST_CASE("workflow edges: requester without PERM_PROMOTE is denied fail-closed") {
     App app;
     app.set_source("ase-storage");
-    app.add_system<StorageWflwTranSystem>(Schedule::Integration);
+    // The index is production wiring, not test scaffolding: StorageWflwTranSystem reads
+    // its realm rules from it, so a run without it would exercise a system that finds
+    // nothing and would pass or fail for the wrong reason.
+    app.add_system<StorageAcssIdxSystem>(Schedule::Integration);
+    app.add_system_with<StorageWflwTranSystem>(Schedule::Integration)
+        .run_after("StorageAcssIdxSystem");
     app.startup();
     auto& reg = app.registry();
     auto* mgr = new StorageResourceManager();
@@ -211,7 +246,12 @@ TEST_CASE("workflow edges: requester without PERM_PROMOTE is denied fail-closed"
 TEST_CASE("workflow edges: full chain draft to review to approved to released to retired") {
     App app;
     app.set_source("ase-storage");
-    app.add_system<StorageWflwTranSystem>(Schedule::Integration);
+    // The index is production wiring, not test scaffolding: StorageWflwTranSystem reads
+    // its realm rules from it, so a run without it would exercise a system that finds
+    // nothing and would pass or fail for the wrong reason.
+    app.add_system<StorageAcssIdxSystem>(Schedule::Integration);
+    app.add_system_with<StorageWflwTranSystem>(Schedule::Integration)
+        .run_after("StorageAcssIdxSystem");
     app.startup();
     auto& reg = app.registry();
     auto* mgr = new StorageResourceManager();

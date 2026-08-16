@@ -153,6 +153,8 @@
 // Components from same module
 #include <ase/storage/components/state/storage_sta_idn_comp.hpp>
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
+#include <ase/storage/components/state/storage_kycd_idn_comp.hpp>
+#include <ase/storage/storage_acss_index_resource_manager.hpp>
 #include <ase/storage/components/state/storage_kycd_cwrd_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
 // Module constants (MAX_OWNER_ID, MAX_CODEWORD_LEN)
@@ -178,22 +180,24 @@ namespace ase::storage {
 // NO View/Query operations in helpers! Only pure math!
 namespace {
 
-// Compare one held codeword against the fixed edge-distribution codewords (EXACT string, via
-// str_equal which checks the null terminator — never a prefix match) and, on a match, set the
-// matching owner-scoped A/ACS hold-verdict boolean. The codeword STRING is compared HERE
-// (server-internal, A/ACS step 5) and NEVER crosses to the L4 edge gate: only these fixed,
-// contract-registered booleans do. NEVER an FNV hash — a hash collision would be a false-grant.
-void set_edge_cwrd_hold(ecs::Registry& registry, uint32_t owner, const char* cwrd) {
-    if (ase::utils::str_equal(cwrd, EDGE_CWRD_BINARY, MAX_CODEWORD_LEN)) {
+// Compare one held codeword against the fixed edge-distribution codewords and, on a match,
+// set the matching owner-scoped A/ACS hold-verdict boolean. The codeword itself never crosses
+// to the L4 edge gate: only these fixed, contract-registered booleans do.
+//
+// The comparison is on HASHES. Identity is a lookup, and a lookup compares hashes, never
+// characters (WRFL_ASE_STRING_HANDLING Section 3). The codeword's hash is written beside the
+// codeword when the grant is minted, so nothing is re-derived here.
+void set_edge_cwrd_hold(ecs::Registry& registry, uint32_t owner, uint32_t cwrd_hash) {
+    if (cwrd_hash == EDGE_CWRD_BINARY_HASH) {
         hub::set(registry, owner, "SES_KYCD_HOLDS_BINARY"_hs, 1.0f);
     }
-    if (ase::utils::str_equal(cwrd, EDGE_CWRD_SIG, MAX_CODEWORD_LEN)) {
+    if (cwrd_hash == EDGE_CWRD_SIG_HASH) {
         hub::set(registry, owner, "SES_KYCD_HOLDS_SIG"_hs, 1.0f);
     }
-    if (ase::utils::str_equal(cwrd, EDGE_CWRD_SBOM, MAX_CODEWORD_LEN)) {
+    if (cwrd_hash == EDGE_CWRD_SBOM_HASH) {
         hub::set(registry, owner, "SES_KYCD_HOLDS_SBOM"_hs, 1.0f);
     }
-    if (ase::utils::str_equal(cwrd, EDGE_CWRD_METADATA, MAX_CODEWORD_LEN)) {
+    if (cwrd_hash == EDGE_CWRD_METADATA_HASH) {
         hub::set(registry, owner, "SES_KYCD_HOLDS_METADATA"_hs, 1.0f);
     }
 }
@@ -212,6 +216,16 @@ void StorageKycdCwrdPubSystem::tick(ecs::Registry& registry, float /*dt*/) {
     // SES_CLEARANCE for), publish the owner-scoped A/ACS hold verdicts for the
     // codewords its keycard holds so the edge gate (ase-pl-edge-webserver) can
     // enforce them WITHOUT the codeword string ever crossing the Hub.
+    auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
+    if (!idx_ptr || !(*idx_ptr)) {
+        log::error("[StorageKycdCwrdPub] StorageAcssIndexResourceManager not in ctx (StorageAcssIdxSystem must run first)");
+        return;
+    }
+    auto& idx = **idx_ptr;
+
+    // PASS 1 - reset the owner-scoped hold verdicts, one walk over the sessions. Doing it
+    // first means a revoked or re-issued keycard cannot leave a stale grant behind: the
+    // gate reads only these booleans.
     auto session_view = registry.view<StorageStaIdnComponent, StorageKycdVldTag>();
     for (auto [session_entity, idn] : session_view.each()) {
         (void)session_entity;
@@ -236,33 +250,54 @@ void StorageKycdCwrdPubSystem::tick(ecs::Registry& registry, float /*dt*/) {
         hub::set(registry, owner, "SES_KYCD_HOLDS_SIG"_hs, 0.0f);
         hub::set(registry, owner, "SES_KYCD_HOLDS_SBOM"_hs, 0.0f);
         hub::set(registry, owner, "SES_KYCD_HOLDS_METADATA"_hs, 0.0f);
+    }
 
-        auto kycd_view = registry.view<StorageStaKycdComponent>();
-        uint32_t count = 0;
-        for (auto [kycd_entity, kycd] : kycd_view.each()) {
-            if (!ase::utils::str_equal(kycd.issued_to, idn.user_id, MAX_OWNER_ID)) {
-                continue;
-            }
-
-            hub::set(registry, owner, "SES_CLEARANCE"_hs, static_cast<float>(kycd.clrn));
-            hub::set(registry, owner, "SES_KYCD_PERM"_hs, static_cast<float>(kycd.perm));
-
-            uint32_t kycd_ref = static_cast<uint32_t>(kycd_entity);
-            auto cwrd_view = registry.view<StorageKycdCwrdComponent>();
-            for (auto [cwrd_entity, cwrd] : cwrd_view.each()) {
-                (void)cwrd_entity;
-                if (cwrd.kycd_ref != kycd_ref) {
-                    continue;
-                }
-                // Exact-string A/ACS compare, server-internal — the codeword string never
-                // crosses to the L4 edge gate; only the fixed hold-verdict booleans do.
-                set_edge_cwrd_hold(registry, owner, cwrd.cwrd);
-                ++count;
-            }
+    // PASS 2 - the two scalar A/ACS axes, one walk over the keycards. The gate reads
+    // clearance (14.1 step 4), permission (step 6) and the codewords (step 5) at the SAME
+    // owner; if only some resolve, the ladder is split across axes and that is a leak.
+    //
+    // The session set is ASKED, never assumed. Publishing for every keycard would hand
+    // clearance to users who hold a card but no session - a wider grant dressed up as a
+    // faster loop. That is the whole reason the index carries the set at all.
+    for (auto [kycd_entity, kycd, kycd_idn] :
+         registry.view<StorageStaKycdComponent, StorageKycdIdnComponent>().each()) {
+        (void)kycd_entity;
+        if (!idx.has_session(kycd_idn.issued_to_hash)) {
+            continue;
         }
+        const uint32_t owner = kycd_idn.issued_to_hash;
+        hub::set(registry, owner, "SES_CLEARANCE"_hs, static_cast<float>(kycd.clrn));
+        hub::set(registry, owner, "SES_KYCD_PERM"_hs, static_cast<float>(kycd.perm));
+    }
 
-        log::debug("[StorageKycdCwrdPub] owner={} user='{}' codewords={}",
-                   owner, idn.user_id, count);
+    // PASS 3 - the held codewords, one walk over the LEAVES. Each grant names its keycard,
+    // so the keycard is a try_get and its holder comes straight off the identity - where
+    // the nested form searched every keycard of every session and every codeword of every
+    // keycard (WS-K.2c, three levels deep).
+    uint32_t published = 0;
+    for (auto [cwrd_entity, cwrd] : registry.view<StorageKycdCwrdComponent>().each()) {
+        (void)cwrd_entity;
+        const auto kycd_entity = static_cast<ecs::Entity>(cwrd.kycd_ref);
+        auto* kycd_idn = registry.try_get<StorageKycdIdnComponent>(kycd_entity);
+        if (kycd_idn == nullptr) {
+            log::error(log::ERR::CAT::INVALID_ENTITY, "StorageKycdCwrdPubSystem",
+                       cwrd.kycd_ref, "StorageKycdIdnComponent");
+            continue;
+        }
+        if (!idx.has_session(kycd_idn->issued_to_hash)) {
+            continue;
+        }
+        // Hash A/ACS compare, server-internal — the codeword never crosses to the L4 edge
+        // gate; only the fixed hold-verdict booleans do.
+        set_edge_cwrd_hold(registry, kycd_idn->issued_to_hash, cwrd.cwrd_hash);
+        ++published;
+    }
+
+    // Gate: a tick that published nothing has nothing to say. Without it this
+    // line fired every tick as "published=0" - measured 2026-08-16, ~60 lines
+    // per second in the Engine log.
+    if (published > 0) {
+        log::debug("[StorageKycdCwrdPub] codeword hold-verdicts published={}", published);
     }
 }
 

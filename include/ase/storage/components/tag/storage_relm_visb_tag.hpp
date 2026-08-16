@@ -1,35 +1,27 @@
 #pragma once
 
 /**
- * =============================================================================
  * ASE ECS COMPONENT (TAG)
- * =============================================================================
  *
- * @file        storage_tag_kycd_rev_pst.hpp
- * @brief       StorageKycdRevPstTag - Keycard revocation already durably emitted
- * @description Idempotency marker on a revoked keycard whose durable revoke
- *              record has been emitted to the Replica, so the revocation is
- *              shipped exactly once.
+ * @file        storage_relm_visb_tag.hpp
+ * @brief       StorageRelmVisbTag - Realm is discoverable without a viewer
+ * @description Derived classification: the realm may appear in an unauthenticated
+ *              listing. Set and cleared by StorageCncmFltSystem, never by hand.
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    tag
- * @parity      server_only
+ * @parity      shared
  *
  * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
- *   Die Marke bezeugt, dass der dauerhafte Widerruf (op = KYCD_PST_OP_REVOKE) an
- *   die MongoDB-Autoritaet abgesetzt ist, und macht diesen Versand genau einmal
- *   moeglich. Einziger Leser im Baum ist StorageKycdRevSystem in der Schedule
- *   Preservation (storage_module.hpp, Zeile 191): es fuehrt die Marke als
- *   entt::exclude-Filter und setzt sie nach dem Absetzen der SES_KYCD_PERSIST_*
- *   Signale (storage_kycd_rev_sys.cpp, Zeilen 190, 198 und 215). Der Widerruf
- *   selbst erreicht den Client bereits als StorageKycdRevTag am selben Entity —
- *   in codegen.json unter components.shared, in-memory sofort wirksam und ohne
- *   Datenbank. Diese Marke ist nur die Quittung des Replica-Schreibvorgangs;
- *   fuer den hat der Browser weder Datenbank noch Treiber, drueben waere sie ein
- *   Zustand ohne Maschine.
- * @created     2026-06-24
- * @modified    2026-06-24
+ *   Jede Eingangsgroesse dieser Ableitung ist bereits shared - StorageStaRelm,
+ *   RelmPublic, RelmActive, RelmConceal, RelmSuspended, RelmArchived. Der Client
+ *   haelt dieselben Realm-Entities und muss dieselbe Liste zeigen; rechnete er
+ *   sie nicht selbst, muesste die Regel ein zweites Mal in TypeScript stehen und
+ *   koennte auseinanderlaufen. Genau das verhindert die Paritaet.
+ *
+ * @created     2026-08-16
+ * @modified    2026-08-16
  * @version     1.0.0
  *
  * ECS TAG COMPLIANCE
@@ -66,13 +58,21 @@
 namespace ase::storage {
 
 /**
- * @brief StorageKycdRevPstTag - Keycard revocation already durably emitted
+ * @brief StorageRelmVisbTag - realm may be listed to someone who named no keycard
  *
- * State: Durable revoke record (op=KYCD_PST_OP_REVOKE) emitted to the Replica
- * Filter: StorageKycdRevSystem excludes already-emitted revocations
- * Added: StorageKycdRevSystem after emitting the durable revoke signal
- * Removed: never (terminal idempotency marker for the revocation)
+ * State:   Public AND active AND not concealed, suspended or archived.
+ * Filter:  A listing route or client view walks realms carrying THIS tag instead
+ *          of re-deriving the rule; the derivation lives in one system.
+ * Added:   StorageCncmFltSystem when all conditions hold.
+ * Removed: StorageCncmFltSystem the moment one of them stops holding.
+ *
+ * WHAT THIS TAG IS NOT: it is not "visible to user X". Discoverability is
+ * viewer-INDEPENDENT and can therefore live on the realm entity. Whether a
+ * concealed realm is visible to one particular requester depends on that
+ * requester's ownership and keycard, is answered inside StorageAcssChkSystem
+ * where the requester is known, and must never be folded in here - a per-viewer
+ * answer cached on a shared entity would show one user another user's realms.
  */
-struct StorageKycdRevPstTag {};
+struct StorageRelmVisbTag {};
 
 }  // namespace ase::storage

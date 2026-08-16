@@ -38,6 +38,7 @@
 
 // Resource Manager
 #include <ase/storage/storage_resource_manager.hpp>
+#include <ase/storage/storage_acss_index_resource_manager.hpp>
 
 // Module Definition
 #include <ase/storage/storage_module.hpp>
@@ -69,6 +70,11 @@
 
 // State Components
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
+#include <ase/storage/components/state/storage_relm_idn_comp.hpp>
+#include <ase/storage/components/state/storage_rule_idn_comp.hpp>
+#include <ase/storage/components/state/storage_kycd_idn_comp.hpp>
+#include <ase/storage/components/state/storage_lnk_idn_comp.hpp>
+#include <ase/storage/components/state/storage_task_idn_comp.hpp>
 #include <ase/storage/components/state/storage_sta_idn_comp.hpp>
 #include <ase/storage/components/state/storage_sta_tkn_comp.hpp>
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>

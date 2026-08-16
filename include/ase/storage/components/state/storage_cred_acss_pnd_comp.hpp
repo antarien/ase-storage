@@ -13,6 +13,16 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
+ * @parity      server_only
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   Beide Felder sind Adressen der Server-zu-Server-Naht, keine Spielwerte: req_id ist
+ *   die Korrelation eines CACSS_WIRE_REQ/RES-Rahmens, conn_id die Replica-WS-Verbindung
+ *   im Engine. StorageCredAcssRspSystem baut daraus den 11-Byte-Rahmen fuer die
+ *   OutboundQueue und zerstoert die Entity danach - der Empfaenger ist die Replica, nie
+ *   ein Browser. Eine Verbindungs-Id ist drueben nicht nur nutzlos, sondern benennt
+ *   fremde Sitzungen; im becsy-Weltbild existiert diese Naht gar nicht. Das Urteil selbst
+ *   erreicht seinen Adressaten ueber den Wire-Rahmen, nicht ueber eine Kanalliste.
  * @created     2026-07-04
  * @modified    2026-07-04
  * @version     1.0.0

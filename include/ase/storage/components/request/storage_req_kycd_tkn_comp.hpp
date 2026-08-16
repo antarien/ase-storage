@@ -1,18 +1,27 @@
 #pragma once
 
 /**
- * ASE ECS COMPONENT (STATE)
+ * ASE ECS COMPONENT (REQUEST)
  *
- * @file        storage_acss_cwrd_comp.hpp
- * @brief       StorageAcssCwrdComponent - Required codeword on an ACL rule
- * @description Entity-per-Item: one entity per required codeword per ACL rule.
- *              Keycard must have ALL required codewords to pass the ACL check.
+ * @file        storage_req_kycd_tkn_comp.hpp
+ * @brief       StorageReqKycdTknComponent - The keycard a drained request has minted
+ * @description Written onto the request the moment its keycard entity exists, so the
+ *              request's codeword children can reach that keycard in O(1) instead of
+ *              being searched for once per request.
  *
  * @module      ase-storage
  * @layer       3 (Module)
- * @category    state
- * @created     2026-04-04
- * @modified    2026-04-05
+ * @category    communication/request
+ * @parity      server_only
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   Diese Komponente lebt nur INNERHALB eines Ticks des Keycard-Drains: sie haelt den
+ *   Elternbezug, ueber den die Codewort-Kinder ihre frisch gepraegte Keycard finden, und
+ *   verschwindet mit der Anfrage im selben Frame. Ein becsy-Zwilling waere ein Zustand,
+ *   den niemand schreibt und niemand liest. Die Keycard selbst erreicht den Client ueber
+ *   ihre eigene Komponente - hier geht nichts verloren.
+ * @created     2026-08-16
+ * @modified    2026-08-16
  * @version     1.0.0
  *
  * ECS COMPONENT COMPLIANCE
@@ -49,18 +58,22 @@
 namespace ase::storage {
 
 /**
- * @brief StorageAcssCwrdComponent - One required codeword on an ACL rule
+ * @brief StorageReqKycdTknComponent - the keycard this request minted
  *
- * Entity-per-Item: one entity per required codeword per ACL rule.
- * Example: ACL rule requiring "ART" + "STORY" = 2 entities.
+ * The drain used to walk EVERY requested codeword for EVERY request just to find the
+ * ones belonging to it (WS-K.2c): the parent was known and the children were searched
+ * for. This component turns the search around. The request records its keycard the
+ * moment it exists, so the SECOND pass walks the codeword children ONCE and reaches
+ * the parent by entity reference - a try_get, not a scan.
+ *
+ * Its presence is also the drain's completion marker: a request carrying it has minted
+ * and is destroyed after the codeword pass, never during it.
  *
  * @hub_reads  none
  * @hub_writes none
  */
-struct StorageAcssCwrdComponent {
-    uint32_t acss_ref = 0;                    // Entity ref to parent ACL rule entity
-    char required_cwrd[32] = {};              // Codeword that keycard must possess
-    uint32_t required_cwrd_hash = 0;          // entt::hashed_string of required_cwrd - the ONLY form compared
+struct StorageReqKycdTknComponent {
+    uint32_t kycd_ref = 0;                    // Entity ref to the keycard entity this request minted
 };
 
 }  // namespace ase::storage

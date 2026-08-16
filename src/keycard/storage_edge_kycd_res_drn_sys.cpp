@@ -174,22 +174,25 @@ namespace ase::storage {
 // NO STRUCTS HERE! NO View/Query operations in helpers! Only pure byte/char math!
 namespace {
 
-// Compare one recovered codeword against the fixed edge-distribution codewords (EXACT string, via
-// str_equal which checks the null terminator — never a prefix match) and, on a match, set the
-// matching owner-scoped A/ACS hold-verdict boolean. The codeword STRING is compared HERE
-// (server-internal, A/ACS step 5) and NEVER re-enters the Hub: only these fixed, contract-registered
-// booleans reach the L4 edge gate. NEVER an FNV hash — a hash collision would be a false-grant.
-void set_edge_cwrd_hold(ecs::Registry& registry, uint32_t owner, const char* cwrd) {
-    if (ase::utils::str_equal(cwrd, EDGE_CWRD_BINARY, MAX_CODEWORD_LEN)) {
+// Compare one recovered codeword against the fixed edge-distribution codewords and, on a
+// match, set the matching owner-scoped A/ACS hold-verdict boolean. The codeword itself never
+// re-enters the Hub (server-internal, A/ACS step 5): only these fixed, contract-registered
+// booleans reach the L4 edge gate.
+//
+// The comparison is on HASHES, against the compile-time constants in types.hpp. Identity is a
+// lookup, and a lookup compares hashes, never characters (WRFL_ASE_STRING_HANDLING Section 3).
+// The codeword is hashed where it is parsed out of the payload, so nothing is re-derived here.
+void set_edge_cwrd_hold(ecs::Registry& registry, uint32_t owner, uint32_t cwrd_hash) {
+    if (cwrd_hash == EDGE_CWRD_BINARY_HASH) {
         hub::set(registry, owner, "SES_KYCD_HOLDS_BINARY"_hs, 1.0f);
     }
-    if (ase::utils::str_equal(cwrd, EDGE_CWRD_SIG, MAX_CODEWORD_LEN)) {
+    if (cwrd_hash == EDGE_CWRD_SIG_HASH) {
         hub::set(registry, owner, "SES_KYCD_HOLDS_SIG"_hs, 1.0f);
     }
-    if (ase::utils::str_equal(cwrd, EDGE_CWRD_SBOM, MAX_CODEWORD_LEN)) {
+    if (cwrd_hash == EDGE_CWRD_SBOM_HASH) {
         hub::set(registry, owner, "SES_KYCD_HOLDS_SBOM"_hs, 1.0f);
     }
-    if (ase::utils::str_equal(cwrd, EDGE_CWRD_METADATA, MAX_CODEWORD_LEN)) {
+    if (cwrd_hash == EDGE_CWRD_METADATA_HASH) {
         hub::set(registry, owner, "SES_KYCD_HOLDS_METADATA"_hs, 1.0f);
     }
 }
@@ -392,9 +395,12 @@ void StorageEdgeKycdResDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
                         cw[o] = '\0';
                         if (i < payload_len && doc[i] == '"') ++i;  // closing quote
                         if (o > 0u) {
-                            // Exact-string A/ACS compare, server-internal — the codeword string
-                            // never re-enters the Hub; only the fixed hold-verdict booleans do.
-                            set_edge_cwrd_hold(registry, owner, cw);
+                            // Hashed at the point the codeword is parsed out of the payload:
+                            // that is where the string comes into being, so it is also where
+                            // its identity is fixed. The codeword itself never re-enters the
+                            // Hub; only the fixed hold-verdict booleans do.
+                            set_edge_cwrd_hold(registry, owner,
+                                               entt::hashed_string::value(cw, o));
                             ++count;
                         }
                     } else {

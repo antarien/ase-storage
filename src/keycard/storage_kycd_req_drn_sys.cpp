@@ -148,6 +148,8 @@
 #include <ase/storage/components/request/storage_req_kycd_cwrd_comp.hpp>
 #include <ase/storage/components/state/storage_sta_idn_comp.hpp>
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
+#include <ase/storage/components/state/storage_kycd_idn_comp.hpp>
+#include <ase/storage/components/request/storage_req_kycd_tkn_comp.hpp>
 #include <ase/storage/components/state/storage_kycd_cwrd_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_kycd_pend.hpp>
 #include <ase/storage/components/tag/storage_tag_kycd_pst_pend.hpp>
@@ -216,11 +218,13 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         auto& kycd = registry.emplace<StorageStaKycdComponent>(token_entity);
         kycd.clrn = req.clearance;
         kycd.expires_at = req.expires_at;
-        // Bind the keycard recipient: the publisher matches keycard→session via
-        // str_equal(kycd.issued_to, idn.user_id). issued_to was never set before
-        // (only "" == "" matched by accident); set it from the same source so the
-        // match survives once user_id carries the real string.
+        // Bind the keycard recipient. The publisher matches keycard→session on the
+        // HASH of the recipient, never on the characters: identity is a lookup
+        // (WRFL_ASE_STRING_HANDLING Section 3). The string stays for audit records and
+        // log lines; it is written here together with the hash so the two cannot drift.
         ase::utils::str_copy(kycd.issued_to, sizeof(kycd.issued_to), req.user_id);
+        auto& kycd_idn = registry.emplace<StorageKycdIdnComponent>(token_entity);
+        kycd_idn.issued_to_hash = entt::hashed_string(req.user_id).value();
 
         // Optional realm/permission extension (operator edge-keycard mint).
         // Absent on the legacy auth-gate flow → relm_ref/perm stay 0 (unchanged).
@@ -239,25 +243,13 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // is set AFTER the codeword grants below so the emit replicates them too.
         registry.emplace<StorageKycdPstPendTag>(token_entity);
 
-        // Codeword grants (Entity-per-Item): single-pass match on req_ref.
-        // Each requested codeword entity is re-purposed in place into a
-        // StorageKycdCwrdComponent grant on the token (request component removed so
-        // it is never re-consumed by a later keycard request). Modifying the
-        // currently-iterated entity is the EnTT-safe case (matches req_entity drain).
-        // No matching entities on the legacy auth-gate flow → no codewords (unchanged).
-        auto cwrd_view = registry.view<StorageReqKycdCwrdComponent>();
-        for (auto cwrd_req_entity : cwrd_view) {
-            const auto& cwrd_req = cwrd_view.get<StorageReqKycdCwrdComponent>(cwrd_req_entity);
-            if (cwrd_req.req_ref != static_cast<uint32_t>(req_entity)) continue;
-            char cwrd_copy[32] = {};
-            ase::utils::str_copy(cwrd_copy, sizeof(cwrd_copy), cwrd_req.cwrd);
-            registry.remove<StorageReqKycdCwrdComponent>(cwrd_req_entity);
-            auto& cwrd = registry.emplace<StorageKycdCwrdComponent>(cwrd_req_entity);
-            cwrd.kycd_ref = static_cast<uint32_t>(token_entity);
-            ase::utils::str_copy(cwrd.cwrd, sizeof(cwrd.cwrd), cwrd_copy);
-            log::debug("[StorageKycdReqDrn] +StorageKycdCwrdComponent kycd={} cwrd='{}'",
-                       static_cast<uint32_t>(token_entity), cwrd.cwrd);
-        }
+        // The minted keycard is recorded ON the request. The codeword children name
+        // their request in req_ref, so the SECOND pass below walks them once and reaches
+        // this keycard by entity reference. The former version did the opposite - it
+        // knew the parent and searched for the children, walking EVERY requested
+        // codeword for EVERY request (WS-K.2c).
+        auto& tkn = registry.emplace<StorageReqKycdTknComponent>(req_entity);
+        tkn.kycd_ref = static_cast<uint32_t>(token_entity);
 
         log::debug("[StorageKycdReqDrn] +StorageKycdPendTag token={} user='{}' clearance={} relm={} perm={} exp={}",
                    static_cast<uint32_t>(token_entity), req.user_id,
@@ -268,11 +260,58 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         if (ase::types::is_not_found(issued_count)) issued_count = 0.0f;
         hub::set(registry, hub::GLOBAL, "STG_KYCD_ISSUED_COUNT"_hs, issued_count + 1.0f);
 
-        // Clear the transient SES_KYCD_NTF_* IPC values BEFORE releasing the request entity:
-        // they sit on separate hub-internal entities and would otherwise orphan into every
-        // hub_values snapshot (the preloader-flood the user reported). See helper above.
-        remove_keycard_ntf_family(registry, static_cast<uint32_t>(req_entity));
-        registry.destroy(req_entity);
+    }
+
+    // PASS 2 - the codeword grants, walked ONCE over the children instead of once per
+    // request. Each requested codeword names its request in req_ref, and the request now
+    // carries the keycard it minted, so the parent is one try_get away. The entity is
+    // re-purposed in place. No matching entities on the legacy auth-gate flow → none.
+    for (auto [cwrd_req_entity, cwrd_req] :
+         registry.view<StorageReqKycdCwrdComponent>().each()) {
+        auto* tkn = registry.try_get<StorageReqKycdTknComponent>(
+            static_cast<ecs::Entity>(cwrd_req.req_ref));
+        if (tkn == nullptr) {
+            // The parent has not minted (yet, or at all): the grant stays pending and is
+            // picked up on the frame its request drains. Not a fault.
+            continue;
+        }
+        char cwrd_copy[32] = {};
+        ase::utils::str_copy(cwrd_copy, sizeof(cwrd_copy), cwrd_req.cwrd);
+        // ADDING a type this view does not filter on leaves the iteration set untouched.
+        // REMOVING StorageReqKycdCwrdComponent here would dissolve the very range being
+        // walked, so the request rows are retired in one batch below instead.
+        auto& cwrd = registry.emplace_or_replace<StorageKycdCwrdComponent>(cwrd_req_entity);
+        cwrd.kycd_ref = tkn->kycd_ref;
+        ase::utils::str_copy(cwrd.cwrd, sizeof(cwrd.cwrd), cwrd_copy);
+        cwrd.cwrd_hash = entt::hashed_string(cwrd_copy).value();
+        log::debug("[StorageKycdReqDrn] +StorageKycdCwrdComponent kycd={} cwrd='{}'",
+                   cwrd.kycd_ref, cwrd.cwrd);
+    }
+
+    // Retire the request rows of everything that now holds a grant. The range walks the
+    // GRANT type while the call removes the REQUEST type - two different types, so the
+    // range cannot collapse under the call that walks it. A codeword whose parent has not
+    // minted keeps its request row and stays untouched.
+    auto granted_view = registry.view<StorageKycdCwrdComponent>();
+    registry.remove<StorageReqKycdCwrdComponent>(granted_view.begin(), granted_view.end());
+
+    // PASS 3 - release the drained requests. Deferred to here because pass 2 reaches the
+    // keycard THROUGH the request: destroying it in pass 1 would cut the only link its
+    // codeword children have to the keycard they belong to.
+    ecs::Entity minted[KYCD_REQ_BATCH];
+    uint32_t minted_n = 0;
+    for (auto [req_entity, tkn] : registry.view<StorageReqKycdTknComponent>().each()) {
+        (void)tkn;
+        if (minted_n >= KYCD_REQ_BATCH) break;
+        minted[minted_n] = req_entity;
+        ++minted_n;
+    }
+    for (uint32_t i = 0; i < minted_n; ++i) {
+        // Clear the transient SES_KYCD_NTF_* IPC values BEFORE releasing the request
+        // entity: they sit on separate hub-internal entities and would otherwise orphan
+        // into every hub_values snapshot (the preloader-flood the user reported).
+        remove_keycard_ntf_family(registry, static_cast<uint32_t>(minted[i]));
+        registry.destroy(minted[i]);
     }
 }
 

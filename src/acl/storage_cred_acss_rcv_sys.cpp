@@ -145,6 +145,7 @@
 #include <ase/storage/components/state/storage_cred_acss_pnd_comp.hpp>
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
+#include <ase/storage/components/state/storage_relm_idn_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_relm_personal.hpp>
 #include <ase/storage/components/tag/storage_tag_relm_active.hpp>
 #include <ase/storage/components/tag/storage_tag_relm_conceal.hpp>
@@ -252,8 +253,10 @@ void StorageCredAcssRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // project_id/provider stay in the ACL path as the resource label. Resolve-or-create idempotently.
         uint32_t relm_ref = kc_relm;
         if (relm_ref == 0u && user_id[0] != '\0') {
-            for (auto [re, rc] : registry.view<StorageStaRelmComponent>().each()) {
-                if (ase::utils::str_equal(rc.id, user_id, MAX_REALM_ID)) {
+            // A personal realm is named after its owner, so its id hash IS user_hash -
+            // the value that arrived on the wire. One 32-bit test per realm, no walk.
+            for (auto [re, rc_idn] : registry.view<StorageRelmIdnComponent>().each()) {
+                if (rc_idn.id_hash == user_hash) {
                     relm_ref = static_cast<uint32_t>(re);
                     break;
                 }
@@ -265,6 +268,11 @@ void StorageCredAcssRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
                 ase::utils::str_copy(relm.name, MAX_REALM_NAME, user_id);
                 ase::utils::str_copy(relm.owner, MAX_OWNER_ID, user_id);
                 relm.default_protection = PROTECTION_PROTECTED;
+                // A personal realm is named after its owner, so both hashes are the
+                // same value - written here, beside the strings, never re-derived later.
+                auto& relm_idn = registry.emplace<StorageRelmIdnComponent>(realm_ent);
+                relm_idn.id_hash = user_hash;
+                relm_idn.owner_hash = user_hash;
                 registry.emplace<StorageRelmPersonalTag>(realm_ent);
                 registry.emplace<StorageRelmActiveTag>(realm_ent);
                 registry.emplace<StorageRelmConcealTag>(realm_ent);

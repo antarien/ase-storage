@@ -3,16 +3,25 @@
 /**
  * ASE ECS COMPONENT (STATE)
  *
- * @file        storage_acss_cwrd_comp.hpp
- * @brief       StorageAcssCwrdComponent - Required codeword on an ACL rule
- * @description Entity-per-Item: one entity per required codeword per ACL rule.
- *              Keycard must have ALL required codewords to pass the ACL check.
+ * @file        storage_kycd_idn_comp.hpp
+ * @brief       StorageKycdIdnComponent - Keycard holder identity as a comparable hash
+ * @description The user a keycard was issued to, in the ONLY form the ladder compares.
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
- * @created     2026-04-04
- * @modified    2026-04-05
+ * @parity      shared
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   StorageStaKycdComponent - die Keycard, deren issued_to hier gehasht ist - steht in
+ *   modules/ase-storage/codegen.json unter components.shared. Die Keycard erreicht den
+ *   Client, und derselbe Hash ist der Owner, unter dem sie im Hub veroeffentlicht wird.
+ *   Waere dieser Zwilling server_only, haette der Client die Keycard, aber nicht den
+ *   Schluessel, mit dem er sie seinem Inhaber zuordnet - "gehoert diese Keycard mir"
+ *   waere drueben unbeantwortbar, und die Antwort fehlte lautlos statt zu scheitern.
+ *   Identitaet folgt ihrem Datensatz.
+ * @created     2026-08-16
+ * @modified    2026-08-16
  * @version     1.0.0
  *
  * ECS COMPONENT COMPLIANCE
@@ -49,18 +58,18 @@
 namespace ase::storage {
 
 /**
- * @brief StorageAcssCwrdComponent - One required codeword on an ACL rule
+ * @brief StorageKycdIdnComponent - Keycard holder, comparable in one 32-bit test
  *
- * Entity-per-Item: one entity per required codeword per ACL rule.
- * Example: ACL rule requiring "ART" + "STORY" = 2 entities.
+ * "Does this keycard belong to the requester" is a lookup, so it compares hashes,
+ * never characters (WRFL_ASE_STRING_HANDLING Section 3). The same hash is already
+ * the hub owner id a keycard publishes under, so identity stays one number across
+ * the module instead of one number and one string that must agree.
  *
  * @hub_reads  none
  * @hub_writes none
  */
-struct StorageAcssCwrdComponent {
-    uint32_t acss_ref = 0;                    // Entity ref to parent ACL rule entity
-    char required_cwrd[32] = {};              // Codeword that keycard must possess
-    uint32_t required_cwrd_hash = 0;          // entt::hashed_string of required_cwrd - the ONLY form compared
+struct StorageKycdIdnComponent {
+    uint32_t issued_to_hash = 0;              // entt::hashed_string of StorageStaKycdComponent::issued_to
 };
 
 }  // namespace ase::storage

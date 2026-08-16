@@ -62,6 +62,8 @@ struct StorageStaVoteComponent {
     uint32_t relm_ref = 0;                    // Entity ref to realm where vote is held
     char subject[64] = {};                    // User ID being voted on
     uint32_t kycd_ref = 0;                    // Entity ref to keycard that would be issued
+    uint8_t granted_clearance = 0;            // Clearance the keycard carries if the motion passes
+    uint16_t granted_perm = 0;                // Permission bitflags (PERM_READ | PERM_WRITE | ...) if it passes
 };
 
 }  // namespace ase::storage

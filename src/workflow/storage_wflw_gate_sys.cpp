@@ -150,6 +150,7 @@
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_wflw_pend.hpp>
 #include <ase/storage/components/tag/storage_tag_wflw_gate.hpp>
+#include <ase/storage/components/tag/storage_relm_edge_tag.hpp>
 #include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
@@ -219,20 +220,20 @@ void StorageWflwGateSystem::tick(ecs::Registry& registry, float dt) {
     ecs::Entity failed[WFLW_REQ_BATCH];
     uint32_t failed_n = 0;
 
+    // Edge realm entity ref for the audit records. The answer does not depend on the
+    // request, so it is resolved ONCE per tick instead of once per request. The tag
+    // carries the identity (StorageEdgeIniSystem is its only producer), which replaces
+    // the former scan over every realm with a string compare per request.
+    uint32_t relm_ref = 0;
+    for (auto relm_ent : registry.view<StorageStaRelmComponent, StorageRelmEdgeTag>()) {
+        relm_ref = static_cast<uint32_t>(relm_ent);
+        break;
+    }
+
     auto gate_view = registry.view<StorageReqWflwTranComponent, StorageWflwPendTag,
                                    StorageWflwGateTag>();
     for (auto [req_ent, req] : gate_view.each()) {
         if (failed_n >= WFLW_REQ_BATCH) break;
-
-        // Edge realm entity ref for the audit record (single-pass inline lookup).
-        uint32_t relm_ref = 0;
-        auto relm_view = registry.view<StorageStaRelmComponent>();
-        for (auto [relm_ent, relm] : relm_view.each()) {
-            if (ase::utils::str_equal(relm.id, EDGE_REALM_ID, MAX_REALM_ID)) {
-                relm_ref = static_cast<uint32_t>(relm_ent);
-                break;
-            }
-        }
 
         char asset_abs[512] = {};
         mgr.resolve_path(EDGE_REALM_ID, nullptr, req.path, asset_abs, 512);

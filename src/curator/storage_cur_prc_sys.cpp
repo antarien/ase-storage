@@ -152,6 +152,7 @@
 #include <ase/storage/components/tag/storage_tag_cur_approved.hpp>
 #include <ase/storage/components/tag/storage_tag_cur_rejected.hpp>
 #include <ase/storage/components/tag/storage_tag_cur_rework.hpp>
+#include <ase/storage/storage_acss_index_resource_manager.hpp>
 // types.hpp for constants (NO magic numbers!)
 #include <ase/storage/types.hpp>
 #include <ase/utils/strops.hpp>
@@ -209,6 +210,13 @@ void StorageCurPrcSystem::on_start(ecs::Registry& /*registry*/) {
 }
 
 void StorageCurPrcSystem::tick(ecs::Registry& registry, float /*dt*/) {
+    auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
+    if (!idx_ptr || !(*idx_ptr)) {
+        log::error("[StorageCurPrcSystem] StorageAcssIndexResourceManager not in ctx (StorageAcssIdxSystem must run first)");
+        return;
+    }
+    auto& idx = **idx_ptr;
+
     // PASS 1: Process pending requests (single-pass)
     // View: requests with StorageCurReqTag, excluding already-processed (StorageCurDoneTag)
     auto req_view = registry.view<StorageReqCurComponent, StorageCurReqTag>(
@@ -217,18 +225,16 @@ void StorageCurPrcSystem::tick(ecs::Registry& registry, float /*dt*/) {
     for (auto req_entity : req_view) {
         auto& req = req_view.get<StorageReqCurComponent>(req_entity);
 
-        // Find existing curation entity by key + project_ref
-        // Inline iteration — no find_* helper (DUAL-PATTERN compliance)
+        // The curation row is reached by its (project, key) pair - the key the index is
+        // built on. The former version walked EVERY curation row for EVERY request
+        // (WS-K.2c) to answer a question that is one number against one number.
         entt::entity cur_entity = entt::null;
-        {
-            auto cur_view = registry.view<StorageStaCurCurComponent>();
-            for (auto [ce, cc] : cur_view.each()) {
-                if (cc.project_ref == req.project_ref &&
-                    ase::utils::str_equal(cc.key, req.key, CUR_MAX_KEY)) {
-                    cur_entity = ce;
-                    break;
-                }
-            }
+        const uint32_t req_key_hash = entt::hashed_string(req.key).value();
+        const uint64_t cur_key =
+            StorageAcssIndexResourceManager::compose_curation_key(req.project_ref, req_key_hash);
+        const uint32_t found = idx.get_curation(cur_key);
+        if (found != INVALID_ENTITY) {
+            cur_entity = static_cast<entt::entity>(found);
         }
 
         // Create curation entity if not found
@@ -236,8 +242,13 @@ void StorageCurPrcSystem::tick(ecs::Registry& registry, float /*dt*/) {
             cur_entity = registry.create();
             auto& cur = registry.emplace<StorageStaCurCurComponent>(cur_entity);
             ase::utils::str_copy(cur.key, CUR_MAX_KEY, req.key);
+            cur.key_hash = req_key_hash;
             cur.project_ref = req.project_ref;
             registry.emplace<StorageCurUnratedTag>(cur_entity);
+            // Registered IMMEDIATELY, not on the next rebuild: a second request naming the
+            // same asset in this same pass must find THIS row, or both create their own
+            // and the later rating lands on a duplicate nobody reads.
+            idx.store_curation(cur_key, static_cast<uint32_t>(cur_entity));
             log::info("[StorageCurPrcSystem] Created curation entity for key '{}'", req.key);
         }
 

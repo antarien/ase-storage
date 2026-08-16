@@ -73,6 +73,7 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/storage.hpp
     include/ase/storage/storage_module.hpp
     include/ase/storage/storage_resource_manager.hpp
+    include/ase/storage/storage_acss_index_resource_manager.hpp
     include/ase/storage/types.hpp
 
     #[[
@@ -80,6 +81,11 @@ add_library(${PROJECT_NAME} SHARED
     Realm, keycard, ACL, audit, lattice, vote, task state data.
     ]]
     include/ase/storage/components/state/storage_sta_relm_comp.hpp
+    include/ase/storage/components/state/storage_relm_idn_comp.hpp
+    include/ase/storage/components/state/storage_rule_idn_comp.hpp
+    include/ase/storage/components/state/storage_kycd_idn_comp.hpp
+    include/ase/storage/components/state/storage_lnk_idn_comp.hpp
+    include/ase/storage/components/state/storage_task_idn_comp.hpp
     include/ase/storage/components/state/storage_sta_kycd_comp.hpp
     include/ase/storage/components/state/storage_sta_idn_comp.hpp
     include/ase/storage/components/state/storage_sta_tkn_comp.hpp
@@ -108,6 +114,7 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/request/storage_req_kycd_comp.hpp
     include/ase/storage/components/request/storage_req_kycd_relm_comp.hpp
     include/ase/storage/components/request/storage_req_kycd_cwrd_comp.hpp
+    include/ase/storage/components/request/storage_req_kycd_tkn_comp.hpp
     include/ase/storage/components/request/storage_req_wflw_tran_comp.hpp
 
     #[[
@@ -135,6 +142,7 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/tag/storage_tag_relm_suspended.hpp
     include/ase/storage/components/tag/storage_tag_relm_archived.hpp
     include/ase/storage/components/tag/storage_tag_relm_conceal.hpp
+    include/ase/storage/components/tag/storage_relm_edge_tag.hpp
     include/ase/storage/components/tag/storage_tag_cur_unrated.hpp
     include/ase/storage/components/tag/storage_tag_cur_approved.hpp
     include/ase/storage/components/tag/storage_tag_cur_rejected.hpp
@@ -162,6 +170,8 @@ add_library(${PROJECT_NAME} SHARED
     SYSTEMS - ACL + CONCEALMENT
     ]]
     include/ase/storage/systems/acl/storage_acss_chk_sys.hpp
+    include/ase/storage/systems/acl/storage_acss_idx_sys.hpp
+    include/ase/storage/systems/acl/storage_idn_idx_sys.hpp
     include/ase/storage/systems/acl/storage_cncm_flt_sys.hpp
     include/ase/storage/systems/acl/storage_cred_acss_rcv_sys.hpp
     include/ase/storage/systems/acl/storage_cred_acss_rsp_sys.hpp
@@ -239,6 +249,9 @@ add_library(${PROJECT_NAME} SHARED
     SYSTEM IMPLEMENTATIONS - ACL + CONCEALMENT
     ]]
     src/acl/storage_acss_chk_sys.cpp
+    src/acl/storage_acss_idx_sys.cpp
+    src/acl/storage_idn_idx_sys.cpp
+    src/acl/storage_acss_index_resource_manager.cpp
     src/acl/storage_cncm_flt_sys.cpp
     src/acl/storage_cred_acss_rcv_sys.cpp
     src/acl/storage_cred_acss_rsp_sys.cpp

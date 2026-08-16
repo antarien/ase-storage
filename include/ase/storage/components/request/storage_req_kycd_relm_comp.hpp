@@ -17,6 +17,15 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    communication/request
+ * @parity      server_only
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   Beistellzettel auf der Anfrage-Entity, kein Bestandteil der Keycard. Der Drain liest
+ *   relm_ref/perm genau einmal per try_get und schreibt beide Werte auf
+ *   StorageStaKycdComponent (kycd.relm_ref, kycd.perm); mit der Anfrage-Entity endet die
+ *   Zeile im selben Frame. Realm-Bindung und Rechte erreichen den Client also ueber die
+ *   Keycard selbst - dort sind sie dauerhaft und dort stehen sie in der Kanalliste.
+ *   Server_only schneidet hier nichts ab, weil der TRAEGER der Information weiterreist.
  * @created     2026-06-24
  * @modified    2026-06-24
  * @version     1.0.0

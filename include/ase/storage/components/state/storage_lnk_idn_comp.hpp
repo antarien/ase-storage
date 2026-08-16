@@ -3,16 +3,25 @@
 /**
  * ASE ECS COMPONENT (STATE)
  *
- * @file        storage_acss_cwrd_comp.hpp
- * @brief       StorageAcssCwrdComponent - Required codeword on an ACL rule
- * @description Entity-per-Item: one entity per required codeword per ACL rule.
- *              Keycard must have ALL required codewords to pass the ACL check.
+ * @file        storage_lnk_idn_comp.hpp
+ * @brief       StorageLnkIdnComponent - Lattice link endpoints as comparable hashes
+ * @description The realms a lattice link joins, in the ONLY form the ladder compares.
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
- * @created     2026-04-04
- * @modified    2026-04-05
+ * @parity      shared
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   StorageLatLnkComponent - der Datensatz mit source_realm und target_realm - steht in
+ *   modules/ase-storage/codegen.json unter components.shared. Die Kante erreicht den
+ *   Client als Text; ihre Endpunkte sind Realm-Identitaeten, und der Client verbindet
+ *   sie ueber denselben Hash, unter dem die Realms bei ihm liegen. Bliebe der Zwilling
+ *   server_only, bekaeme der Client die Kante ohne beide Enden: ein Gitter aus Linien,
+ *   die an keinem Knoten ankommen - der Verlust waere ein leeres Bild, keine Fehlzeile.
+ *   Identitaet folgt ihrem Datensatz.
+ * @created     2026-08-16
+ * @modified    2026-08-16
  * @version     1.0.0
  *
  * ECS COMPONENT COMPLIANCE
@@ -49,18 +58,21 @@
 namespace ase::storage {
 
 /**
- * @brief StorageAcssCwrdComponent - One required codeword on an ACL rule
+ * @brief StorageLnkIdnComponent - Lattice link endpoints, comparable in one 32-bit test
  *
- * Entity-per-Item: one entity per required codeword per ACL rule.
- * Example: ACL rule requiring "ART" + "STORY" = 2 entities.
+ * Both endpoints are realm identities, and identity is a lookup: hashes, never
+ * characters (WRFL_ASE_STRING_HANDLING Section 3). The same hash indexes the link,
+ * so the bucket key and the stored identity are one number - a link cannot end up
+ * filed under one realm while claiming another.
  *
  * @hub_reads  none
  * @hub_writes none
  */
-struct StorageAcssCwrdComponent {
-    uint32_t acss_ref = 0;                    // Entity ref to parent ACL rule entity
-    char required_cwrd[32] = {};              // Codeword that keycard must possess
-    uint32_t required_cwrd_hash = 0;          // entt::hashed_string of required_cwrd - the ONLY form compared
+struct StorageLnkIdnComponent {
+    uint32_t source_realm_hash = 0;           // entt::hashed_string of StorageLatLnkComponent::source_realm
+    uint32_t target_realm_hash = 0;           // entt::hashed_string of StorageLatLnkComponent::target_realm
+    uint32_t prefix_hash = 0;                 // entt::hashed_string of the shared path prefix, wildcard stripped
+    uint32_t prefix_len = 0;                  // Length of that prefix (0 = the link shares nothing)
 };
 
 }  // namespace ase::storage

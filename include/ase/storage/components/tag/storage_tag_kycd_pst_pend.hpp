@@ -13,6 +13,21 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    tag
+ * @parity      server_only
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   Die Marke fuehrt eine Warteschlange zur MongoDB-Autoritaet: sie sagt, dass
+ *   der dauerhafte Datensatz dieser Keycard noch zu schreiben ist. Gesetzt wird
+ *   sie beim Praegen durch StorageKycdReqDrnSystem
+ *   (storage_kycd_req_drn_sys.cpp, Zeile 244); ein Leser findet sich im ganzen
+ *   Baum sonst nur als Beschreibung am Persist-Puffer StorageBufKycdComponent,
+ *   der selbst unter components.server_only in codegen.json steht. Der
+ *   Schreibvorgang liegt heute beim DATA-Frame BIN_MSG_EDGE_KYCD_PERSIST, den die
+ *   Praegestellen direkt an die Replica geben (storage_module.hpp, Zeilen 206 bis
+ *   210) — das Ziel bleibt die Server-Seite. Der Browser hat weder MongoDB noch
+ *   Persist-Treiber: ein Zwilling drueben waere eine Warteschlange ohne Abnehmer,
+ *   die niemand leeren kann. Den Zustand der Keycard selbst sieht der Client
+ *   ueber StorageKycdPendTag und StorageStaKycdComponent, beide gespiegelt.
  * @created     2026-06-24
  * @modified    2026-06-24
  * @version     1.0.0

@@ -140,6 +140,14 @@
 
 // Own header FIRST
 #include <ase/storage/systems/acl/storage_cncm_flt_sys.hpp>
+// Components + tags from same module
+#include <ase/storage/components/state/storage_sta_relm_comp.hpp>
+#include <ase/storage/components/tag/storage_tag_relm_public.hpp>
+#include <ase/storage/components/tag/storage_tag_relm_active.hpp>
+#include <ase/storage/components/tag/storage_tag_relm_conceal.hpp>
+#include <ase/storage/components/tag/storage_tag_relm_suspended.hpp>
+#include <ase/storage/components/tag/storage_tag_relm_archived.hpp>
+#include <ase/storage/components/tag/storage_relm_visb_tag.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
@@ -150,7 +158,7 @@ namespace ase::storage {
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 namespace {
 
-// No helper functions needed → concealment filtering integrated with API routes
+// No helper functions needed → every condition is a View filter, never a branch
 
 }  // anonymous namespace
 
@@ -161,8 +169,62 @@ void StorageCncmFltSystem::on_start(ecs::Registry& /*registry*/) {
     log::debug("[StorageCncmFlt] Started");
 }
 
-void StorageCncmFltSystem::tick(ecs::Registry& /*registry*/, float /*dt*/) {
-    // Concealment filtering driven by API route Tag-filtered Views
+void StorageCncmFltSystem::tick(ecs::Registry& registry, float dt) {
+    (void)dt;
+
+    // Derives ONE thing: may this realm appear in a listing to someone who has
+    // named no keycard. That question is viewer-INDEPENDENT, which is the only
+    // reason the answer may live on the realm entity at all. The viewer-specific
+    // half - a concealed realm IS visible to its owner and its members - stays
+    // in StorageAcssChkSystem, where the requester is known. Folding it in here
+    // would cache one user's answer on an entity every user reads.
+    //
+    // EVERY VIEW IS A NAMED VARIABLE, AND THAT IS NOT A STYLE CHOICE.
+    // The transpiler discovers views by their variable name (body_transformer
+    // discovered_views_ / view_query_map_) and gives each its own becsy query -
+    // mainQuery, query_2, query_3 ... with the excludes carried across as
+    // .without(). Written INLINE inside the range-for, a view has no name to
+    // discover: measured 2026-08-16, six inline views collapsed into ONE query
+    // holding the union of all seven components, including the tag this system
+    // WRITES, so the generated system matched a set that cannot exist and could
+    // never have tagged anything. Same C++ semantics, named - and the queries
+    // come out one per view.
+    //
+    // Each loop mutates a type that is NOT the filter of the view it walks, or
+    // removes the very component the view leads with, so nothing invalidates
+    // under the iterator and no deferred array is needed.
+
+    // GAINED: public and active, and none of the three hiding states.
+    auto listable_view = registry.view<StorageStaRelmComponent, StorageRelmPublicTag,
+                                       StorageRelmActiveTag>(
+        entt::exclude<StorageRelmConcealTag, StorageRelmSuspendedTag, StorageRelmArchivedTag>);
+    for (auto relm_ent : listable_view) {
+        registry.emplace_or_replace<StorageRelmVisbTag>(relm_ent);
+    }
+
+    // LOST: the tag is carried, but one condition stopped holding. Five disjoint
+    // Views instead of one loop with five ifs - the conditions compose in the
+    // type system, which is also what lets each one become its own becsy query.
+    auto conceal_view = registry.view<StorageRelmVisbTag, StorageRelmConcealTag>();
+    for (auto relm_ent : conceal_view) {
+        registry.remove<StorageRelmVisbTag>(relm_ent);
+    }
+    auto suspended_view = registry.view<StorageRelmVisbTag, StorageRelmSuspendedTag>();
+    for (auto relm_ent : suspended_view) {
+        registry.remove<StorageRelmVisbTag>(relm_ent);
+    }
+    auto archived_view = registry.view<StorageRelmVisbTag, StorageRelmArchivedTag>();
+    for (auto relm_ent : archived_view) {
+        registry.remove<StorageRelmVisbTag>(relm_ent);
+    }
+    auto unpublic_view = registry.view<StorageRelmVisbTag>(entt::exclude<StorageRelmPublicTag>);
+    for (auto relm_ent : unpublic_view) {
+        registry.remove<StorageRelmVisbTag>(relm_ent);
+    }
+    auto inactive_view = registry.view<StorageRelmVisbTag>(entt::exclude<StorageRelmActiveTag>);
+    for (auto relm_ent : inactive_view) {
+        registry.remove<StorageRelmVisbTag>(relm_ent);
+    }
 }
 
 void StorageCncmFltSystem::on_stop(ecs::Registry& /*registry*/) {

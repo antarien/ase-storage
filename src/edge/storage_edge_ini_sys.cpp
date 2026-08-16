@@ -150,6 +150,10 @@
 #include <ase/storage/components/state/storage_wflw_edge_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_relm_public.hpp>
 #include <ase/storage/components/tag/storage_tag_relm_active.hpp>
+#include <ase/storage/components/tag/storage_relm_edge_tag.hpp>
+#include <ase/storage/components/state/storage_relm_idn_comp.hpp>
+#include <ase/storage/components/state/storage_rule_idn_comp.hpp>
+#include <ase/storage/components/tag/storage_acss_rule_sufx_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
 #include <ase/utils/strops.hpp>
@@ -176,8 +180,13 @@ namespace {
 void seed_wflw_edge(ecs::Registry& registry, const char* from_label, const char* to_label) {
     auto edge_ent = registry.create();
     auto& edge = registry.emplace<StorageWflwEdgeComponent>(edge_ent);
+    // Hash in the SAME statement as the string it describes. A label written without
+    // its hash is not a loud failure - it is a silent one: the transition simply never
+    // matches and the release pipeline stalls with no error anywhere.
     ase::utils::str_copy(edge.from_label, MAX_LABEL_LEN, from_label);
+    edge.from_label_hash = entt::hashed_string(from_label).value();
     ase::utils::str_copy(edge.to_label, MAX_LABEL_LEN, to_label);
+    edge.to_label_hash = entt::hashed_string(to_label).value();
 }
 
 // One ACL rule + its required codeword (Entity-per-Item pair). Pattern semantics
@@ -192,10 +201,39 @@ void seed_acss_rule(ecs::Registry& registry, uint32_t relm_ref, const char* patt
     rule.protection_level = PROTECTION_PUBLIC;
     ase::utils::str_copy(rule.label, MAX_LABEL_LEN, label);
 
+    // Identity beside the record, written together with it. The pattern's literal part
+    // is what the ladder matches: an extension rule drops its leading '*', a location
+    // rule drops a trailing wildcard. The kind is decided ONCE, here, and carried by a
+    // Tag - the ladder never re-reads the pattern to find out what kind of rule it is.
+    const uint32_t pattern_len = ase::utils::str_len(pattern, MAX_PATH_LEN);
+    auto& rule_idn = registry.emplace<StorageRuleIdnComponent>(rule_ent);
+    rule_idn.pattern_hash = entt::hashed_string(pattern).value();
+    rule_idn.label_hash = entt::hashed_string(label).value();
+    if (pattern_len > 0u && pattern[0] == '*') {
+        registry.emplace<StorageAcssRuleSufxTag>(rule_ent);
+        rule_idn.match_len = pattern_len - 1u;
+        rule_idn.match_hash = entt::hashed_string::value(pattern + 1, rule_idn.match_len);
+        // An extension rule is matched against the path's dot-suffixes, so its literal
+        // MUST begin with a dot. A pattern that does not would silently match nothing;
+        // saying so out loud is the difference between a bug and a rejected input.
+        if (rule_idn.match_len < 1u || pattern[1] != '.') {
+            log::warn(log::WRN::CAT::VALUE_INVALID, "StorageEdgeIniSystem",
+                      rule_idn.pattern_hash, "acss_sufx_pattern_dot",
+                      static_cast<float>(rule_idn.match_len));
+        }
+    } else {
+        // A location rule keeps its pattern VERBATIM, the trailing wildcard included.
+        // That is what the character comparison it replaces did, and reproducing it
+        // exactly is the point: a refactor must not change which assets a rule governs.
+        rule_idn.match_len = pattern_len;
+        rule_idn.match_hash = rule_idn.pattern_hash;
+    }
+
     auto cwrd_ent = registry.create();
     auto& cwrd = registry.emplace<StorageAcssCwrdComponent>(cwrd_ent);
     cwrd.acss_ref = static_cast<uint32_t>(rule_ent);
     ase::utils::str_copy(cwrd.required_cwrd, MAX_CODEWORD_LEN, required_cwrd);
+    cwrd.required_cwrd_hash = entt::hashed_string(required_cwrd).value();
 }
 
 }  // anonymous namespace
@@ -230,11 +268,19 @@ void StorageEdgeIniSystem::on_start(ecs::Registry& registry) {
     auto& relm = registry.emplace<StorageStaRelmComponent>(realm_ent);
     ase::utils::str_copy(relm.id, MAX_REALM_ID, EDGE_REALM_ID);
     ase::utils::str_copy(relm.name, MAX_REALM_NAME, "Edge Binary Distribution");
+    // The realm has no owner user: it belongs to the platform, so owner_hash stays 0
+    // and no requester can ever match it - which is exactly the intended outcome.
+    auto& relm_idn = registry.emplace<StorageRelmIdnComponent>(realm_ent);
+    relm_idn.id_hash = EDGE_REALM_HASH;
     relm.default_protection = PROTECTION_PUBLIC;
     relm.tier = TIER_ENTERPRISE;
     relm.quota_bytes = EDGE_REALM_QUOTA_BYTES;
     registry.emplace<StorageRelmPublicTag>(realm_ent);
     registry.emplace<StorageRelmActiveTag>(realm_ent);
+    // Identity marker: this system is the ONLY producer of the edge realm, so the
+    // tag is the SSOT for "which entity is EDGE_REALM_ID". The workflow systems
+    // read it instead of scanning every realm and comparing the id string.
+    registry.emplace<StorageRelmEdgeTag>(realm_ent);
     log::info("[StorageEdgeIni] edge_binaries realm entity registered (tier=Enterprise, public, quota={} bytes)",
               relm.quota_bytes);
 
@@ -264,7 +310,7 @@ void StorageEdgeIniSystem::on_start(ecs::Registry& registry) {
     const uint32_t drill_owner = entt::hashed_string(drill_path).value();
     hub::set(registry, drill_owner, "STG_WFLW_STAGE"_hs, static_cast<float>(WFLW_STAGE_DRAFT));
     hub::set(registry, drill_owner, "STG_WFLW_PUB"_hs,
-             ase::utils::str_equal(EDGE_LABEL_DRAFT, EDGE_LABEL_RELEASED, MAX_LABEL_LEN) ? 1.0f : 0.0f);
+             EDGE_LABEL_DRAFT_HASH == EDGE_LABEL_RELEASED_HASH ? 1.0f : 0.0f);
     log::info("[StorageEdgeIni] edge ACL rules ready (BINARY release/*, SIG *.sig, SBOM *.spdx.json, METADATA manifests; drill asset at draft)");
 
     // Workflow-transition graph (Phase 12 Task 12.3) — the release pipeline

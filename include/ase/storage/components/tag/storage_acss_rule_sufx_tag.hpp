@@ -5,31 +5,26 @@
  * ASE ECS COMPONENT (TAG)
  * =============================================================================
  *
- * @file        storage_tag_wflw_pend.hpp
- * @brief       StorageWflwPendTag - Workflow transition request awaiting processing
- * @description Marker for StorageReqWflwTranComponent entities not yet transitioned
+ * @file        storage_acss_rule_sufx_tag.hpp
+ * @brief       StorageAcssRuleSufxTag - ACL rule matches by path suffix
+ * @description Marks a rule whose pattern began with '*' ("*.sig"), so it governs
+ *              assets by their trailing extension instead of by their location
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    tag
- * @parity      server_only
+ * @parity      shared
  *
  * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
- *   Traeger ist dieselbe Antrags-Entity wie bei StorageWflwGateTag: die Marke haengt an
- *   StorageReqWflwTranComponent, und das ist bereits server_only. Sie markiert einen
- *   Bearbeitungsstand INNERHALB des Servers — StorageWflwDrnSystem setzt sie beim Leeren
- *   der Hub-Bruecke, StorageWflwGateSystem und StorageWflwTranSystem fuehren ihre Views
- *   ueber sie, und mit dem Urteil zerstoert StorageWflwTranSystem die Entity. Die Marke
- *   lebt damit nur zwischen Ingestion und Integration desselben Verarbeitungszugs; sie
- *   beschreibt die Warteschlange des Servers, nicht den Zustand des Assets.
- *   Der Zustand, den ein Client sehen soll, ist das LABEL und das Urteil: label auf
- *   StorageAcssRuleComponent (components.shared) sowie die Hub-Werte STG_WFLW_RES und
- *   STG_WFLW_STAGE unter dem Pfad-Owner. Auch das Warten selbst steht dort — als
- *   WFLW_RES_PENDING, von StorageWflwDrnSystem im selben Zug gesetzt, in dem diese Marke
- *   entsteht. Der Wartezustand geht dem Client also nicht verloren, er reist ueber den
- *   Hub statt ueber diese Marke.
- * @created     2026-07-11
- * @modified    2026-07-11
+ *   Dieses Tag klassifiziert eine Regel, und die Regel selbst - StorageAcssRuleComponent -
+ *   steht in codegen.json unter components.shared. Die Komponente traegt nur Realm- und
+ *   Projektbezug; WIE eine Regel trifft, steht ausschliesslich im Tag. Ohne das Tag saehe
+ *   der Client eine Regel, deren Wirkungsbereich er nicht bestimmen kann: er wuerde eine
+ *   Endungsregel ("*.sig") als Ortsregel lesen und ihr einen Pfadpraefix zuschreiben, den
+ *   sie nie hatte. Beide Seiten muessen dieselbe Trefferart kennen, sonst weichen die
+ *   Zugriffsentscheidungen auseinander, ohne dass irgendwo ein Fehler auftaucht.
+ * @created     2026-08-16
+ * @modified    2026-08-16
  * @version     1.0.0
  *
  * ECS TAG COMPLIANCE
@@ -66,13 +61,19 @@
 namespace ase::storage {
 
 /**
- * @brief StorageWflwPendTag - Workflow transition request awaiting processing
+ * @brief StorageAcssRuleSufxTag - The rule matches assets by trailing extension
  *
- * State: Promote request drained from the Hub bridge, transition not yet applied
- * Filter: Used by StorageWflwTranSystem (with entt::exclude<StorageWflwGateTag>)
- * Added: StorageWflwDrnSystem when draining the Hub bridge entity
- * Removed: Entity destroyed by StorageWflwTranSystem after the verdict
+ * State: A pattern kind, fixed when the rule is seeded and never changing after
+ * Filter: registry.view<StorageAcssRuleComponent, StorageAcssRuleSufxTag>()
+ * Added: The system that seeds the rule, when the pattern begins with '*'
+ * Removed: Never - a rule does not change the way it matches
+ *
+ * Location rules (a path followed by a wildcard) and extension rules ("*.sig") match by two
+ * different computations, so they are two Tag-filtered Views and two loops - never
+ * one loop that inspects a discriminator and branches. The suffix form exists
+ * because companion artifacts sit BESIDE the binary they belong to, where no
+ * location prefix can reach them.
  */
-struct StorageWflwPendTag {};
+struct StorageAcssRuleSufxTag {};
 
 }  // namespace ase::storage

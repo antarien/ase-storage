@@ -26,6 +26,7 @@
  */
 
 #include <cstdint>
+#include <entt/core/hashed_string.hpp>
 
 namespace ase::storage {
 
@@ -51,6 +52,7 @@ constexpr uint32_t MAX_CODEWORD_LEN   = 32;    // Single codeword max chars
 constexpr uint32_t MAX_LABEL_LEN      = 32;    // Workflow label max chars
 constexpr uint32_t MAX_REASON_LEN     = 64;    // Audit deny-reason max chars
 constexpr uint32_t CRED_ACSS_RSP_BATCH = 64;   // Max credential A/ACS verdicts responded per tick (deferred-destroy batch bound)
+constexpr uint32_t KYCD_REQ_BATCH      = 64;   // Max keycard requests released per tick (deferred-destroy batch bound)
 constexpr uint32_t MAX_TASK_NAME      = 128;   // Need-to-Know task name max chars
 constexpr uint32_t MAX_KEYCARD_HASH   = 64;    // SHA-256 hex digest max chars
 constexpr uint32_t MAX_EMAIL_LEN      = 64;    // Email address max chars
@@ -134,6 +136,22 @@ constexpr uint8_t AUD_GRANTED    = 0;    // Access was allowed after A/ACS check
 constexpr uint8_t AUD_DENIED     = 1;    // Access was refused with logged reason string
 constexpr uint8_t AUD_ESCALATED  = 2;    // Decision was forwarded to admin or vote system
 
+// Surveillance over the access-decision stream. The streak lives in the Hub,
+// owner-keyed by hashed_string(user_id), because it must survive the tick that
+// produced it: StorageAudtWritSystem retires every audit entity in the same
+// Preservation stage, so nothing about a decision outlives the frame unless it
+// is deliberately carried forward.
+//
+// The window stamp is the LOW 24 BITS of the unix second, not the second
+// itself. Hub values are float32, which represents integers exactly only up to
+// 2^24 - a raw 1.7e9 timestamp would land on a ~128-second grid and make a
+// 300-second window meaningless. Masked, the arithmetic is exact; the counter
+// wraps every 194 days, and a wrap can only ever make an OLD stamp look far
+// away, which is the same verdict the window would have reached anyway.
+constexpr uint8_t  SRVL_DENY_THRESHOLD = 5;         // denials inside the window before an anomaly is raised
+constexpr uint64_t SRVL_WINDOW_S       = 300;       // 5 minutes: denials further apart start a fresh streak
+constexpr uint64_t SRVL_STAMP_MASK     = 0xFFFFFF;  // low 24 bits - the largest integer range a float32 holds exactly
+
 // ── ASSET CATEGORIES (engine content classification) ────────────────────
 
 constexpr uint8_t AST_ART        = 0;    // Images, prompts, 3D models and textures
@@ -157,6 +175,15 @@ constexpr uint8_t VOT_EXPIRED    = 3;    // Deadline passed without reaching quo
 constexpr uint8_t BALLOT_FOR     = 0;    // Cast vote in favor of the motion
 constexpr uint8_t BALLOT_AGAINST = 1;    // Cast vote against the motion
 constexpr uint8_t BALLOT_ABSTAIN = 2;    // Abstain but count toward quorum threshold
+
+// Vote of Confidence evaluation. What a passing vote GRANTS is per-vote data
+// (StorageStaVoteComponent.granted_clearance / .granted_perm), never a constant
+// here - a realm that votes someone in as a reader and one that votes in a
+// maintainer are the same mechanism with different data. Only the lifetime of
+// the resulting keycard is policy, because it is a property of the issuing
+// system rather than of any single motion.
+constexpr uint32_t VOTE_PRC_BATCH   = 16;       // max votes concluded per tick (deferred tag-removal bound)
+constexpr uint64_t VOTE_KYCD_TTL_S  = 2592000;  // 30 days: lifetime of a keycard issued by a passed vote
 
 // ── TASK STATUS (Need-to-Know scoping, Enterprise tier) ────────────────
 
@@ -255,6 +282,38 @@ constexpr const char* EDGE_CWRD_SBOM     = "SBOM";       // SPDX software bill o
 constexpr const char* EDGE_CWRD_SIG      = "SIG";        // ES256 YubiKey-PIV signature over the SHA-256
 constexpr const char* EDGE_CWRD_METADATA = "METADATA";   // compatibility.json + version manifests
 
+// Hash forms of every identity string above. Comparing identities is a LOOKUP, and a
+// lookup compares hashes - never characters (WRFL_ASE_STRING_HANDLING Section 3). The
+// strings stay for logging, audit records and filesystem paths; nothing on a hot path
+// reads them. Each constant is the FNV-1a32 of the string beside it, folded at compile
+// time, so the comparison is one 32-bit equality.
+constexpr uint32_t ACSS_MAX_PATH_PARTS = 16;         // Max dot-suffixes hashed per request
+constexpr uint32_t ACSS_FNV_OFFSET = 2166136261u;    // FNV-1a32 offset basis - MUST equal entt::internal::fnv1a_traits
+constexpr uint32_t ACSS_FNV_PRIME  = 16777619u;      // FNV-1a32 prime - MUST equal entt::internal::fnv1a_traits
+
+// The hash is FOLDED BY THE COMPILER, and written as the call that folds it.
+//
+// These constants briefly stood here as bare literals with a static_assert, because the
+// types.ts generator used to copy the initializer verbatim and the C++ call arrived in
+// TypeScript unchanged (measured 2026-08-16: 46 tsc errors from this block alone). That
+// was the wrong side to fix - a module rewriting valid C++ to accommodate a generator is
+// tech debt paid by every future module author. The fold now happens in the generator
+// (types_generator.hpp translate_hashed_strings), so the SSOT says what it means again.
+constexpr uint32_t ACSS_REALM_PUBLIC_HASH  = entt::hashed_string::value("ase");            // Hash of ACSS_REALM_PUBLIC_ID
+constexpr uint32_t ACSS_CWRD_WILDCARD_HASH = entt::hashed_string::value("ALL");            // Hash of ACSS_CWRD_WILDCARD
+constexpr uint32_t EDGE_REALM_HASH         = entt::hashed_string::value("edge_binaries");  // Hash of EDGE_REALM_ID
+
+constexpr uint32_t EDGE_LABEL_DRAFT_HASH    = entt::hashed_string::value("draft");     // Hash of EDGE_LABEL_DRAFT
+constexpr uint32_t EDGE_LABEL_REVIEW_HASH   = entt::hashed_string::value("review");    // Hash of EDGE_LABEL_REVIEW
+constexpr uint32_t EDGE_LABEL_APPROVED_HASH = entt::hashed_string::value("approved");  // Hash of EDGE_LABEL_APPROVED
+constexpr uint32_t EDGE_LABEL_RELEASED_HASH = entt::hashed_string::value("released");  // Hash of EDGE_LABEL_RELEASED
+constexpr uint32_t EDGE_LABEL_RETIRED_HASH  = entt::hashed_string::value("retired");   // Hash of EDGE_LABEL_RETIRED
+
+constexpr uint32_t EDGE_CWRD_BINARY_HASH   = entt::hashed_string::value("BINARY");    // Hash of EDGE_CWRD_BINARY
+constexpr uint32_t EDGE_CWRD_SBOM_HASH     = entt::hashed_string::value("SBOM");      // Hash of EDGE_CWRD_SBOM
+constexpr uint32_t EDGE_CWRD_SIG_HASH      = entt::hashed_string::value("SIG");       // Hash of EDGE_CWRD_SIG
+constexpr uint32_t EDGE_CWRD_METADATA_HASH = entt::hashed_string::value("METADATA");  // Hash of EDGE_CWRD_METADATA
+
 constexpr uint8_t EDGE_CLEARANCE_CUSTOMER = 0;   // Customer download-only clearance for released binaries
 constexpr uint8_t EDGE_CLEARANCE_OPERATOR = 5;   // Release-manager full release-workflow clearance
 
@@ -299,6 +358,29 @@ constexpr uint8_t  EDGE_WFLW_BIN_MSG_PERSIST = 112;   // dist → Replica: [112]
 constexpr uint32_t WFLW_PST_DOC_BUF          = 1024;  // workflow-label persist document scratch bytes (mirror EDGE_WFLW_PERSIST_DOC_MAX)
 constexpr uint32_t WFLW_REQ_BATCH            = 16;    // max workflow entities drained/denied/persisted per tick (deferred-destroy batch bound)
 
+// ── A/ACS ACCESS-DECISION DURABLE PERSIST (frame 122) ───────────────────────
+// Every GRANT and every DENY of the ladder (StorageAcssChkSystem,
+// StorageWflwTranSystem, StorageWflwGateSystem, StorageWflwClnSystem,
+// StorageEdgeAudtDrnSystem) produces one StorageBufAudtComponent. Measured
+// 2026-08-16: those five producers had ZERO consumers and ZERO destroys, so the
+// forensic trail accumulated in dist RAM and never reached durable storage —
+// the decision record the whole ACL ladder exists for was the one thing nobody
+// kept. StorageAudtWritSystem ships them on this frame and RETIRES the entity,
+// which makes it the single owner of that lifetime: it runs in Preservation
+// (71), so anything that wants to READ a decision must run BEFORE it, never
+// after (Observation is 72 — this is why StorageSrvlLogSystem was moved).
+// Envelope and id mirror modules/ase-replication/replica_types.hpp; SSOT
+// registration is ase-network types.hpp. Changing one side requires the other.
+constexpr uint8_t  EDGE_AUDT_BIN_MSG_PERSIST = 132;   // dist → Replica: [132][req_id:u64][doc_len:u32][doc] (relocated from 122 on 2026-08-16 - 122 is BIN_MSG_GIS_CELL_ZONE, region_wire.hpp)
+constexpr uint32_t AUDT_PST_HDR              = 13;    // frame envelope: 1 id + 8 req_id + 4 doc_len (mirror EDGE_AUDT_PERSIST_HDR)
+constexpr uint32_t AUDT_PST_DOC_BUF          = 1024;  // access-decision document scratch bytes (mirror EDGE_AUDT_PERSIST_DOC_MAX)
+// 16, not 32: the Replica's whole MongoDB seam delivers ~32 staged operations
+// per second (pool ring 64, drain cap 32, 1 Hz Preservation). A 32-entry audit
+// batch would consume the entire seam on its own and starve chunk, player and
+// quota persistence. Half the seam is the deliberate share; a deeper backlog
+// waits one more tick rather than pushing another writer's document out.
+constexpr uint32_t AUDT_WRIT_BATCH           = 16;    // max audit entities persisted+retired per tick (deferred-destroy batch bound)
+
 // ── EDGE-REALM QUOTA + RETIRED RETENTION (Phase 12 Task 12.14 / R14) ────────
 // SIZING (R14 verification, MEASURED 2026-07-11 against the LIVE realm): one
 // linux-x86_64 release = daemon binary 2,028,760 B (~1.9 MB) + bundled
@@ -313,10 +395,6 @@ constexpr uint32_t WFLW_REQ_BATCH            = 16;    // max workflow entities d
 constexpr uint64_t EDGE_REALM_QUOTA_BYTES   = 10737418240ULL;  // 10 GB edge_binaries realm ceiling
 constexpr uint64_t QUOTA_SCAN_INTERVAL_S    = 60;              // seconds between realm-usage FS scans (Observation pacing)
 constexpr uint64_t WFLW_RETIRED_RETENTION_S = 7776000;         // 90 days: retired builds older than this are deleted
-
-// ── DIGIT EXTRACTION (base-10 helpers) ──────────────────────────────────
-
-constexpr uint32_t DECIMAL_RADIX       = 10;  // base-10 digit extraction divisor
 
 // ── KEYCARD DURABLE-PERSIST ROUND-TRIP (Phase 12 H-3 — Replica MongoDB) ────
 // A minted keycard is shipped owner-keyed over the Hub WS lane to the Replica,

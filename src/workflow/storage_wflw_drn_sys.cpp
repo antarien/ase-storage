@@ -163,20 +163,10 @@ namespace ase::storage {
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 namespace {
 
-// Sanitized bounded copy: JSON-breaking bytes ('"', '\\') and ASCII control
-// bytes are SKIPPED during the copy so every downstream consumer (audit reason,
-// frame-112 persist document) can embed the strings verbatim. Pure string math.
-void sanitized_copy(char* dst, uint32_t dst_size, const char* src) {
-    uint32_t w = 0;
-    for (uint32_t r = 0; src[r] != '\0' && w + 1 < dst_size; ++r) {
-        char c = src[r];
-        if (c == '"' || c == '\\') continue;
-        if (static_cast<unsigned char>(c) < 32u) continue;
-        dst[w] = c;
-        ++w;
-    }
-    dst[w] = '\0';
-}
+// No helper functions needed - the sanitized bounded copy this system used to
+// carry its own version of now lives in ase::utils::str_copy_json_safe (L0),
+// where the persist document builders reach it too. Three private copies of one
+// string rule is three places for it to drift apart.
 
 }  // anonymous namespace
 
@@ -208,14 +198,14 @@ void StorageWflwDrnSystem::tick(ecs::Registry& registry, float dt) {
 
         auto req_ent = registry.create();
         auto& req = registry.emplace<StorageReqWflwTranComponent>(req_ent);
-        sanitized_copy(req.path, MAX_PATH_LEN, breq.path);
-        sanitized_copy(req.target_label, MAX_LABEL_LEN, breq.target_label);
-        sanitized_copy(req.requested_by, MAX_OWNER_ID, breq.requested_by);
+        ase::utils::str_copy_json_safe(req.path, MAX_PATH_LEN, breq.path);
+        ase::utils::str_copy_json_safe(req.target_label, MAX_LABEL_LEN, breq.target_label);
+        ase::utils::str_copy_json_safe(req.requested_by, MAX_OWNER_ID, breq.requested_by);
         registry.emplace<StorageWflwPendTag>(req_ent);
 
         // released-gate: the artifact precondition runs as a SEPARATE Tag-filtered
         // check (StorageWflwGateSystem) — the transition system never re-tests it.
-        if (ase::utils::str_equal(req.target_label, EDGE_LABEL_RELEASED, MAX_LABEL_LEN)) {
+        if (entt::hashed_string(req.target_label).value() == EDGE_LABEL_RELEASED_HASH) {
             registry.emplace<StorageWflwGateTag>(req_ent);
         }
 

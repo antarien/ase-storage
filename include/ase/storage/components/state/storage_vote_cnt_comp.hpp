@@ -60,7 +60,8 @@ namespace ase::storage {
 struct StorageVoteCntComponent {
     uint8_t votes_for = 0;                    // Count of ballots in favor
     uint8_t votes_against = 0;                // Count of ballots against
-    uint8_t votes_required = 0;               // Total eligible voters for quorum
+    uint8_t votes_abstain = 0;                // Count of abstentions (count toward quorum, not toward the outcome)
+    uint8_t votes_required = 0;               // Ballots that must be cast before the motion can be decided
     uint64_t deadline = 0;                    // Unix timestamp when voting closes
 };
 

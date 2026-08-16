@@ -5,31 +5,29 @@
  * ASE ECS COMPONENT (TAG)
  * =============================================================================
  *
- * @file        storage_tag_wflw_pend.hpp
- * @brief       StorageWflwPendTag - Workflow transition request awaiting processing
- * @description Marker for StorageReqWflwTranComponent entities not yet transitioned
+ * @file        storage_relm_edge_tag.hpp
+ * @brief       StorageRelmEdgeTag - Realm distributes edge-daemon binaries
+ * @description Identity tag for the single realm whose id is EDGE_REALM_ID
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    tag
- * @parity      server_only
+ * @parity      shared
  *
  * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
- *   Traeger ist dieselbe Antrags-Entity wie bei StorageWflwGateTag: die Marke haengt an
- *   StorageReqWflwTranComponent, und das ist bereits server_only. Sie markiert einen
- *   Bearbeitungsstand INNERHALB des Servers — StorageWflwDrnSystem setzt sie beim Leeren
- *   der Hub-Bruecke, StorageWflwGateSystem und StorageWflwTranSystem fuehren ihre Views
- *   ueber sie, und mit dem Urteil zerstoert StorageWflwTranSystem die Entity. Die Marke
- *   lebt damit nur zwischen Ingestion und Integration desselben Verarbeitungszugs; sie
- *   beschreibt die Warteschlange des Servers, nicht den Zustand des Assets.
- *   Der Zustand, den ein Client sehen soll, ist das LABEL und das Urteil: label auf
- *   StorageAcssRuleComponent (components.shared) sowie die Hub-Werte STG_WFLW_RES und
- *   STG_WFLW_STAGE unter dem Pfad-Owner. Auch das Warten selbst steht dort — als
- *   WFLW_RES_PENDING, von StorageWflwDrnSystem im selben Zug gesetzt, in dem diese Marke
- *   entsteht. Der Wartezustand geht dem Client also nicht verloren, er reist ueber den
- *   Hub statt ueber diese Marke.
- * @created     2026-07-11
- * @modified    2026-07-11
+ *   Ein Realm wird auf beiden Seiten gleich klassifiziert. Saemtliche uebrigen
+ *   Realm-Klassifikations-Tags stehen in codegen.json unter components.shared -
+ *   StorageRelmPublicTag, StorageRelmPersonalTag, StorageRelmOrgTag,
+ *   StorageRelmActiveTag, StorageRelmSuspendedTag, StorageRelmArchivedTag,
+ *   StorageRelmConcealTag - und die Realm-Entity, an der sie haengen
+ *   (StorageStaRelmComponent, StorageRelmIdnComponent), ebenfalls. Dieses Tag
+ *   beantwortet dieselbe Art Frage wie jene: WELCHER Realm ist das. Faende der
+ *   Client die sieben anderen Antworten vor und diese eine nicht, koennte er den
+ *   Edge-Realm nicht von einem beliebigen oeffentlichen unterscheiden und muesste
+ *   die Realm-Id wieder als String vergleichen - genau die Suche, die dieses Tag
+ *   auf der Serverseite abgeloest hat.
+ * @created     2026-08-16
+ * @modified    2026-08-16
  * @version     1.0.0
  *
  * ECS TAG COMPLIANCE
@@ -66,13 +64,20 @@
 namespace ase::storage {
 
 /**
- * @brief StorageWflwPendTag - Workflow transition request awaiting processing
+ * @brief StorageRelmEdgeTag - Realm holds the edge-daemon binary distribution
  *
- * State: Promote request drained from the Hub bridge, transition not yet applied
- * Filter: Used by StorageWflwTranSystem (with entt::exclude<StorageWflwGateTag>)
- * Added: StorageWflwDrnSystem when draining the Hub bridge entity
- * Removed: Entity destroyed by StorageWflwTranSystem after the verdict
+ * State: Identity, not lifecycle - orthogonal to Active/Suspended/Archived
+ * Filter: registry.view<StorageStaRelmComponent, StorageRelmEdgeTag>()
+ * Added: StorageEdgeIniSystem::on_start, on the realm it creates
+ * Removed: Never - the realm identity does not change while the entity lives
+ *
+ * The workflow systems need the entity id of the edge realm for their audit
+ * records. Before this tag they searched every realm and compared relm.id
+ * against EDGE_REALM_ID with a string compare - inside their per-request loop,
+ * so the cost was realms x requests every tick (WS-K.2c). The realm carries
+ * exactly one producer (StorageEdgeIniSystem), which makes the tag the SSOT for
+ * the same question and turns the search into a one-element View.
  */
-struct StorageWflwPendTag {};
+struct StorageRelmEdgeTag {};
 
 }  // namespace ase::storage

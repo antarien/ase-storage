@@ -3,16 +3,26 @@
 /**
  * ASE ECS COMPONENT (STATE)
  *
- * @file        storage_acss_cwrd_comp.hpp
- * @brief       StorageAcssCwrdComponent - Required codeword on an ACL rule
- * @description Entity-per-Item: one entity per required codeword per ACL rule.
- *              Keycard must have ALL required codewords to pass the ACL check.
+ * @file        storage_task_idn_comp.hpp
+ * @brief       StorageTaskIdnComponent - Need-to-know assignee as a comparable hash
+ * @description The user a need-to-know task is assigned to, in the ONLY form the
+ *              ladder compares.
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
- * @created     2026-04-04
- * @modified    2026-04-05
+ * @parity      shared
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   StorageStaTaskComponent - die Need-to-know-Aufgabe, deren assignee hier gehasht ist -
+ *   steht in modules/ase-storage/codegen.json unter components.shared. Die Aufgabe
+ *   erreicht den Client; dieser Zwilling traegt den Hash ihres Empfaengers und den
+ *   Pfad-Scope, nach dem der Client sie einem Asset zuordnet. Waere er server_only,
+ *   saehe der Client jede Aufgabe, aber keine als seine - "ist das meine Aufgabe" ist
+ *   ein Hash-Vergleich, und ohne den bliebe die Liste stumm statt leer.
+ *   Identitaet folgt ihrem Datensatz.
+ * @created     2026-08-16
+ * @modified    2026-08-16
  * @version     1.0.0
  *
  * ECS COMPONENT COMPLIANCE
@@ -49,18 +59,20 @@
 namespace ase::storage {
 
 /**
- * @brief StorageAcssCwrdComponent - One required codeword on an ACL rule
+ * @brief StorageTaskIdnComponent - Task assignee, comparable in one 32-bit test
  *
- * Entity-per-Item: one entity per required codeword per ACL rule.
- * Example: ACL rule requiring "ART" + "STORY" = 2 entities.
+ * "Is this task mine" is a lookup, so it compares hashes, never characters
+ * (WRFL_ASE_STRING_HANDLING Section 3). The task name and path scope stay strings
+ * in StorageStaTaskComponent: one is shown to people, the other is matched by path
+ * segment, and neither is an identity.
  *
  * @hub_reads  none
  * @hub_writes none
  */
-struct StorageAcssCwrdComponent {
-    uint32_t acss_ref = 0;                    // Entity ref to parent ACL rule entity
-    char required_cwrd[32] = {};              // Codeword that keycard must possess
-    uint32_t required_cwrd_hash = 0;          // entt::hashed_string of required_cwrd - the ONLY form compared
+struct StorageTaskIdnComponent {
+    uint32_t assignee_hash = 0;               // entt::hashed_string of StorageStaTaskComponent::assignee
+    uint32_t scope_hash = 0;                  // entt::hashed_string of the task path scope, wildcard stripped
+    uint32_t scope_len = 0;                   // Length of that scope (0 = the task scopes nothing)
 };
 
 }  // namespace ase::storage

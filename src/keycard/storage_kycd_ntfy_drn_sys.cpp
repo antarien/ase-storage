@@ -150,6 +150,7 @@
 #include <ase/storage/components/request/storage_req_kycd_relm_comp.hpp>
 #include <ase/storage/components/request/storage_req_kycd_cwrd_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
+#include <ase/storage/storage_acss_index_resource_manager.hpp>
 #include <ase/storage/types.hpp>
 // Hub API (discovery tag + notify Hub keys)
 #include <ase/hub/api.hpp>
@@ -181,6 +182,13 @@ void StorageKycdNtfyDrnSystem::on_start(ecs::Registry& /*registry*/) {
 }
 
 void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
+    auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
+    if (!idx_ptr || !(*idx_ptr)) {
+        log::error("[StorageKycdNtfyDrn] StorageAcssIndexResourceManager not in ctx (StorageIdnIdxSystem must run first)");
+        return;
+    }
+    auto& idx = **idx_ptr;
+
     // Tag-filtered view: request entities that carry the Hub-owned pend tag
     // but do NOT yet have a StorageReqKycdComponent (this system emplaces
     // it on first sight, so a re-iteration next tick is a no-op).
@@ -254,14 +262,11 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         if (realm_hash != 0) {
             float perm_f = hub::get(registry, owner, "SES_KYCD_NTF_PERM"_hs, 0.0f);
             if (ase::types::is_not_found(perm_f)) perm_f = 0.0f;
-            uint32_t realm_ref = INVALID_ENTITY;
-            auto relm_view = registry.view<StorageStaRelmComponent>();
-            for (auto [re, rc] : relm_view.each()) {
-                if (entt::hashed_string(rc.id).value() == realm_hash) {
-                    realm_ref = static_cast<uint32_t>(re);
-                    break;
-                }
-            }
+            // The realm is reached by its id hash, which is exactly the key the index is
+            // built on. The former version walked EVERY realm per notification and
+            // re-hashed each id string on the way (WS-K.2c) - a string walk inside a
+            // walk, for a lookup that is one number against one number.
+            const uint32_t realm_ref = idx.get_realm(static_cast<uint64_t>(realm_hash));
             if (realm_ref != INVALID_ENTITY) {
                 auto& relm_req = registry.emplace<StorageReqKycdRelmComponent>(req_entity);
                 relm_req.relm_ref = realm_ref;

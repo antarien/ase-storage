@@ -38,9 +38,21 @@ namespace ase::storage {
  * @brief StorageCncmFltSystem - Hides concealed realms from non-members
  *
  * @schedule Integration - run_after StorageAcssChkSystem
- * @reads    StorageRelmConcealTag, StorageStaRelmComponent
- * @writes   Filters realm list responses (returns not_found instead of access_denied)
- * @depends  Realm entities with StorageRelmConcealTag
+ * @reads    StorageStaRelmComponent + the five realm-state tags (Public, Active,
+ *           Conceal, Suspended, Archived) - all as View FILTERS, never as
+ *           branches inside a loop
+ * @writes   StorageRelmVisbTag on realms that may appear in an unauthenticated
+ *           listing, removed the moment one condition stops holding
+ * @depends  StorageIniSystem / StorageCredAcssRcvSystem classify realms on
+ *           creation; this system only DERIVES from that classification
+ *
+ * SCOPE - read this before extending it
+ *   Discoverability is viewer-INDEPENDENT, which is the only reason it may be
+ *   cached on the realm entity that every viewer reads. "Is this concealed realm
+ *   visible to user X" is a different question with a different answer per
+ *   requester, and it is already answered inside StorageAcssChkSystem's ladder
+ *   (public/owner exemption, then deny as realm_not_found so concealment leaks
+ *   nothing). Moving that here would cache one user's answer for all of them.
  */
 class StorageCncmFltSystem : public ecs::System {
 public:

@@ -163,6 +163,7 @@
 #include <ase/storage/components/state/storage_sta_idn_comp.hpp>
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
+#include <ase/storage/storage_acss_index_resource_manager.hpp>
 #include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
 #include <ase/storage/components/tag/storage_tag_kycd_rjct.hpp>
 // Hub API for client identity mirror (Hub API 2.0: no L3→L3 network import)
@@ -199,6 +200,13 @@ void StorageKycdLnkSystem::on_start(ecs::Registry& /*registry*/) {
 }
 
 void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
+    auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
+    if (!idx_ptr || !(*idx_ptr)) {
+        log::error("[StorageKycdLnk] StorageAcssIndexResourceManager not in ctx (StorageIdnIdxSystem must run first)");
+        return;
+    }
+    auto& idx = **idx_ptr;
+
     // Link each validated keycard entity to its network client entity
     // Hub API 2.0: find clients via hub::HubNetClaiRdyTag (Mirror Tag) + hub::get() for client_id
     auto auth_view = registry.view<StorageStaIdnComponent, StorageKycdVldTag>(
@@ -207,12 +215,13 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         auto& auth_idn = auth_view.get<StorageStaIdnComponent>(auth_entity);
         uint32_t target_client_id = auth_idn.client_id;
 
-        // Find matching client via Hub Mirror Tag (WRFL_ASE_HUB_ENTITY_DISCOVERY)
-        auto client_view = registry.view<hub::HubNetClaiRdyTag>();
-        for (auto client_entity : client_view) {
-            float net_id = hub::get(registry, static_cast<uint32_t>(client_entity), "NET_CLAI_ID"_hs);
-            if (types::is_not_found(net_id)) continue;
-            if (static_cast<uint32_t>(net_id) != target_client_id) continue;
+        // The client is reached by the id it publishes. StorageIdnIdxSystem indexed every
+        // mirrored client at the start of this frame, so the answer is one lookup - the
+        // former version walked EVERY client and read a Hub value for each, once per
+        // authenticated session (WS-K.2c).
+        const uint32_t client_id = idx.get_client(target_client_id);
+        if (client_id != INVALID_ENTITY) {
+            const auto client_entity = static_cast<ecs::Entity>(client_id);
 
             // Copy identity to client entity
             auto& client_idn = registry.emplace_or_replace<StorageStaIdnComponent>(client_entity);

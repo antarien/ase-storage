@@ -149,6 +149,7 @@
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_wflw_retr.hpp>
 #include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
+#include <ase/storage/components/tag/storage_relm_edge_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
 // String ops (L0)
@@ -222,6 +223,16 @@ void StorageWflwClnSystem::tick(ecs::Registry& registry, float dt) {
     ecs::Entity rules[WFLW_REQ_BATCH];
     uint32_t rules_n = 0;
 
+    // Edge realm entity ref for the audit records. The answer does not depend on the
+    // retired record, so it is resolved ONCE per tick instead of once per record. The
+    // tag carries the identity (StorageEdgeIniSystem is its only producer), which
+    // replaces the former scan over every realm with a string compare per record.
+    uint32_t relm_ref = 0;
+    for (auto relm_ent : registry.view<StorageStaRelmComponent, StorageRelmEdgeTag>()) {
+        relm_ref = static_cast<uint32_t>(relm_ent);
+        break;
+    }
+
     auto retr_view = registry.view<StorageWflwRetrComponent, StorageWflwRetrTag>();
     for (auto [retr_ent, retr] : retr_view.each()) {
         if (done_n >= WFLW_REQ_BATCH) break;
@@ -232,16 +243,6 @@ void StorageWflwClnSystem::tick(ecs::Registry& registry, float dt) {
         }
         const uint64_t age = now - retr.retired_at;
         if (age < WFLW_RETIRED_RETENTION_S) continue;
-
-        // Edge realm entity ref for the audit record (single-pass inline lookup).
-        uint32_t relm_ref = 0;
-        auto relm_view = registry.view<StorageStaRelmComponent>();
-        for (auto [relm_ent, relm] : relm_view.each()) {
-            if (ase::utils::str_equal(relm.id, EDGE_REALM_ID, MAX_REALM_ID)) {
-                relm_ref = static_cast<uint32_t>(relm_ent);
-                break;
-            }
-        }
 
         // Remove the asset and every companion artifact (missing ones are fine).
         char asset_abs[512] = {};

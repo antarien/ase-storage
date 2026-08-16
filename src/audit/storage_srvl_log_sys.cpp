@@ -141,8 +141,18 @@
 
 // Own header FIRST
 #include <ase/storage/systems/audit/storage_srvl_log_sys.hpp>
+// Components + tags from same module
+#include <ase/storage/components/state/storage_buf_audt_comp.hpp>
+#include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
+#include <ase/storage/types.hpp>
+// Hub API (the streak must outlive the tick that produced it)
+#include <ase/hub/api.hpp>
+
+#include <entt/core/hashed_string.hpp>
 // Logging
 #include <ase/log/log.hpp>
+
+#include <cstdint>
 
 using namespace entt::literals;
 
@@ -151,7 +161,7 @@ namespace ase::storage {
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 namespace {
 
-// No helper functions needed → anomaly detection scans audit entries via Tag-filtered Views
+// No helper functions needed → the scan is one flat Tag-filtered View pass
 
 }  // anonymous namespace
 
@@ -162,8 +172,63 @@ void StorageSrvlLogSystem::on_start(ecs::Registry& /*registry*/) {
     log::debug("[StorageSrvlLog] Started");
 }
 
-void StorageSrvlLogSystem::tick(ecs::Registry& /*registry*/, float /*dt*/) {
-    // Anomaly detection scans recent audit entries for suspicious patterns
+void StorageSrvlLogSystem::tick(ecs::Registry& registry, float dt) {
+    (void)dt;
+
+    // ONE flat pass over the decisions still pending persistence. This system
+    // runs in Preservation AHEAD of StorageAudtWritSystem for a hard reason:
+    // the writer ships each decision and destroys its entity in the same stage,
+    // and Observation (72) comes after Preservation (71) - a reader scheduled
+    // there would find an empty view every frame and report a permanently quiet
+    // system while denials streamed through.
+    for (auto [aud_ent, aud] :
+         registry.view<StorageBufAudtComponent, StorageAudtPendTag>().each()) {
+        (void)aud_ent;
+        if (aud.user_id[0] == '\0') continue;  // unauthenticated attempt - no owner to attribute it to
+
+        const uint32_t owner = entt::hashed_string(aud.user_id).value();
+
+        if (aud.result != AUD_DENIED) {
+            // A granted access ends the streak AND retires the rows. Leaving
+            // them at 0.0 would be the quiet leak: a Hub value IS an entity, and
+            // only remove() destroys it - three rows per user who ever tripped,
+            // out of a 20-bit entity index.
+            hub::remove(registry, owner, "SES_ACSS_DENY_STREAK"_hs);
+            hub::remove(registry, owner, "SES_ACSS_DENY_STAMP"_hs);
+            hub::remove(registry, owner, "SES_ACSS_ANOMALY"_hs);
+            continue;
+        }
+
+        // Every read is followed by is_measured(), not exists(): every tier
+        // loads the same hub_metrics.json, so the key is PRESENT with its JSON
+        // default even on a tier that never wrote it. Reading that default as a
+        // previous streak would invent a history this user does not have.
+        const float raw_streak = hub::get(registry, owner, "SES_ACSS_DENY_STREAK"_hs, 0.0f);
+        const bool streak_known = hub::is_measured(registry, owner, "SES_ACSS_DENY_STREAK"_hs);
+        const float raw_stamp = hub::get(registry, owner, "SES_ACSS_DENY_STAMP"_hs, 0.0f);
+        const bool stamp_known = hub::is_measured(registry, owner, "SES_ACSS_DENY_STAMP"_hs);
+
+        const bool has_history = streak_known && stamp_known;
+        const uint32_t prev_streak = has_history ? static_cast<uint32_t>(raw_streak) : 0u;
+        const uint64_t prev_stamp = has_history ? static_cast<uint64_t>(raw_stamp) : 0u;
+
+        // Masked stamps, so the subtraction stays exact in the Hub's float32
+        // lane. The mask also makes the wrap harmless: a gap computed across it
+        // comes out large, which only ever ends a streak that was already stale.
+        const uint64_t stamp = aud.timestamp & SRVL_STAMP_MASK;
+        const uint64_t gap = (stamp - prev_stamp) & SRVL_STAMP_MASK;
+        const uint32_t streak = (prev_streak && gap <= SRVL_WINDOW_S) ? prev_streak + 1u : 1u;
+
+        hub::set(registry, owner, "SES_ACSS_DENY_STREAK"_hs, static_cast<float>(streak));
+        hub::set(registry, owner, "SES_ACSS_DENY_STAMP"_hs, static_cast<float>(stamp));
+
+        if (streak >= static_cast<uint32_t>(SRVL_DENY_THRESHOLD)) {
+            hub::set(registry, owner, "SES_ACSS_ANOMALY"_hs, 1.0f);
+            log::warn("[StorageSrvlLog] {} denials within {}s for user {} - last: {} on {} (action {})",
+                      streak, SRVL_WINDOW_S, aud.user_id, aud.reason, aud.path,
+                      static_cast<uint32_t>(aud.action));
+        }
+    }
 }
 
 void StorageSrvlLogSystem::on_stop(ecs::Registry& /*registry*/) {

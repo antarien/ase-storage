@@ -1,49 +1,62 @@
 /**
  * ASE ECS SYSTEM IMPLEMENTATION
  *
- * @file        storage_wflw_pst_sys.cpp
- * @brief       StorageWflwPstSystem - durable workflow-label persist (frame 112)
+ * @file        storage_idn_idx_sys.cpp
+ * @brief       StorageIdnIdxSystem - indexes the identities the frame resolves by key
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
- * @schedule    Preservation
- * @created     2026-07-11
- * @modified    2026-07-11
+ * @schedule    Ingestion
+ * @created     2026-08-16
+ * @modified    2026-08-16
  * @version     1.0.0
  *
- * CAUSAL CHAIN (Workflow-Label Durable Persist)
+ * CAUSAL CHAIN (Identity Index Build)
  *
- *   [StorageWflwTranSystem applied a transition + staged a persist buffer]
+ *   [Reception created realms; the Hub mirrors ready network clients]
  *          │
- *          │ Preservation schedule drains the persist buffers
+ *          │ Each identity publishes a key: a realm its id hash, a client its NET_CLAI_ID
  *          ▼
  *   ┌─────────────────────────────────────────────┐
- *   │  THIS SYSTEM: StorageWflwPstSystem          │
+ *   │  THIS SYSTEM: StorageIdnIdxSystem           │
  *   │                                             │
  *   │  READS:                                     │
- *   │    - StorageBufWflwComponent                │
- *   │    - StorageWflwPstPendTag (filter)         │
+ *   │    - StorageRelmIdnComponent (realms)       │
+ *   │    - hub::HubNetClaiRdyTag (ready clients)  │
  *   │                                             │
  *   │  WRITES:                                    │
- *   │    - [112][req_id:u64][doc_len:u32][doc]    │
- *   │      onto OutboundQueueResourceManager      │
+ *   │    - StorageAcssIndexResourceManager (ctx)  │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Replica REPLACE-upserts storage_workflow_labels keyed {realm,path}
+ *          │ Both reachable by key, in O(1)
  *          ▼
- *   ReplicaEdgeWflwPstSystem (ase-replication, Preservation)
+ *   StorageKycdNtfyDrnSystem and StorageKycdLnkSystem resolve without scanning
  *
- * HUB Pattern (N/A - No Hub reads/writes)
+ * WHY THIS SYSTEM EXISTS BESIDE StorageAcssIdxSystem
+ *   The frame runs Reception, then Ingestion, then Integration. Realms are created in
+ *   Reception and read from Ingestion onwards; keycards are minted DURING Ingestion and
+ *   must reach the Integration ladder in the SAME frame. One rebuild cannot honestly
+ *   serve both: an early one hides a freshly minted keycard for a tick - its owner's
+ *   first access would be refused - and a late one leaves the Ingestion readers with
+ *   nothing to read.
+ *
+ *   The relations are therefore split by the stage that can produce them, and each has
+ *   exactly ONE writer. This system owns realms and clients; StorageAcssIdxSystem owns
+ *   rules, links, required codewords, tasks and edges. Neither clears the other's rows.
+ *
+ * HUB Pattern (Active - reads NET_CLAI_ID)
  *
  * READS (from Hub):
- *   (none)
+ *   NET_CLAI_ID - the network client id a mirrored client entity publishes
  *
  * WRITES (to Hub):
- *   (none — the document rides the binary wire as string DATA, never the Hub)
+ *   (none)
  *
- * FLYWEIGHT PATTERN (Active - transport::OutboundQueueResourceManager via ctx)
- *   Frame staging onto the L1 transport outbound queue.
+ * FLYWEIGHT PATTERN (Active - StorageAcssIndexResourceManager via ctx)
+ *   Registered by StorageAcssIdxSystem::on_start. Every on_start runs during startup,
+ *   before any tick of any schedule, so the manager is present when this system first
+ *   ticks no matter which schedule runs first.
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -140,105 +153,88 @@
 // ALLOWED:   <cstdint>, <cmath>, <cassert>, ase-* headers
 
 // Own header FIRST
-#include <ase/storage/systems/workflow/storage_wflw_pst_sys.hpp>
+#include <ase/storage/systems/acl/storage_idn_idx_sys.hpp>
 // Components from same module
-#include <ase/storage/components/state/storage_buf_wflw_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_wflw_pst_pend.hpp>
+#include <ase/storage/components/state/storage_relm_idn_comp.hpp>
+#include <ase/storage/storage_acss_index_resource_manager.hpp>
 #include <ase/storage/types.hpp>
-// Transport (L1 via ctx — outbound frame staging, mirror StorageCredAcssRspSystem)
-#include <ase/transport/outbound_queue_resource_manager.hpp>
-#include <ase/transport/types.hpp>
-// String ops (L0)
-#include <ase/utils/strops.hpp>
-
-#include <entt/core/hashed_string.hpp>
+// Hub (Layer 1)
+#include <ase/hub/api.hpp>
+// Types
+#include <ase/types/types.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
-#include <cstdint>
-#include <cstring>
+#include <entt/core/hashed_string.hpp>
 
 using namespace entt::literals;
 
 namespace ase::storage {
 
-// Anonymous namespace for helper FUNCTIONS (pure frame/doc build, no View/Query).
+// HELPERS - PURE FUNCTIONS ONLY!
+// NO STRUCTS HERE! Structs = Data = Components!
+// NO View/Query operations in helpers! Only pure math!
 namespace {
 
-// Serialize one workflow-label document ({"realm","path","label","updated_by",
-// "updated_at"}). The string fields go through str_append_json_safe: they are
-// already sanitized at drain time, but a document assembled from request data
-// must not depend on a caller upstream having done it - the same skip applied
-// twice is idempotent, while the one time it is missing upstream it is the
-// difference between a valid document and an injected one.
-void build_wflw_doc(char* doc, uint32_t doc_size, const char* realm, const char* path,
-                    const char* label, const char* updated_by, uint64_t updated_at) {
-    ase::utils::str_copy(doc, doc_size, "{\"realm\":\"");
-    ase::utils::str_append_json_safe(doc, doc_size, realm);
-    ase::utils::str_append(doc, doc_size, "\",\"path\":\"");
-    ase::utils::str_append_json_safe(doc, doc_size, path);
-    ase::utils::str_append(doc, doc_size, "\",\"label\":\"");
-    ase::utils::str_append_json_safe(doc, doc_size, label);
-    ase::utils::str_append(doc, doc_size, "\",\"updated_by\":\"");
-    ase::utils::str_append_json_safe(doc, doc_size, updated_by);
-    ase::utils::str_append(doc, doc_size, "\",\"updated_at\":");
-    ase::utils::str_append_u64(doc, doc_size, updated_at);
-    ase::utils::str_append(doc, doc_size, "}");
+// A Hub value is an f32, so the client id survives the round trip only while it fits the
+// 24-bit mantissa. Converting in ONE named place is what keeps that limit visible; a bare
+// cast at the call site would hide the moment ids grow past it and clients silently start
+// indexing under a neighbouring number.
+uint32_t clai_id_from_hub(float published) {
+    return static_cast<uint32_t>(published);
 }
 
-}  // anonymous namespace
+}  // namespace
 
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
-void StorageWflwPstSystem::on_start(ecs::Registry& /*registry*/) {
-    log::debug("[StorageWflwPst] Started");
+void StorageIdnIdxSystem::on_start(ecs::Registry& /*registry*/) {
+    log::debug("[StorageIdnIdx] Started");
 }
 
-void StorageWflwPstSystem::tick(ecs::Registry& registry, float dt) {
+void StorageIdnIdxSystem::tick(ecs::Registry& registry, float dt) {
     (void)dt;
 
-    auto* out = registry.ctx().find<transport::OutboundQueueResourceManager>();
-    if (out == nullptr) return;  // no outbound lane on this tier → buffers stay queued
+    auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
+    if (!idx_ptr || !(*idx_ptr)) {
+        log::error("[StorageIdnIdx] StorageAcssIndexResourceManager not in ctx (StorageAcssIdxSystem registers it)");
+        return;
+    }
+    auto& idx = **idx_ptr;
 
-    // Deferred deletion: collect shipped buffers, destroy after the loop.
-    ecs::Entity done[WFLW_REQ_BATCH];
-    uint32_t done_n = 0;
+    // Only the rows this system owns are dropped. A shared clear is how two writers start
+    // fighting over one row: it would erase the Integration builder's work while its own
+    // readers still need it.
+    idx.clear_ingestion();
 
-    auto buf_view = registry.view<StorageBufWflwComponent, StorageWflwPstPendTag>();
-    for (auto [buf_ent, buf] : buf_view.each()) {
-        if (done_n >= WFLW_REQ_BATCH) break;
-
-        char doc[WFLW_PST_DOC_BUF] = {};
-        build_wflw_doc(doc, WFLW_PST_DOC_BUF, buf.realm, buf.path, buf.label,
-                       buf.updated_by, buf.updated_at);
-        const uint32_t doc_len = ase::utils::str_len(doc, WFLW_PST_DOC_BUF);
-
-        // [112][req_id:u64][doc_len:u32][doc] — same envelope as the keycard
-        // persist frame 35; req_id = hashed_string(path) is a correlation token
-        // only, the Replica upsert keys on the parsed {realm,path}.
-        char frame[13 + WFLW_PST_DOC_BUF] = {};
-        frame[0] = static_cast<char>(EDGE_WFLW_BIN_MSG_PERSIST);
-        const uint64_t req_id = static_cast<uint64_t>(entt::hashed_string(buf.path).value());
-        std::memcpy(frame + 1, &req_id, 8);
-        std::memcpy(frame + 9, &doc_len, 4);
-        std::memcpy(frame + 13, doc, doc_len);
-        out->push_outbound(frame, 13u + doc_len);
-
-        log::info("[StorageWflwPst] persisted workflow label {} for {} (frame 112, {} bytes)",
-                  buf.label, buf.path, 13u + doc_len);
-
-        done[done_n] = buf_ent;
-        ++done_n;
+    // Realms under their id hash. The hash is READ from the identity component, never
+    // re-derived from the string, so bucket key and stored identity are one number.
+    for (auto [relm_ent, relm_idn] : registry.view<StorageRelmIdnComponent>().each()) {
+        idx.store_realm(static_cast<uint64_t>(relm_idn.id_hash),
+                        static_cast<uint32_t>(relm_ent));
     }
 
-    for (uint32_t i = 0; i < done_n; ++i) {
-        registry.destroy(done[i]);
+    // Network clients under the id they publish. A mirrored client without the value is
+    // not a fault - the Hub mirror can be ready before the id is written - so it is
+    // skipped and picked up on the next frame.
+    for (auto client_ent : registry.view<hub::HubNetClaiRdyTag>()) {
+        const float net_id =
+            hub::get(registry, static_cast<uint32_t>(client_ent), "NET_CLAI_ID"_hs);
+        if (ase::types::is_not_found(net_id)) {
+            continue;
+        }
+        idx.store_client(clai_id_from_hub(net_id), static_cast<uint32_t>(client_ent));
     }
 }
 
-void StorageWflwPstSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::debug("[StorageWflwPst] Stopped");
+void StorageIdnIdxSystem::on_stop(ecs::Registry& registry) {
+    log::debug("[StorageIdnIdx] Stopped");
+
+    auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
+    if (idx_ptr && *idx_ptr) {
+        (*idx_ptr)->clear_ingestion();
+    }
 }
 
 }  // namespace ase::storage

@@ -13,6 +13,22 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    tag
+ * @parity      server_only
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   Die Marke sagt aus, dass der dauerhafte Keycard-Datensatz bei der MongoDB-
+ *   Autoritaet abgesetzt ist. Das ist eine Aussage ueber einen Schreibvorgang der
+ *   Replica, nicht ueber die Keycard. Der Browser haelt keine MongoDB und keinen
+ *   Persist-Treiber; drueben waere die Marke ein Zustand, den niemand setzen und
+ *   niemand aufloesen kann. Gemessen: eine Suche nach dem Tag-Namen trifft im
+ *   ganzen Baum nur diese Datei. Der Emit-Pfad, der sie las, steht heute nicht
+ *   mehr in ase-storage — der dauerhafte Datensatz geht als DATA-Frame
+ *   BIN_MSG_EDGE_KYCD_PERSIST direkt von den Praegestellen zur Replica
+ *   (storage_module.hpp, Zeilen 206 bis 210). Der Zielort bleibt damit die
+ *   Server-Seite, die Einstufung aendert das nicht. Was der Client ueber eine
+ *   Keycard wissen muss, tragen die gespiegelten Lebenszyklus-Tags
+ *   (StorageKycdPendTag, StorageKycdVldTag, StorageKycdRevTag, StorageKycdExpTag)
+ *   und StorageStaKycdComponent — hier geht nichts verloren.
  * @created     2026-06-24
  * @modified    2026-06-24
  * @version     1.0.0

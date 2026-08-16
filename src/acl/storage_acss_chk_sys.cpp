@@ -156,6 +156,11 @@
 #include <ase/storage/components/state/storage_kycd_cwrd_comp.hpp>
 #include <ase/storage/components/state/storage_lat_lnk_comp.hpp>
 #include <ase/storage/components/state/storage_sta_task_comp.hpp>
+#include <ase/storage/components/state/storage_relm_idn_comp.hpp>
+#include <ase/storage/components/state/storage_rule_idn_comp.hpp>
+#include <ase/storage/components/state/storage_kycd_idn_comp.hpp>
+#include <ase/storage/components/state/storage_lnk_idn_comp.hpp>
+#include <ase/storage/components/state/storage_task_idn_comp.hpp>
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_acss_grant.hpp>
 #include <ase/storage/components/tag/storage_tag_acss_deny.hpp>
@@ -163,6 +168,7 @@
 #include <ase/storage/components/tag/storage_tag_relm_conceal.hpp>
 #include <ase/storage/components/tag/storage_tag_relm_public.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
+#include <ase/storage/storage_acss_index_resource_manager.hpp>
 #include <ase/storage/types.hpp>
 #include <ase/utils/strops.hpp>
 // Logging
@@ -180,6 +186,13 @@ namespace ase::storage {
 // NO View/Query operations in helpers! Only pure math!
 namespace {
 
+// The rolling fold below must produce the SAME numbers entt produces, because the rule
+// side stores entt hashes. Asserting it at compile time turns a silent divergence - the
+// kind that denies every access and looks like a data problem - into a build failure.
+static_assert(((ACSS_FNV_OFFSET ^ static_cast<uint32_t>('a')) * ACSS_FNV_PRIME)
+                  == entt::hashed_string::value("a", 1),
+              "ACSS_FNV_* no longer match entt::hashed_string");
+
 void emit_audit(ecs::Registry& registry, uint32_t relm_ref, uint32_t proj_ref,
                 const char* user_id, uint8_t action, const char* path,
                 uint64_t timestamp, uint8_t result, const char* reason) {
@@ -194,6 +207,43 @@ void emit_audit(ecs::Registry& registry, uint32_t relm_ref, uint32_t proj_ref,
     aud.result = result;
     ase::utils::str_copy(aud.reason, 64, reason);
     registry.emplace<StorageAudtPendTag>(aud_ent);
+}
+
+// Hash of EVERY prefix of the path, in one pass: out[L] is the hash of path[0..L).
+//
+// FNV-1a folds left to right - hash = (hash ^ c) * prime - so the running value after L
+// characters IS the hash of the L-character prefix. One walk of the path therefore
+// yields every prefix hash a rule could ask about, and a location rule is then a single
+// 32-bit equality. Before, every rule walked the path again.
+//
+// The semantics are the ones the character comparison had, EXACTLY: a location rule
+// matched when the path began with the pattern, the pattern's own trailing wildcard
+// character included. Nothing here widens or narrows that - a refactor that quietly
+// changed which assets a rule governs would be a change to access control disguised as
+// a performance fix.
+void path_prefix_hashes(const char* path, uint32_t path_len, uint32_t* out) {
+    uint32_t running = ACSS_FNV_OFFSET;
+    out[0] = running;
+    for (uint32_t i = 0; i < path_len; ++i) {
+        running = (running ^ static_cast<uint32_t>(path[i])) * ACSS_FNV_PRIME;
+        out[i + 1u] = running;
+    }
+}
+
+// Hashes of every EXTENSION an asset path ends with: each suffix beginning at a '.'.
+// "build-1.2.3.spdx.json" yields ".json", ".spdx.json", ".3.spdx.json" and so on, so an
+// extension rule finds itself no matter how many dots the version number carries.
+uint32_t path_extension_hashes(const char* path, uint32_t path_len, uint32_t* out_hash,
+                               uint32_t* out_len, uint32_t max_out) {
+    uint32_t count = 0;
+    for (uint32_t at = 0; at < path_len && count < max_out; ++at) {
+        if (path[at] != '.') { continue; }
+        const uint32_t len = path_len - at;
+        out_hash[count] = entt::hashed_string::value(path + at, len);
+        out_len[count] = len;
+        ++count;
+    }
+    return count;
 }
 
 }  // anonymous namespace
@@ -213,12 +263,26 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
     auto& mgr = **mgr_ptr;
     uint64_t now = mgr.get_wall_time_seconds();
 
+    auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
+    if (!idx_ptr || !(*idx_ptr)) {
+        log::error("[StorageAcssChk] StorageAcssIndexResourceManager not in ctx (StorageAcssIdxSystem must run first)");
+        return;
+    }
+    auto& idx = **idx_ptr;
+
     // SINGLE-PASS: evaluate each pending access request through the canonical Section 14.1 ladder.
     // Request entities carry clearance + permissions pre-resolved from the validated keycard.
     // The ladder is strictly ordered and every GRANT happens at step 10 ONLY. There are no
     // pre-ladder shortcut grants: the public realm and the realm-owner power are modelled
     // INSIDE the ladder (PUBLIC protection rule + owner keycard preset) so they too pass
     // through clearance/codeword/permission/label/need-to-know/quota.
+    // Tag-filtered classification views, built ONCE. A request names its realm by entity
+    // id, so the classification is a membership test on the filtered view — O(1), and the
+    // tag stays where the ECS rules want it: in the View filter, never in an all_of<Tag>
+    // runtime check. Both were per-request scans over every realm before (WS-K.2c).
+    auto pub_view = registry.view<StorageStaRelmComponent, StorageRelmPublicTag>();
+    auto cnc_view = registry.view<StorageStaRelmComponent, StorageRelmConcealTag>();
+
     auto req_view = registry.view<StorageReqAcssComponent>(entt::exclude<StorageAcssGrantTag, StorageAcssDenyTag>);
     for (auto entity : req_view) {
         auto& req = req_view.get<StorageReqAcssComponent>(entity);
@@ -246,49 +310,63 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         bool     realm_found = false;
         bool     public_realm = false;
         bool     owner_preset = false;
-        {
-            auto relm_view = registry.view<StorageStaRelmComponent>();
-            for (auto re : relm_view) {
-                if (static_cast<uint32_t>(re) != req.relm_ref) { continue; }
-                auto& rc = relm_view.get<StorageStaRelmComponent>(re);
-                realm_found = true;
-                ase::utils::str_copy(target_id, MAX_REALM_ID, rc.id);
-                ase::utils::str_copy(target_owner, MAX_OWNER_ID, rc.owner);
-                target_tier = rc.tier;
+        // req.relm_ref IS the realm's entity id, so the realm is reached directly. The
+        // former version scanned EVERY realm and compared each entity id against the one
+        // it already held — a linear search for a lookup the registry answers in O(1),
+        // and it ran once per request (WS-K.2c).
+        const auto relm_ent = static_cast<ecs::Entity>(req.relm_ref);
+        // The requester's identity, hashed ONCE per request. Every identity test below
+        // is a 32-bit equality against this value: identity is a lookup, and a lookup
+        // compares hashes, never characters (WRFL_ASE_STRING_HANDLING Section 3).
+        const uint32_t user_hash = entt::hashed_string(req.user_id).value();
+        if (auto* rc = registry.try_get<StorageStaRelmComponent>(relm_ent)) {
+            realm_found = true;
+            ase::utils::str_copy(target_id, MAX_REALM_ID, rc->id);
+            ase::utils::str_copy(target_owner, MAX_OWNER_ID, rc->owner);
+            target_tier = rc->tier;
+            // Identity lives beside the record. A realm without it cannot be classified
+            // at all, so its absence is reported rather than silently treated as private.
+            auto* rc_idn = registry.try_get<StorageRelmIdnComponent>(relm_ent);
+            if (rc_idn == nullptr) {
+                log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageAcssChkSystem",
+                           req.relm_ref, "StorageRelmIdnComponent");
+            } else {
                 // Public 'ase' realm by id is the in-ladder PUBLIC protection source
-                public_realm = ase::utils::str_equal(rc.id, ACSS_REALM_PUBLIC_ID, MAX_REALM_ID);
+                public_realm = rc_idn->id_hash == ACSS_REALM_PUBLIC_HASH;
                 // Direct owner of this realm → owner keycard preset (ARCH :819)
-                owner_preset = ase::utils::str_equal(rc.owner, req.user_id, MAX_OWNER_ID);
-                break;
+                owner_preset = rc_idn->owner_hash == user_hash;
             }
         }
-        // Public realm classification via Tag-filtered View (a realm carrying the
+        // Public realm classification via the tag on THAT realm (a realm carrying the
         // StorageRelmPublicTag is public regardless of its id naming).
         if (realm_found && !public_realm) {
-            auto pub_view = registry.view<StorageStaRelmComponent, StorageRelmPublicTag>();
-            for (auto re : pub_view) {
-                if (static_cast<uint32_t>(re) != req.relm_ref) { continue; }
-                public_realm = true;
-                break;
-            }
+            public_realm = pub_view.contains(relm_ent);
         }
         // Parent-realm ownership: owner of "org/adg" governs "org/adg/projects/x".
+        // The condition the scan tested - rc.id is a prefix of target_id AND the next
+        // character is '/' - is exactly "rc.id is a path ANCESTOR of target_id", and the
+        // ancestors of a path can be read off the path itself. Enumerating them costs
+        // path depth and hits the index once per step, where the scan cost one pass over
+        // every realm per request (WS-K.2c).
         if (realm_found && !owner_preset) {
-            uint32_t target_len = ase::utils::str_len(target_id, MAX_REALM_ID);
-            auto relm_view = registry.view<StorageStaRelmComponent>();
-            for (auto re : relm_view) {
-                auto& rc = relm_view.get<StorageStaRelmComponent>(re);
-                uint32_t rc_len = ase::utils::str_len(rc.id, MAX_REALM_ID);
-                if (rc_len < target_len && rc_len > 0u) {
-                    bool prefix = true;
-                    for (uint32_t i = 0; i < rc_len; ++i) {
-                        if (rc.id[i] != target_id[i]) { prefix = false; break; }
-                    }
-                    if (prefix && target_id[rc_len] == '/' &&
-                        ase::utils::str_equal(rc.owner, req.user_id, MAX_OWNER_ID)) {
-                        owner_preset = true;
-                        break;
-                    }
+            const uint32_t target_len = ase::utils::str_len(target_id, MAX_REALM_ID);
+            char ancestor[MAX_REALM_ID] = {};
+            for (uint32_t cut = 1u; cut < target_len && !owner_preset; ++cut) {
+                if (target_id[cut] != '/') { continue; }
+                for (uint32_t i = 0; i < cut; ++i) { ancestor[i] = target_id[i]; }
+                ancestor[cut] = '\0';
+                const uint32_t ancestor_hash = entt::hashed_string(ancestor).value();
+                const uint32_t cand = idx.get_realm(static_cast<uint64_t>(ancestor_hash));
+                if (cand == INVALID_ENTITY) { continue; }
+                auto* rc_idn =
+                    registry.try_get<StorageRelmIdnComponent>(static_cast<ecs::Entity>(cand));
+                if (rc_idn == nullptr) { continue; }
+                // Identity is the hash. The bucket key and the stored id_hash are the
+                // same number, so agreeing on it IS the confirmation - there is nothing
+                // a character comparison would add beyond the cost of walking the string.
+                if (rc_idn->id_hash != ancestor_hash) { continue; }
+                if (rc_idn->owner_hash == user_hash) {
+                    owner_preset = true;
                 }
             }
         }
@@ -296,12 +374,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // Public realms are never concealed; the owner-preset always sees its own realm.
         bool concealed = false;
         if (realm_found && !public_realm && !owner_preset) {
-            auto cnc_view = registry.view<StorageStaRelmComponent, StorageRelmConcealTag>();
-            for (auto re : cnc_view) {
-                if (static_cast<uint32_t>(re) != req.relm_ref) { continue; }
-                concealed = true;
-                break;
-            }
+            concealed = cnc_view.contains(relm_ent);
         }
         if (!realm_found || concealed) {
             // Concealment leaks nothing: deny as realm_not_found, never access_denied.
@@ -324,40 +397,91 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // the in-ladder replacement of the old pre-ladder "ase_shared" grant.
         uint8_t  required_protection = PROTECTION_PUBLIC;
         uint32_t matched_rule = INVALID_ENTITY;
-        char     rule_label[MAX_LABEL_LEN] = {};
+        uint32_t rule_label_hash = 0;
+        // The request's own prefixes and extensions, hashed ONCE. Three separate gates
+        // below ask "does this path lie under X" - the ACL rules, the lattice share and
+        // the need-to-know scope - and all three read these same numbers.
+        uint32_t pfx_hash[MAX_PATH_LEN + 1] = {};
+        uint32_t ext_hash[ACSS_MAX_PATH_PARTS] = {};
+        uint32_t ext_len[ACSS_MAX_PATH_PARTS] = {};
+        const uint32_t path_len = ase::utils::str_len(req.path, MAX_PATH_LEN);
+        path_prefix_hashes(req.path, path_len, pfx_hash);
+        const uint32_t ext_n = path_extension_hashes(req.path, path_len, ext_hash,
+                                                     ext_len, ACSS_MAX_PATH_PARTS);
         {
-            // Pattern semantics (types.hpp ACSS_MATCH_SUFFIX_BONUS): a LEADING '*'
-            // makes the rule a SUFFIX rule ("*.sig" governs companion artifacts that
-            // sit BESIDE binaries — a prefix cannot express them); anything else is
-            // the established prefix rule. The MOST SPECIFIC rule wins (suffix over
-            // prefix, longer pattern over shorter) — never first-iteration order,
-            // which is storage-order dependent and would let a broad "release/"
-            // prefix swallow the "*.sig" codeword requirement.
+            // Pattern semantics (types.hpp ACSS_MATCH_SUFFIX_BONUS): an extension rule
+            // ("*.sig" governs companion artifacts that sit BESIDE binaries, where no
+            // location can reach them) carries StorageAcssRuleSufxTag; every other rule
+            // is a location rule. The MOST SPECIFIC rule wins (extension over location,
+            // longer literal over shorter) — never first-iteration order, which is
+            // storage-order dependent and would let a broad location rule swallow the
+            // "*.sig" codeword requirement.
+            //
+            // The request's own locations and extensions are hashed ONCE, above; each
+            // rule is then one 32-bit equality against them. The two kinds are matched by
+            // two different computations, so they are two loops over two Tag-separated
+            // buckets - never one loop that reads a discriminator and branches.
             uint32_t best_score = 0;
-            auto acl_view = registry.view<StorageAcssRuleComponent>();
-            for (auto acl_ent : acl_view) {
-                auto& rule = acl_view.get<StorageAcssRuleComponent>(acl_ent);
-                if (rule.relm_ref != req.relm_ref) { continue; }
+            const uint32_t loc_rule_count = idx.get_location_rule_count(req.relm_ref);
+            for (uint32_t rule_index = 0; rule_index < loc_rule_count; ++rule_index) {
+                const uint32_t acl_id = idx.get_location_rule(req.relm_ref, rule_index);
+                if (acl_id == INVALID_ENTITY) { continue; }
+                const auto acl_ent = static_cast<ecs::Entity>(acl_id);
+                auto* rule_ptr = registry.try_get<StorageAcssRuleComponent>(acl_ent);
+                if (rule_ptr == nullptr) { continue; }
+                auto& rule = *rule_ptr;
+                // rule.relm_ref == req.relm_ref holds by construction of the bucket.
                 if (rule.proj_ref != req.proj_ref && rule.proj_ref != 0) { continue; }
-                uint32_t plen = ase::utils::str_len(rule.path_pattern, MAX_PATH_LEN);
-                if (plen < 1u) { continue; }
-                bool is_suffix = rule.path_pattern[0] == '*';
-                bool match = false;
-                if (is_suffix) {
-                    uint32_t slen = plen - 1u;
-                    uint32_t alen = ase::utils::str_len(req.path, MAX_PATH_LEN);
-                    match = slen >= 1u && alen >= slen &&
-                            ase::utils::str_equal(req.path + (alen - slen), rule.path_pattern + 1, slen);
-                } else {
-                    match = ase::utils::str_equal(rule.path_pattern, req.path, plen);
+                auto* rule_idn = registry.try_get<StorageRuleIdnComponent>(acl_ent);
+                if (rule_idn == nullptr) {
+                    log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageAcssChkSystem",
+                               acl_id, "StorageRuleIdnComponent");
+                    continue;
                 }
-                if (!match) { continue; }
-                uint32_t score = (is_suffix ? ACSS_MATCH_SUFFIX_BONUS : 1u) + plen;
+                // The path must be at least as long as the pattern and must begin with
+                // it - the same condition the character comparison enforced, now one
+                // 32-bit equality against the prefix hash of exactly that length.
+                if (rule_idn->match_len < 1u) { continue; }
+                if (rule_idn->match_len > path_len) { continue; }
+                if (pfx_hash[rule_idn->match_len] != rule_idn->match_hash) { continue; }
+                const uint32_t score = 1u + rule_idn->match_len;
                 if (score <= best_score) { continue; }
                 best_score = score;
                 required_protection = rule.protection_level;
-                matched_rule = static_cast<uint32_t>(acl_ent);
-                ase::utils::str_copy(rule_label, MAX_LABEL_LEN, rule.label);
+                matched_rule = acl_id;
+                rule_label_hash = rule_idn->label_hash;
+            }
+
+            const uint32_t ext_rule_count = idx.get_extension_rule_count(req.relm_ref);
+            for (uint32_t rule_index = 0; rule_index < ext_rule_count; ++rule_index) {
+                const uint32_t acl_id = idx.get_extension_rule(req.relm_ref, rule_index);
+                if (acl_id == INVALID_ENTITY) { continue; }
+                const auto acl_ent = static_cast<ecs::Entity>(acl_id);
+                auto* rule_ptr = registry.try_get<StorageAcssRuleComponent>(acl_ent);
+                if (rule_ptr == nullptr) { continue; }
+                auto& rule = *rule_ptr;
+                if (rule.proj_ref != req.proj_ref && rule.proj_ref != 0) { continue; }
+                auto* rule_idn = registry.try_get<StorageRuleIdnComponent>(acl_ent);
+                if (rule_idn == nullptr) {
+                    log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageAcssChkSystem",
+                               acl_id, "StorageRuleIdnComponent");
+                    continue;
+                }
+                if (rule_idn->match_len < 1u) { continue; }
+                bool match = false;
+                for (uint32_t i = 0; i < ext_n; ++i) {
+                    if (ext_hash[i] == rule_idn->match_hash &&
+                        ext_len[i] == rule_idn->match_len) { match = true; break; }
+                }
+                if (!match) { continue; }
+                // Score parity with the character version: it scored on the FULL pattern
+                // length, wildcard included, which is one more than the literal.
+                const uint32_t score = ACSS_MATCH_SUFFIX_BONUS + rule_idn->match_len + 1u;
+                if (score <= best_score) { continue; }
+                best_score = score;
+                required_protection = rule.protection_level;
+                matched_rule = acl_id;
+                rule_label_hash = rule_idn->label_hash;
             }
         }
 
@@ -368,13 +492,29 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         if (!owner_preset) {
             bool lattice_required = false;
             bool lattice_ok       = false;
-            auto lat_view = registry.view<StorageLatLnkComponent>();
-            for (auto le : lat_view) {
-                auto& link = lat_view.get<StorageLatLnkComponent>(le);
-                if (!ase::utils::str_equal(link.target_realm, target_id, MAX_REALM_ID)) { continue; }
-                uint32_t pfx_len = ase::utils::str_len(link.path_prefix, MAX_PATH_LEN);
-                if (pfx_len < 1u) { continue; }
-                if (!ase::utils::str_equal(link.path_prefix, req.path, pfx_len)) { continue; }
+            // Links are indexed under the realm they name as target. The bucket key and
+            // the link's own target_realm_hash are the same number, so agreeing on it IS
+            // the confirmation - a character comparison would only re-walk the string.
+            const uint32_t target_hash = entt::hashed_string(target_id).value();
+            const uint32_t link_count = idx.get_link_count(static_cast<uint64_t>(target_hash));
+            for (uint32_t link_index = 0; link_index < link_count; ++link_index) {
+                const uint32_t link_id =
+                    idx.get_link(static_cast<uint64_t>(target_hash), link_index);
+                if (link_id == INVALID_ENTITY) { continue; }
+                const auto link_ent = static_cast<ecs::Entity>(link_id);
+                auto* link_ptr = registry.try_get<StorageLatLnkComponent>(link_ent);
+                if (link_ptr == nullptr) { continue; }
+                auto& link = *link_ptr;
+                auto* link_idn = registry.try_get<StorageLnkIdnComponent>(link_ent);
+                if (link_idn == nullptr) {
+                    log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageAcssChkSystem",
+                               link_id, "StorageLnkIdnComponent");
+                    continue;
+                }
+                if (link_idn->target_realm_hash != target_hash) { continue; }
+                if (link_idn->prefix_len < 1u) { continue; }
+                if (link_idn->prefix_len > path_len) { continue; }
+                if (pfx_hash[link_idn->prefix_len] != link_idn->prefix_hash) { continue; }
                 lattice_required = true;
                 bool approved = link.approved_by_source != 0 && link.approved_by_target != 0;
                 bool live     = link.expires_at == 0 || link.expires_at > now;
@@ -403,26 +543,29 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // The owner-preset wildcard satisfies any requirement; a held "ALL" codeword too.
         // The public realm carries no required codewords, so public reads pass unaffected.
         if (matched_rule != INVALID_ENTITY && !owner_preset) {
+            // Three nested walks - required codewords, the user's keycards, and the
+            // codewords each keycard carries - collapse into one walk over the rule's
+            // own requirements plus four membership questions. The four cases are the
+            // same the nested version tested: the keycard may be scoped to this realm or
+            // global (scope 0), and a held wildcard satisfies any requirement.
             bool missing_codeword = false;
-            auto cwrd_view = registry.view<StorageAcssCwrdComponent>();
-            for (auto [ce, required] : cwrd_view.each()) {
-                if (required.acss_ref != matched_rule) { continue; }
-                bool held = false;
-                auto kycd_view = registry.view<StorageStaKycdComponent>();
-                for (auto [ke, kc] : kycd_view.each()) {
-                    if (!ase::utils::str_equal(kc.issued_to, req.user_id, MAX_OWNER_ID)) { continue; }
-                    if (kc.relm_ref != req.relm_ref && kc.relm_ref != 0) { continue; }
-                    auto held_view = registry.view<StorageKycdCwrdComponent>();
-                    for (auto [he, hc] : held_view.each()) {
-                        if (hc.kycd_ref != static_cast<uint32_t>(ke)) { continue; }
-                        if (ase::utils::str_equal(hc.cwrd, required.required_cwrd, MAX_CODEWORD_LEN) ||
-                            ase::utils::str_equal(hc.cwrd, ACSS_CWRD_WILDCARD, MAX_CODEWORD_LEN)) {
-                            held = true;
-                            break;
-                        }
-                    }
-                    if (held) { break; }
-                }
+            const uint32_t required_count = idx.get_required_count(matched_rule);
+            for (uint32_t required_index = 0; required_index < required_count; ++required_index) {
+                const uint32_t cwrd_id = idx.get_required(matched_rule, required_index);
+                if (cwrd_id == INVALID_ENTITY) { continue; }
+                auto* required =
+                    registry.try_get<StorageAcssCwrdComponent>(static_cast<ecs::Entity>(cwrd_id));
+                if (required == nullptr) { continue; }
+                const uint32_t needed = required->required_cwrd_hash;
+                const bool held =
+                    idx.has_held(StorageAcssIndexResourceManager::compose_held_key(
+                        user_hash, req.relm_ref, needed)) ||
+                    idx.has_held(StorageAcssIndexResourceManager::compose_held_key(
+                        user_hash, 0u, needed)) ||
+                    idx.has_held(StorageAcssIndexResourceManager::compose_held_key(
+                        user_hash, req.relm_ref, ACSS_CWRD_WILDCARD_HASH)) ||
+                    idx.has_held(StorageAcssIndexResourceManager::compose_held_key(
+                        user_hash, 0u, ACSS_CWRD_WILDCARD_HASH));
                 if (!held) { missing_codeword = true; break; }
             }
             if (missing_codeword) {
@@ -441,13 +584,13 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
         // ── Step 7: LABEL ─ workflow-status gate.
         // retired = withdrawn build (no access); draft/review = team-only (clearance >= TEAM).
-        if (ase::utils::str_equal(rule_label, EDGE_LABEL_RETIRED, MAX_LABEL_LEN)) {
+        if (rule_label_hash == EDGE_LABEL_RETIRED_HASH) {
             registry.emplace<StorageAcssDenyTag>(entity);
             emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "retired_asset");
             continue;
         }
-        if ((ase::utils::str_equal(rule_label, EDGE_LABEL_DRAFT, MAX_LABEL_LEN) ||
-             ase::utils::str_equal(rule_label, EDGE_LABEL_REVIEW, MAX_LABEL_LEN)) &&
+        if ((rule_label_hash == EDGE_LABEL_DRAFT_HASH ||
+             rule_label_hash == EDGE_LABEL_REVIEW_HASH) &&
             eff_clrn < PROTECTION_TEAM) {
             registry.emplace<StorageAcssDenyTag>(entity);
             emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "label_restricted");
@@ -460,17 +603,31 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         if (!owner_preset && req.proj_ref != 0) {
             bool has_active_task = false;
             bool path_in_scope   = false;
-            auto task_view = registry.view<StorageStaTaskComponent>();
-            for (auto te : task_view) {
-                auto& task = task_view.get<StorageStaTaskComponent>(te);
-                if (task.proj_ref != req.proj_ref) { continue; }
-                if (!ase::utils::str_equal(task.assignee, req.user_id, MAX_OWNER_ID)) { continue; }
+            // Tasks are indexed under their project, so the project filter is the bucket
+            // itself and only the assignee still has to be compared.
+            const uint32_t task_count = idx.get_task_count(req.proj_ref);
+            for (uint32_t task_index = 0; task_index < task_count; ++task_index) {
+                const uint32_t task_id = idx.get_task(req.proj_ref, task_index);
+                if (task_id == INVALID_ENTITY) { continue; }
+                auto* task_ptr =
+                    registry.try_get<StorageStaTaskComponent>(static_cast<ecs::Entity>(task_id));
+                if (task_ptr == nullptr) { continue; }
+                auto& task = *task_ptr;
+                auto* task_idn =
+                    registry.try_get<StorageTaskIdnComponent>(static_cast<ecs::Entity>(task_id));
+                if (task_idn == nullptr) {
+                    log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageAcssChkSystem",
+                               task_id, "StorageTaskIdnComponent");
+                    continue;
+                }
+                if (task_idn->assignee_hash != user_hash) { continue; }
                 bool live = (task.starts_at == 0 || task.starts_at <= now) &&
                             (task.expires_at == 0 || task.expires_at > now);
                 if (!live) { continue; }
                 has_active_task = true;
-                uint32_t scope_len = ase::utils::str_len(task.path_pattern, MAX_PATH_LEN);
-                if (scope_len > 0u && ase::utils::str_equal(task.path_pattern, req.path, scope_len)) {
+                if (task_idn->scope_len < 1u) { continue; }
+                if (task_idn->scope_len > path_len) { continue; }
+                if (pfx_hash[task_idn->scope_len] == task_idn->scope_hash) {
                     path_in_scope = true;
                     break;
                 }

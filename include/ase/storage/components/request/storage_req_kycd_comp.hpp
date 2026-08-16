@@ -17,6 +17,18 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    communication/request
+ * @parity      server_only
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   Dies ist der EINGANG der Keycard-Praegung, nicht ihr Ergebnis: die HTTP-Route
+ *   /api/auth/keycard-issued legt die Zeile nach der HMAC-Pruefung an, und
+ *   StorageKycdReqDrnSystem kopiert sie im selben Frame auf die frisch erzeugte
+ *   Token-Entity (StorageStaIdnComponent + StorageStaKycdComponent) und zerstoert
+ *   die Anfrage-Entity danach in Pass 3. Kein Verbraucher reicht diese Felder weiter -
+ *   der Client sieht die Keycard ueber ihre EIGENEN Komponenten, die in
+ *   modules/ase-storage/codegen.json unter components.shared stehen. Ein becsy-Zwilling
+ *   dieser Anfrage traege eine Zeile, die drueben schon vor dem naechsten Frame
+ *   wieder verschwunden ist. Hier geht nichts verloren.
  * @created     2026-04-16
  * @modified    2026-04-16
  * @version     1.0.0

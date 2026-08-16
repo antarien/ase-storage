@@ -60,6 +60,7 @@ namespace ase::storage {
 struct StorageKycdCwrdComponent {
     uint32_t kycd_ref = 0;                    // Entity ref to parent keycard entity
     char cwrd[32] = {};                       // Codeword string (e.g. "ART", "SHADER", "ALL")
+    uint32_t cwrd_hash = 0;                   // entt::hashed_string of cwrd - the ONLY form compared
 };
 
 }  // namespace ase::storage

@@ -35,12 +35,17 @@
 namespace ase::storage {
 
 /**
- * @brief StorageAudtWritSystem - Audit persistence at 1Hz
+ * @brief StorageAudtWritSystem - Access-decision persistence at 1Hz
  *
- * @schedule Preservation - Batch-writes collected audit entries
+ * @schedule Preservation - Ships collected access decisions, then retires them
  * @reads    StorageAudtPendTag + StorageBufAudtComponent
- * @writes   MongoDB audit_entries collection, removes StorageAudtPendTag
- * @depends  StorageAcssChkSystem creates audit entities per access decision
+ * @writes   frame 122 onto the outbound queue, destroys the audit entity
+ * @depends  StorageAcssChkSystem, StorageWflwTranSystem, StorageWflwGateSystem,
+ *           StorageWflwClnSystem and StorageEdgeAudtDrnSystem create one audit
+ *           entity per access decision; StorageSrvlLogSystem must run BEFORE
+ *           this one, because this system is the sole owner of that lifetime
+ *           and Observation (72) is too late to read what Preservation (71)
+ *           has already retired.
  */
 class StorageAudtWritSystem : public ecs::System {
 public:

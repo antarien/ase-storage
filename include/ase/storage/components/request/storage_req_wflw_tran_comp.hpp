@@ -14,6 +14,18 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    communication/request
+ * @parity      server_only
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   Der Antrag auf eine Label-Transition, nicht das Label. StorageWflwDrnSystem erzeugt
+ *   die Zeile aus der Hub-Bruecke; StorageWflwGateSystem und StorageWflwTranSystem lesen
+ *   sie, faellen das Urteil und zerstoeren die Entity (deferred delete) - kein Verbraucher
+ *   reicht path/target_label/requested_by weiter. Das ERGEBNIS verlaesst diesen Rumpf auf
+ *   zwei eigenen Wegen: der neue Zustand als label auf StorageAcssRuleComponent, das
+ *   Urteil als Hub-Wert STG_WFLW_RES unter dem Pfad-Owner, dazu der Audit-Eintrag. Wer
+ *   drueben wissen will, wie eine Promotion ausging, liest diese, nie den Antrag.
+ *   Zusaetzlich traegt die Zeile mit requested_by eine Operator-Identitaet, die auf der
+ *   Serverseite zur Attribution gebraucht wird und im Browser nichts zu suchen hat.
  * @created     2026-07-11
  * @modified    2026-07-11
  * @version     1.0.0

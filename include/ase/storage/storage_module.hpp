@@ -84,6 +84,9 @@
 
 // Integration (ACL + Storage)
 #include <ase/storage/systems/acl/storage_acss_chk_sys.hpp>
+#include <ase/storage/systems/acl/storage_acss_idx_sys.hpp>
+#include <ase/storage/systems/acl/storage_idn_idx_sys.hpp>
+#include <ase/storage/systems/keycard/storage_kycd_cwrd_pub_sys.hpp>
 #include <ase/storage/systems/acl/storage_cred_acss_rcv_sys.hpp>
 #include <ase/storage/systems/acl/storage_cred_acss_rsp_sys.hpp>
 #include <ase/storage/systems/acl/storage_cncm_flt_sys.hpp>
@@ -127,7 +130,12 @@ struct StorageModule {
             .run_after("StorageIniSystem");
 
         // Ingestion (60Hz): Developer Keycard pipeline (drain → validate → link)
-        app.add_system<StorageKycdDrnSystem>(ecs::Schedule::Ingestion);
+        // The identity index is built FIRST in the frame's ingestion stage: the notify
+        // drain and the keycard link both resolve by key, and a key they cannot look up
+        // is a scan. Realms come from Reception, so they are already there.
+        app.add_system<StorageIdnIdxSystem>(ecs::Schedule::Ingestion);
+        app.add_system_with<StorageKycdDrnSystem>(ecs::Schedule::Ingestion)
+            .run_after("StorageIdnIdxSystem");
         // SDK Hub-bridge drain: convert SES_KYCD_NTF_* Hub keys into
         // StorageReqKycdComponent on the request entity before the main
         // keycard-req drain sees it (same tick).
@@ -147,8 +155,13 @@ struct StorageModule {
         app.add_system_with<StorageWflwDrnSystem>(ecs::Schedule::Ingestion)
             .run_after("HubRcvDrnSystem");
 
-        // Integration (60Hz): ACL → file ops → workflow → concealment
-        app.add_system<StorageAcssChkSystem>(ecs::Schedule::Integration);
+        // Integration (60Hz): index → ACL → file ops → workflow → concealment
+        // The index is built FIRST and read by the ladder in the same tick. Ordering it
+        // after StorageAcssChkSystem would leave the ladder reading last tick's relations,
+        // which is exactly the stale-grant failure the full rebuild exists to prevent.
+        app.add_system<StorageAcssIdxSystem>(ecs::Schedule::Integration);
+        app.add_system_with<StorageAcssChkSystem>(ecs::Schedule::Integration)
+            .run_after("StorageAcssIdxSystem");
         app.add_system_with<StorageFileWritSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssChkSystem");
         // released-gate artifact precondition runs BEFORE the transition system:
@@ -160,6 +173,14 @@ struct StorageModule {
             .run_after("StorageWflwGateSystem");
         app.add_system_with<StorageCncmFltSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssChkSystem");
+        // The codeword projection is what the L4 edge gate reads: SES_KYCD_HOLDS_*,
+        // SES_CLEARANCE and SES_KYCD_PERM at owner = hashed_string(user_id). It existed,
+        // it was referenced as the producer by edge_binary_routes.cpp and by the hub
+        // metrics contract - and it was registered NOWHERE, so those axes stood at
+        // NOT_FOUND and the codeword step of the A/ACS ladder had no effect at that edge.
+        // It runs in Integration because the session set it must ask is built there.
+        app.add_system_with<StorageKycdCwrdPubSystem>(ecs::Schedule::Integration)
+            .run_after("StorageAcssIdxSystem");
 
         // Integration (60Hz): Curator request processing (after ACL)
         app.add_system_with<StorageCurPrcSystem>(ecs::Schedule::Integration)
@@ -169,7 +190,18 @@ struct StorageModule {
         app.add_system<StorageKycdExpSystem>(ecs::Schedule::Preservation);
         app.add_system_with<StorageKycdRevSystem>(ecs::Schedule::Preservation)
             .run_after("StorageKycdExpSystem");
-        app.add_system<StorageAudtWritSystem>(ecs::Schedule::Preservation);
+        // Access-decision surveillance runs HERE, not in Observation, and it runs
+        // BEFORE the writer. StorageAudtWritSystem is the sole owner of the audit
+        // entity's lifetime: it ships the decision on frame 122 and destroys the
+        // entity in the same pass. Preservation is schedule 71 and Observation is
+        // 72, so an Observation-stage reader would arrive after the retirement and
+        // see an empty view every single frame — the surveillance would report a
+        // permanently quiet system while denials were streaming through. Ordering
+        // is the fix; a retention flag would only be a second owner of the same
+        // lifetime.
+        app.add_system<StorageSrvlLogSystem>(ecs::Schedule::Preservation);
+        app.add_system_with<StorageAudtWritSystem>(ecs::Schedule::Preservation)
+            .run_after("StorageSrvlLogSystem");
         app.add_system<StorageLatcSyncSystem>(ecs::Schedule::Preservation);
         // Session hub-family retirement: StorageKycdLnkSystem publishes six SES_*
         // keys with owner = client entity, NetworkHubSyncSystem retires only the
@@ -188,13 +220,13 @@ struct StorageModule {
         // former Hub-signal emit (SES_KYCD_PERSIST_*) could not carry the recipient
         // user_id string across to the Replica — that bridge is removed.
 
-        // Observation (1Hz): quota monitoring, vote evaluation, anomaly detection
+        // Observation (1Hz): quota monitoring, vote evaluation
+        // (anomaly detection moved to Preservation — see StorageSrvlLogSystem above)
         app.add_system<StorageQuotChkSystem>(ecs::Schedule::Observation);
         // Retired-build retention sweep (Tag-filtered, 90 days): the cleanup —
         // not the quota ceiling — is what keeps the edge_binaries realm small.
         app.add_system<StorageWflwClnSystem>(ecs::Schedule::Observation);
         app.add_system<StorageVotePrcSystem>(ecs::Schedule::Observation);
-        app.add_system<StorageSrvlLogSystem>(ecs::Schedule::Observation);
         // Drain edge A/ACS gate audit-signals (SES_EDGE_AUDIT_*) emitted by the
         // L4 edge-distribution gate into the storage audit buffer so the
         // Preservation-stage StorageAudtWritSystem persists every gate decision.

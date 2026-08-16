@@ -13,6 +13,21 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    tag
+ * @parity      server_only
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   Die Marke haengt an StorageWflwRetrComponent, und dieser Datensatz steht bereits in
+ *   codegen.json unter components.server_only. Ein Client-Spiegel der Marke zeigte damit
+ *   auf eine Zeile, die es drueben gar nicht gibt. Gelesen wird sie an genau einer
+ *   Stelle: StorageWflwClnSystem fuehrt seine View ueber sie und haelt retired_at gegen
+ *   WFLW_RETIRED_RETENTION_S; ist die Frist abgelaufen, loescht es Asset und die vier
+ *   Begleit-Artefakte ueber den StorageResourceManager von der PLATTE und raeumt die
+ *   zurueckziehende ACL-Regel mit weg. Frist und Loeschung sind Server-Entscheidungen;
+ *   ein Browser hat weder die Uhr des Realms noch die Dateien.
+ *   Was drueben ankommen soll, ist der ZUSTAND zurueckgezogen — als label auf
+ *   StorageAcssRuleComponent (components.shared), das StorageWflwTranSystem in genau dem
+ *   Durchlauf schreibt, in dem es diese Marke setzt. Der Client erfaehrt also, dass der
+ *   Build zurueckgezogen ist; was er nicht braucht, ist der Aufraeum-Zeiger des Servers.
  * @created     2026-07-11
  * @modified    2026-07-11
  * @version     1.0.0

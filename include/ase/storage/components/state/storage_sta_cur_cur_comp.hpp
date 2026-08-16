@@ -74,6 +74,7 @@ namespace ase::storage {
  */
 struct StorageStaCurCurComponent {
     char key[160] = {};                       // Curation key ("IMG_ID" or "IMG_ID::v3")
+    uint32_t key_hash = 0;                    // entt::hashed_string of key - the ONLY form compared
     uint32_t project_ref = 0;                 // Entity ref to EngineStaProjComponent (systems set value)
     uint8_t rating = 0;                       // Star rating (0-5, 0 = unrated)
     char notes[256] = {};                     // Free-text curator notes

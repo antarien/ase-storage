@@ -13,6 +13,22 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    tag
+ * @parity      server_only
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   Die Marke haengt am Persist-Puffer einer angewandten Label-Transition und
+ *   sagt, dass der Frame-112-Upsert in den Replica-Speicher
+ *   storage_workflow_labels noch aussteht. Gesetzt von StorageWflwTranSystem beim
+ *   Anwenden (storage_wflw_tran_sys.cpp, Zeile 433), gelesen allein von
+ *   StorageWflwPstSystem in der Schedule Preservation (storage_module.hpp,
+ *   Zeile 205), das den Puffer in die Ausgangsschlange leert und das Entity
+ *   danach zerstoert (storage_wflw_pst_sys.cpp, Zeile 224); ausserhalb dieses
+ *   Persist-Pfades trifft die Suche nach dem Tag-Namen nur Kommentare und einen
+ *   Test. Entscheidend ist der Traeger: StorageBufWflwComponent steht in
+ *   codegen.json unter components.server_only. Das Entity, an dem die Marke
+ *   haengt, existiert clientseitig also gar nicht — ein Zwilling haette nichts,
+ *   woran er haengen koennte, und der Browser besitzt weder die Ausgangsschlange
+ *   noch die MongoDB dahinter.
  * @created     2026-07-11
  * @modified    2026-07-11
  * @version     1.0.0

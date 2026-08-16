@@ -13,6 +13,23 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    tag
+ * @parity      server_only
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   Die Marke sitzt auf der Antrags-Entity StorageReqWflwTranComponent, und die traegt
+ *   selbst bereits server_only. Eine Marke auf einer Zeile, die drueben nie ankommt,
+ *   koennte drueben nichts kennzeichnen. Gelesen wird sie an genau zwei Stellen, beide
+ *   serverseitig: StorageWflwGateSystem fuehrt seine View ueber sie und fragt den
+ *   StorageResourceManager, ob Asset, .sig, .sha256, .spdx.json und .smoke im Realm auf
+ *   der PLATTE liegen; StorageWflwTranSystem schliesst sie per entt::exclude aus,
+ *   solange die Pruefung offen ist. Beides ist eine Dateisystem-Aussage ueber ein
+ *   Verzeichnis, das ein Browser weder sieht noch mounten kann.
+ *   Sichtbar sein soll drueben das LABEL, nicht der offene Pruefschritt: der Zustand
+ *   reist als label auf StorageAcssRuleComponent (components.shared), das Urteil als
+ *   Hub-Wert STG_WFLW_RES und die Stufe als STG_WFLW_STAGE unter dem Pfad-Owner —
+ *   ausdruecklich fuer Anzeige-Widgets veroeffentlicht (types.hpp). Auch ein Scheitern
+ *   geht dem Client damit nicht verloren: StorageWflwGateSystem setzt beim fehlenden
+ *   Artefakt WFLW_RES_DENIED_GATE auf STG_WFLW_RES, bevor es den Antrag zerstoert.
  * @created     2026-07-11
  * @modified    2026-07-11
  * @version     1.0.0

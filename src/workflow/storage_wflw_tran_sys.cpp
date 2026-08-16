@@ -150,6 +150,8 @@
 // Components from same module
 #include <ase/storage/components/request/storage_req_wflw_tran_comp.hpp>
 #include <ase/storage/components/state/storage_wflw_edge_comp.hpp>
+#include <ase/storage/storage_acss_index_resource_manager.hpp>
+#include <ase/storage/components/state/storage_rule_idn_comp.hpp>
 #include <ase/storage/components/state/storage_acss_rule_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
@@ -157,6 +159,7 @@
 #include <ase/storage/components/state/storage_wflw_retr_comp.hpp>
 #include <ase/storage/components/tag/storage_tag_wflw_pend.hpp>
 #include <ase/storage/components/tag/storage_tag_wflw_retr.hpp>
+#include <ase/storage/components/tag/storage_relm_edge_tag.hpp>
 #include <ase/storage/components/tag/storage_tag_wflw_gate.hpp>
 #include <ase/storage/components/tag/storage_tag_wflw_pst_pend.hpp>
 #include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
@@ -210,13 +213,15 @@ void compose_edge_reason(char* out, uint32_t out_size, const char* prefix,
     ase::utils::str_append(out, out_size, ")");
 }
 
-// Label → display stage ordinal (WFLW_STAGE_*). Sequential value mapping over
-// the fixed label chain (same str_equal ladder the ACL label gate uses).
-float stage_ordinal(const char* label) {
-    if (ase::utils::str_equal(label, EDGE_LABEL_REVIEW, MAX_LABEL_LEN))   return static_cast<float>(WFLW_STAGE_REVIEW);
-    if (ase::utils::str_equal(label, EDGE_LABEL_APPROVED, MAX_LABEL_LEN)) return static_cast<float>(WFLW_STAGE_APPROVED);
-    if (ase::utils::str_equal(label, EDGE_LABEL_RELEASED, MAX_LABEL_LEN)) return static_cast<float>(WFLW_STAGE_RELEASED);
-    if (ase::utils::str_equal(label, EDGE_LABEL_RETIRED, MAX_LABEL_LEN))  return static_cast<float>(WFLW_STAGE_RETIRED);
+// Label hash → display stage ordinal (WFLW_STAGE_*). Sequential value mapping over
+// the fixed label chain. The labels arrive as hashes because identity is a lookup and
+// a lookup compares hashes, never characters (WRFL_ASE_STRING_HANDLING Section 3) —
+// four 32-bit tests where the former ladder ran up to four string walks per request.
+float stage_ordinal(uint32_t label_hash) {
+    if (label_hash == EDGE_LABEL_REVIEW_HASH)   return static_cast<float>(WFLW_STAGE_REVIEW);
+    if (label_hash == EDGE_LABEL_APPROVED_HASH) return static_cast<float>(WFLW_STAGE_APPROVED);
+    if (label_hash == EDGE_LABEL_RELEASED_HASH) return static_cast<float>(WFLW_STAGE_RELEASED);
+    if (label_hash == EDGE_LABEL_RETIRED_HASH)  return static_cast<float>(WFLW_STAGE_RETIRED);
     return static_cast<float>(WFLW_STAGE_DRAFT);
 }
 
@@ -243,6 +248,23 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
     uint32_t done_n = 0;
 
     // Requests still carrying StorageWflwGateTag belong to StorageWflwGateSystem.
+    auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
+    if (!idx_ptr || !(*idx_ptr)) {
+        log::error("[StorageWflwTran] StorageAcssIndexResourceManager not in ctx (StorageAcssIdxSystem must run first)");
+        return;
+    }
+    auto& idx = **idx_ptr;
+
+    // Edge realm entity ref (rule scope + audit record). The answer does not depend on
+    // the request, so it is resolved ONCE per tick instead of once per request. The tag
+    // carries the identity (StorageEdgeIniSystem is its only producer), which replaces
+    // the former scan over every realm with a string compare per request.
+    uint32_t relm_ref = 0;
+    for (auto relm_ent : registry.view<StorageStaRelmComponent, StorageRelmEdgeTag>()) {
+        relm_ref = static_cast<uint32_t>(relm_ent);
+        break;
+    }
+
     auto req_view = registry.view<StorageReqWflwTranComponent, StorageWflwPendTag>(
         entt::exclude<StorageWflwGateTag>);
     for (auto [req_ent, req] : req_view.each()) {
@@ -250,16 +272,6 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
 
         const uint32_t owner = entt::hashed_string(req.path).value();
         const uint64_t now = mgr.get_wall_time_seconds();
-
-        // Edge realm entity ref (rule scope + audit record).
-        uint32_t relm_ref = 0;
-        auto relm_view = registry.view<StorageStaRelmComponent>();
-        for (auto [relm_ent, relm] : relm_view.each()) {
-            if (ase::utils::str_equal(relm.id, EDGE_REALM_ID, MAX_REALM_ID)) {
-                relm_ref = static_cast<uint32_t>(relm_ent);
-                break;
-            }
-        }
 
         // A/ACS permission axis: the requester keycard session must hold
         // PERM_PROMOTE (published owner-scoped by the keycard pipeline). Clearance
@@ -290,12 +302,19 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
 
         // Locate the per-asset ACL rule (EXACT pattern match, realm-scoped). The
         // rule's label field IS the asset's current workflow stage.
+        // Only the rules of THIS realm are examined - the realm filter is the bucket
+        // itself, taken from the index StorageAcssIdxSystem rebuilt earlier this tick.
+        // The former version walked every ACL rule in the registry once per request.
         ecs::Entity rule_ent_found = entt::null;
-        auto rule_view = registry.view<StorageAcssRuleComponent>();
-        for (auto rule_ent : rule_view) {
-            auto& r = rule_view.get<StorageAcssRuleComponent>(rule_ent);
-            if (r.relm_ref != relm_ref) continue;
-            if (!ase::utils::str_equal(r.path_pattern, req.path, MAX_PATH_LEN)) continue;
+        const uint32_t req_path_hash = entt::hashed_string(req.path).value();
+        const uint32_t rule_count = idx.get_rule_count(relm_ref);
+        for (uint32_t rule_index = 0; rule_index < rule_count; ++rule_index) {
+            const uint32_t rule_id = idx.get_rule(relm_ref, rule_index);
+            if (rule_id == INVALID_ENTITY) continue;
+            const auto rule_ent = static_cast<ecs::Entity>(rule_id);
+            auto* r_idn = registry.try_get<StorageRuleIdnComponent>(rule_ent);
+            if (r_idn == nullptr) continue;
+            if (r_idn->pattern_hash != req_path_hash) continue;
             rule_ent_found = rule_ent;
             break;
         }
@@ -322,20 +341,49 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
             ase::utils::str_copy(r.path_pattern, MAX_PATH_LEN, req.path);
             r.protection_level = PROTECTION_PUBLIC;
             ase::utils::str_copy(r.label, MAX_LABEL_LEN, EDGE_LABEL_DRAFT);
+            // Identity beside the record, in the same breath as the strings.
+            // A bootstrapped rule governs exactly one asset, so its pattern carries no
+            // wildcard: pattern and literal match are the same string, and it is a
+            // location rule (no StorageAcssRuleSufxTag).
+            auto& r_idn = registry.emplace<StorageRuleIdnComponent>(new_rule_ent);
+            r_idn.pattern_hash = req_path_hash;
+            r_idn.label_hash = EDGE_LABEL_DRAFT_HASH;
+            r_idn.match_hash = req_path_hash;
+            r_idn.match_len = ase::utils::str_len(req.path, MAX_PATH_LEN);
             rule_ent_found = new_rule_ent;
             log::info("[StorageWflwTran] Draft rule bootstrapped for on-disk asset {}", req.path);
         }
 
         auto& rule = registry.get<StorageAcssRuleComponent>(rule_ent_found);
+        // Identity travels with the rule. A rule without it cannot be gated at all, so
+        // this is an error the system reports rather than a case it works around.
+        auto* rule_idn_ptr = registry.try_get<StorageRuleIdnComponent>(rule_ent_found);
+        if (rule_idn_ptr == nullptr) {
+            log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageWflwTranSystem",
+                       static_cast<uint32_t>(rule_ent_found), "StorageRuleIdnComponent");
+            done[done_n] = req_ent;
+            ++done_n;
+            continue;
+        }
+        auto& rule_idn = *rule_idn_ptr;
+        const uint32_t target_label_hash = entt::hashed_string(req.target_label).value();
 
         // Data-driven edge validation (die Kanten): allowed IFF a seeded edge
         // entity matches (from == rule.label && to == request.target). No switch,
         // no if-chain over labels — adding a transition = seeding one entity.
+        // The edges are indexed by the label they lead AWAY from, so only the outgoing
+        // transitions of the asset's current label are examined. The from_label is still
+        // compared in full: the hash narrows the candidates, it never decides them.
         bool allowed = false;
-        auto edge_view = registry.view<StorageWflwEdgeComponent>();
-        for (auto [edge_ent, edge] : edge_view.each()) {
-            if (ase::utils::str_equal(edge.from_label, rule.label, MAX_LABEL_LEN) &&
-                ase::utils::str_equal(edge.to_label, req.target_label, MAX_LABEL_LEN)) {
+        const uint32_t edge_count = idx.get_edge_count(rule_idn.label_hash);
+        for (uint32_t edge_index = 0; edge_index < edge_count; ++edge_index) {
+            const uint32_t edge_id = idx.get_edge(rule_idn.label_hash, edge_index);
+            if (edge_id == INVALID_ENTITY) continue;
+            auto* edge =
+                registry.try_get<StorageWflwEdgeComponent>(static_cast<ecs::Entity>(edge_id));
+            if (edge == nullptr) continue;
+            if (edge->from_label_hash == rule_idn.label_hash &&
+                edge->to_label_hash == target_label_hash) {
                 allowed = true;
                 break;
             }
@@ -358,15 +406,19 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
         // keycard attribution, stage the durable frame-112 persist buffer.
         compose_edge_reason(reason, MAX_REASON_LEN, "wflw", rule.label, req.target_label);
         ase::utils::str_copy(rule.label, MAX_LABEL_LEN, req.target_label);
+        // The label MOVED, so its identity moves with it. Updating the record and
+        // leaving the hash standing would make the rule answer the OLD label at every
+        // downstream gate: the asset would sit at "released" and still be gated as draft.
+        rule_idn.label_hash = target_label_hash;
 
         hub::set(registry, owner, "STG_WFLW_RES"_hs, static_cast<float>(WFLW_RES_APPLIED));
-        hub::set(registry, owner, "STG_WFLW_STAGE"_hs, stage_ordinal(rule.label));
+        hub::set(registry, owner, "STG_WFLW_STAGE"_hs, stage_ordinal(rule_idn.label_hash));
         // Public-servable verdict — the SINGLE place this policy lives (ARCH_ASE_REASONING_EDGE Section 6.4:
         // download-access runs over the ase-storage A/ACS infrastructure). A customer download is
         // public ONLY at the released stage (EDGE_LABEL_RELEASED = "Public download", types.hpp). The
         // edge-webserver serving gate READS this boolean; it never re-decides the label policy itself.
         hub::set(registry, owner, "STG_WFLW_PUB"_hs,
-                 ase::utils::str_equal(rule.label, EDGE_LABEL_RELEASED, MAX_LABEL_LEN) ? 1.0f : 0.0f);
+                 rule_idn.label_hash == EDGE_LABEL_RELEASED_HASH ? 1.0f : 0.0f);
 
         emit_tran_audit(registry, relm_ref, req.requested_by, req.path, now,
                         AUD_GRANTED, reason);
@@ -383,7 +435,7 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
         // A transition INTO retired starts the retention clock: one record entity
         // per retired build (Entity-per-Item); StorageWflwClnSystem deletes the
         // files once WFLW_RETIRED_RETENTION_S elapses.
-        if (ase::utils::str_equal(rule.label, EDGE_LABEL_RETIRED, MAX_LABEL_LEN)) {
+        if (rule_idn.label_hash == EDGE_LABEL_RETIRED_HASH) {
             auto retr_ent = registry.create();
             auto& retr = registry.emplace<StorageWflwRetrComponent>(retr_ent);
             retr.rule_ref = static_cast<uint32_t>(rule_ent_found);
