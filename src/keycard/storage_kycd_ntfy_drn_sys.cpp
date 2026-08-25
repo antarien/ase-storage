@@ -78,7 +78,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -184,7 +184,16 @@ void StorageKycdNtfyDrnSystem::on_start(ecs::Registry& /*registry*/) {
 void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
     auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
     if (!idx_ptr || !(*idx_ptr)) {
-        log::error("[StorageKycdNtfyDrn] StorageAcssIndexResourceManager not in ctx (StorageIdnIdxSystem must run first)");
+        // SCHEDULE_ORDER, woertlich: „System runs before its dependency". Der
+        // freie String sagte dasselbe in Prosa — die Kategorie macht daraus etwas Zaehlbares.
+        // Die 3-Argument-Form ohne Owner ist hier die richtige: es gibt an dieser Stelle keine
+        // Entity, der Befund gilt dem System, nicht einer Zeile.
+        //
+        // Der Systemname wechselt auf die volle Klassenform, die on_start und on_stop dieser
+        // Datei ohnehin schon schreiben — sonst emittierte sie zwei Schreibweisen fuer
+        // dasselbe System und spaltete ihren eigenen Logstrom.
+        log::error(log::ERR::CAT::SCHEDULE_ORDER, "StorageKycdNtfyDrnSystem",
+                   "StorageAcssIndexResourceManager");
         return;
     }
     auto& idx = **idx_ptr;
@@ -203,17 +212,24 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // the reconstruction below is bit-exact and lands at the gate's owner.
         float user_hash_hi_f = hub::get(registry, owner, "SES_KYCD_NTF_USER_ID_HI"_hs, 0.0f);
         if (ase::types::is_not_found(user_hash_hi_f)) {
-            log::error("[StorageKycdNtfyDrn] SES_KYCD_NTF_USER_ID_HI not set on req entity={}", owner);
+            // HUB_NOT_FOUND ist hier die exakte Kategorie und die Ebene bleibt error: der
+            // Wert FEHLT, er ist nicht ungueltig. is_not_found auf ein hub::get-Ergebnis ist
+            // genau dieser Fall — owner plus value_id, mehr braucht
+            // die Meldung nicht, und die 4-Argument-Form traegt genau das.
+            log::error(log::ERR::CAT::HUB_NOT_FOUND, "StorageKycdNtfyDrnSystem", owner,
+                       "SES_KYCD_NTF_USER_ID_HI");
             continue;
         }
         float user_hash_lo_f = hub::get(registry, owner, "SES_KYCD_NTF_USER_ID_LO"_hs, 0.0f);
         if (ase::types::is_not_found(user_hash_lo_f)) {
-            log::error("[StorageKycdNtfyDrn] SES_KYCD_NTF_USER_ID_LO not set on req entity={}", owner);
+            log::error(log::ERR::CAT::HUB_NOT_FOUND, "StorageKycdNtfyDrnSystem", owner,
+                       "SES_KYCD_NTF_USER_ID_LO");
             continue;
         }
         float exp_at_f = hub::get(registry, owner, "SES_KYCD_NTF_EXP_AT"_hs, 0.0f);
         if (ase::types::is_not_found(exp_at_f)) {
-            log::error("[StorageKycdNtfyDrn] SES_KYCD_NTF_EXP_AT not set on req entity={}", owner);
+            log::error(log::ERR::CAT::HUB_NOT_FOUND, "StorageKycdNtfyDrnSystem", owner,
+                       "SES_KYCD_NTF_EXP_AT");
             continue;
         }
         float clearance_f = hub::get(registry, owner, "SES_KYCD_NTF_CLRN"_hs, 0.0f);

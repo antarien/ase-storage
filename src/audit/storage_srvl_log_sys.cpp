@@ -7,7 +7,7 @@
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
- * @schedule    Observation
+ * @schedule    Preservation
  * @created     2026-04-05
  * @modified    2026-06-24
  * @version     1.0.0
@@ -74,7 +74,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -143,7 +143,8 @@
 #include <ase/storage/systems/audit/storage_srvl_log_sys.hpp>
 // Components + tags from same module
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
+#include <ase/storage/components/state/storage_audt_outc_comp.hpp>
+#include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
 #include <ase/storage/types.hpp>
 // Hub API (the streak must outlive the tick that produced it)
 #include <ase/hub/api.hpp>
@@ -151,6 +152,8 @@
 #include <entt/core/hashed_string.hpp>
 // Logging
 #include <ase/log/log.hpp>
+// Strings (L0 — exakte Wiedergabe der Zaehl- und Kennwerte in der Anomaliezeile in tick())
+#include <ase/utils/strops.hpp>
 
 #include <cstdint>
 
@@ -181,14 +184,17 @@ void StorageSrvlLogSystem::tick(ecs::Registry& registry, float dt) {
     // and Observation (72) comes after Preservation (71) - a reader scheduled
     // there would find an empty view every frame and report a permanently quiet
     // system while denials streamed through.
-    for (auto [aud_ent, aud] :
-         registry.view<StorageBufAudtComponent, StorageAudtPendTag>().each()) {
+    // The verdict half sits on the same entity, so it joins the view instead of
+    // being fetched per row - the streak logic reads context and outcome together.
+    for (auto [aud_ent, aud, outc] :
+         registry.view<StorageBufAudtComponent, StorageAudtOutcComponent, StorageAudtPendTag>()
+             .each()) {
         (void)aud_ent;
         if (aud.user_id[0] == '\0') continue;  // unauthenticated attempt - no owner to attribute it to
 
         const uint32_t owner = entt::hashed_string(aud.user_id).value();
 
-        if (aud.result != AUD_DENIED) {
+        if (outc.result != AUD_DENIED) {
             // A granted access ends the streak AND retires the rows. Leaving
             // them at 0.0 would be the quiet leak: a Hub value IS an entity, and
             // only remove() destroys it - three rows per user who ever tripped,
@@ -224,9 +230,41 @@ void StorageSrvlLogSystem::tick(ecs::Registry& registry, float dt) {
 
         if (streak >= static_cast<uint32_t>(SRVL_DENY_THRESHOLD)) {
             hub::set(registry, owner, "SES_ACSS_ANOMALY"_hs, 1.0f);
-            log::warn("[StorageSrvlLog] {} denials within {}s for user {} - last: {} on {} (action {})",
-                      streak, SRVL_WINDOW_S, aud.user_id, aud.reason, aud.path,
-                      static_cast<uint32_t>(aud.action));
+            // MIGRIERT. Der Vermerk, der hier stand, hatte zwei Einwaende. Der erste war
+            // richtig beobachtet und falsch aufgeloest, der zweite war schlicht falsch.
+            //
+            // ZUR KATEGORIE: die Beobachtung stimmt — diese Zeile meldet kein EREIGNIS, sondern
+            // ein MUSTER, und ACCESS_DENIED beschreibt EINE Entscheidung, die hier laengst
+            // gefallen und protokolliert ist. Daraus folgt aber nicht, dass keine Kategorie
+            // passt. Der messbare Sachverhalt ist: `streak` hat SRVL_DENY_THRESHOLD
+            // ueberschritten — ein Wert existiert und liegt ausserhalb seines zulaessigen
+            // Bereichs. Das IST VALUE_OUT_OF_RANGE, und der Hilfetext ueberlaesst die Reaktion
+            // dem Aufrufer, was hier genau zutrifft: gesetzt wird die Anomaliemarke, sonst
+            // nichts. Ein Muster in eine Kategorie zu fassen heisst, seinen messbaren Kern zu
+            // benennen — nicht, eine eigene Kategorie dafuer zu verlangen.
+            //
+            // ZUR FORM: der Einwand nannte nur die AGGREGATFORM (value_id plus zwei Zahlen) und
+            // schloss daraus auf eine Grenze. Es gibt eine Ueberladung mit owner, value_id UND
+            // detail. Der `owner` traegt den Benutzer bereits als Hash (Zeile oben), value_id
+            // den Pfad, und die restlichen Angaben gehen exakt in den detail — ase::utils::
+            // str_append_u64 gibt sie ohne float und ohne Rundung wieder. Alle sechs bleiben.
+            //
+            // Zur Puffergroesse: path 256 + reason 64 + die Zahlen und Beschriftungen liegen
+            // zusammen unter 512, also schneidet hier nichts ab. Die Zahlen stehen trotzdem
+            // VORNE — faellt die Grenze spaeter, verliert man dann Text und nicht Messwerte.
+            char deny_detail[512] = {};
+            ase::utils::str_copy(deny_detail, 512, "streak=");
+            ase::utils::str_append_u64(deny_detail, 512, streak);
+            ase::utils::str_append(deny_detail, 512, " threshold=");
+            ase::utils::str_append_u64(deny_detail, 512, static_cast<uint64_t>(SRVL_DENY_THRESHOLD));
+            ase::utils::str_append(deny_detail, 512, " window_s=");
+            ase::utils::str_append_u64(deny_detail, 512, SRVL_WINDOW_S);
+            ase::utils::str_append(deny_detail, 512, " action=");
+            ase::utils::str_append_u64(deny_detail, 512, static_cast<uint64_t>(outc.action));
+            ase::utils::str_append(deny_detail, 512, " reason=");
+            ase::utils::str_append(deny_detail, 512, outc.reason);
+            log::warn(log::WRN::CAT::VALUE_OUT_OF_RANGE, "StorageSrvlLog", owner, aud.path,
+                      deny_detail);
         }
     }
 }

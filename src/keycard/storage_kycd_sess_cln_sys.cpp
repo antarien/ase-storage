@@ -105,7 +105,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -172,7 +172,7 @@
 // Own header FIRST
 #include <ase/storage/systems/keycard/storage_kycd_sess_cln_sys.hpp>
 // Components from same module
-#include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
+#include <ase/storage/components/tag/storage_kycd_vld_tag.hpp>
 // Hub API (owns HubSessLifeTag + HubStaClaiIdntComponent + remove)
 #include <ase/hub/api.hpp>
 // Logging

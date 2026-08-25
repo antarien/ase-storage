@@ -17,7 +17,7 @@
  * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
  *   Ein Realm wird auf beiden Seiten gleich klassifiziert. Saemtliche uebrigen
  *   Realm-Klassifikations-Tags stehen in codegen.json unter components.shared -
- *   StorageRelmPublicTag, StorageRelmPersonalTag, StorageRelmOrgTag,
+ *   StorageRelmGlobTag, StorageRelmUsrTag, StorageRelmOrgTag,
  *   StorageRelmActiveTag, StorageRelmSuspendedTag, StorageRelmArchivedTag,
  *   StorageRelmConcealTag - und die Realm-Entity, an der sie haengen
  *   (StorageStaRelmComponent, StorageRelmIdnComponent), ebenfalls. Dieses Tag

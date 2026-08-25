@@ -1,23 +1,31 @@
 #pragma once
 
 /**
- * ASE ECS COMPONENT (STATE)
+ * ASE ECS COMPONENT
  *
  * @file        storage_req_cur_comp.hpp
- * @brief       StorageReqCurComponent - Curator action request from HTTP
- * @description Incoming request from Integration Layer (curator_routes.cpp).
- *              One entity per request (destroyed after processing).
- *              Action type determines which field is relevant:
- *                CUR_ACT_RATE   → rating field
- *                CUR_ACT_STATUS → target_tag field (which Tag to emplace)
- *                CUR_ACT_NOTES  → notes field
+ * @brief       StorageReqCurComponent - Curation command request core
+ * @description WHAT a curation request asks: the curation key to operate on, the
+ *              project the key belongs to, the CUR_ACT_* action and the requesting
+ *              user. The action parameters (rating, target tag, notes - exactly
+ *              one applies per action) live in the sibling StorageReqCurPrmComponent
+ *              on the same entity - split 2026-08-19, the God-Component gate allows
+ *              five fields and this row carried seven.
+ *
+ *              ERZEUGER-INVARIANTE: jede Anfrage-Entity traegt Stamm UND Prm-Zeile.
+ *              Der fruehere Erzeuger curator_routes.cpp (L5) ist geloescht; der
+ *              dokumentierte kuenftige Weg ist die Hub-Migration nach
+ *              ase-pl-webserver (MIG_ASE_KERNEL_DLOPEN.md Phase 4b/4c,
+ *              STG_CUR_REQ_*-Schluessel). Wer ihn baut, emplaced BEIDE Zeilen -
+ *              StorageCurPrcSystem filtert view<Stamm, Prm, CurReqTag> und sieht
+ *              halbe Zeilen schlicht nicht.
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
  * @created     2026-04-06
- * @modified    2026-04-06
- * @version     1.0.0
+ * @modified    2026-08-19
+ * @version     1.1.0
  *
  * ECS COMPONENT COMPLIANCE
  *
@@ -53,21 +61,12 @@
 namespace ase::storage {
 
 /**
- * @brief StorageReqCurComponent - Curator request from HTTP handler
- *
- * Lifecycle: Created by curator_routes.cpp → processed by StorageCurPrcSystem
- *            → tagged StorageCurDoneTag → destroyed in cleanup pass
- *
- * @hub_reads  none
- * @hub_writes none
+ * StorageReqCurComponent - which key, which project, which action, who asks
  */
 struct StorageReqCurComponent {
     char key[160] = {};                       // Curation key to operate on
     uint32_t project_ref = 0;                 // Entity ref to EngineStaProjComponent (systems set value)
     uint8_t action = 0;                       // CUR_ACT_* from types.hpp
-    uint8_t rating = 0;                       // New rating (for CUR_ACT_RATE)
-    uint8_t target_tag = 0;                   // CUR_ST_* value → determines which Tag to emplace
-    char notes[256] = {};                     // New notes (for CUR_ACT_NOTES)
     char user_id[64] = {};                    // Requesting user ID
 };
 

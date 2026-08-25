@@ -38,9 +38,9 @@ namespace ase::storage {
  * @brief StorageFileWritSystem - File read/write/delete via ResourceManager
  *
  * @schedule Integration - run_after StorageAcssChkSystem
- * @reads    StorageAcssGrantTag + StorageReqAcssComponent
+ * @reads    StorageAcssGrntTag + StorageReqAcssComponent
  * @writes   File data via StorageResourceManager I/O methods
- * @depends  StorageAcssChkSystem grants access via StorageAcssGrantTag
+ * @depends  StorageAcssChkSystem grants access via StorageAcssGrntTag
  */
 class StorageFileWritSystem : public ecs::System {
 public:

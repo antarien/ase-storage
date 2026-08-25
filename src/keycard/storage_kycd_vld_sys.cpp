@@ -75,7 +75,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -145,9 +145,10 @@
 // Components from same module
 #include <ase/storage/components/state/storage_sta_tkn_comp.hpp>
 #include <ase/storage/components/state/storage_sta_idn_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_pend.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_rjct.hpp>
+#include <ase/storage/components/state/storage_sta_sess_comp.hpp>
+#include <ase/storage/components/tag/storage_kycd_pend_tag.hpp>
+#include <ase/storage/components/tag/storage_kycd_vld_tag.hpp>
+#include <ase/storage/components/tag/storage_kycd_rjct_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 // Hub API (counter)
 #include <ase/hub/api.hpp>
@@ -192,8 +193,12 @@ void StorageKycdVldSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
         if (result.valid) {
             auto& idn = registry.emplace<StorageStaIdnComponent>(entity);
-            idn.client_id = tkn.client_id;
-            idn.authenticated_at = mgr.get_wall_time_seconds();
+            // The session binding is a second row on the same entity: it says WHICH
+            // connection this identity is on and WHEN it was validated, both of
+            // which change without the user changing.
+            auto& sess = registry.emplace<StorageStaSessComponent>(entity);
+            sess.client_id = tkn.client_id;
+            sess.authenticated_at = mgr.get_wall_time_seconds();
             for (uint32_t ci = 0; ci < 64; ++ci) {
                 idn.user_id[ci] = result.user_id[ci];
             }
@@ -220,7 +225,16 @@ void StorageKycdVldSystem::tick(ecs::Registry& registry, float /*dt*/) {
             float rej_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_VLD_REJECT_COUNT"_hs, 0.0f);
             if (ase::types::is_not_found(rej_count)) rej_count = 0.0f;
             hub::set(registry, hub::GLOBAL, "STG_KYCD_VLD_REJECT_COUNT"_hs, rej_count + 1.0f);
-            log::warn("[StorageKycdVld] Keycard rejected for client {}", tkn.client_id);
+            // VON warn AUF error, und der Hilfetext der Kategorie verlangt es woertlich:
+            // "Decision belongs in the error stream, not as a warning". Eine abgelehnte
+            // Keycard ist eine Zugriffsverweigerung, kein Schoenheitsfehler.
+            //
+            // Die Haeufigkeit wurde mitbedacht und spricht nicht dagegen: die Ablehnung wird
+            // vier Zeilen darueber ohnehin schon in STG_KYCD_VLD_REJECT_COUNT gezaehlt, die
+            // Zeile kommt also nicht oefter als bisher — sie steht nur im richtigen Strom.
+            // client_id bleibt als owner erhalten, es geht nichts verloren.
+            log::error(log::ERR::CAT::ACCESS_DENIED, "StorageKycdVld", tkn.client_id,
+                       "STG_KYCD_validation");
         }
     }
 }

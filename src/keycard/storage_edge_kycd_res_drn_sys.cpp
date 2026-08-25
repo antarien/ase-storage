@@ -81,7 +81,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -277,16 +277,48 @@ void StorageEdgeKycdResDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
     uint32_t msg_len = 0;
 
     while (queue->pop_inbound(transport::LANE_KYC, buf, transport::LANE_BUF_SZ, msg_len)) {
+        // DIE FRAME-PRUEFUNGEN TRAGEN INPUT_REJECTED, und dieser Block sagt warum — inklusive
+        // der beiden Kandidaten, die hier NICHT passen.
+        //
+        // Massgeblich ist nicht die Semantik allein, sondern der Hilfetext, den log.hpp bei
+        // JEDEM Aufruf mitgibt. Die drei aelteren WRN-Kategorien sagen eine KORREKTUR zu:
+        //
+        //     VALUE_OUT_OF_RANGE  "Fix: Value will be clamped to valid range"
+        //     VALUE_NEGATIVE      "Fix: Value will be set to 0"
+        //     VALUE_INVALID       "Fix: Value will be set to default"
+        //
+        // Jede dieser Pruefungen macht das Gegenteil: `msg_len = 0; continue;` — der Frame wird
+        // VERWORFEN, nichts geklemmt, nichts auf einen Vorgabewert gesetzt. Alle drei schrieben
+        // hier eine Unwahrheit in jede einzelne Logzeile.
+        //
+        //     INPUT_REJECTED       "Fix: Request rejected, caller must correct it -
+        //                           not an engine fault"
+        //
+        // (Hier stand frueher eine Nummer hinter dem Namen. Sie ist entfernt und NICHT durch
+        //  eine neue ersetzt: seit dem Hash-Umbau IST die Kategorie ihr Name, und der Bestand
+        //  steht in core/ase-log/data/log_categories.json. Eine Zahl im Kommentar altert beim
+        //  naechsten Generatorlauf still — kein Tor liest Prosa.)
+        //
+        // Der sagt genau das Richtige und verspricht nichts: der Aufrufer hat etwas Unbedienbares
+        // geschickt, der Motor arbeitet korrekt. Die Dreier-Form ohne `owner` ist die dafuer
+        // gebaute — der Ausloeser ist ein fremder Aufrufer, kein Hub-Owner.
+        //
+        // WAS DABEI VERLOREN GEHT, und es ist bewusst: die ZAHLEN. Der freie String trug
+        // `msg_len` beziehungsweise das Typ-Byte; keine kategorisierte Ueberladung nimmt einen
+        // freien Text oder eine Zahl ohne `owner`. Der value_id benennt deshalb, WELCHE Zusage
+        // des Kontrakts gebrochen wurde, statt mit welchem Wert. Das ist der Tausch, den
+        // kategorisiertes Logging hier macht: Struktur gegen Detail.
         if (msg_len < EDGE_KYCD_RES_HDR) {
-            log::error("[StorageEdgeKycdResDrn] EDGE_KYCD_RES frame too short: {} bytes", msg_len);
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeKycdResDrn",
+                      "EDGE_KYCD_RES_frame_len");
             msg_len = 0;
             continue;
         }
 
         uint8_t msg_type = static_cast<uint8_t>(buf[0]);
         if (msg_type != EDGE_KYCD_BIN_MSG_RES) {
-            log::warn("[StorageEdgeKycdResDrn] unexpected inbound type={} ({} bytes) skipped",
-                      static_cast<uint32_t>(msg_type), msg_len);
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeKycdResDrn",
+                      "EDGE_KYCD_RES_msg_type");
             msg_len = 0;
             continue;
         }
@@ -307,14 +339,15 @@ void StorageEdgeKycdResDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
             continue;
         }
         if (payload_len < 1u) {
-            log::error("[StorageEdgeKycdResDrn] EDGE_KYCD_RES OK with empty payload (req_id={})", req_id);
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeKycdResDrn",
+                      "EDGE_KYCD_RES_payload_len");
             msg_len = 0;
             continue;
         }
         uint32_t payload_end = EDGE_KYCD_RES_HDR + payload_len;
         if (payload_end > msg_len) {
-            log::error("[StorageEdgeKycdResDrn] EDGE_KYCD_RES truncated payload (req_id={} need={} have={})",
-                       req_id, payload_end, msg_len);
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeKycdResDrn",
+                      "EDGE_KYCD_RES_payload_end");
             msg_len = 0;
             continue;
         }
@@ -333,7 +366,42 @@ void StorageEdgeKycdResDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // Without it there is no owner to publish against (no silent default).
         char user_id[MAX_OWNER_ID] = {};
         if (!parse_str_field(doc, payload_len, "\"user_id\"", user_id, sizeof(user_id))) {
-            log::error("[StorageEdgeKycdResDrn] EDGE_KYCD_RES document missing user_id (req_id={})", req_id);
+            // DIESE DREI DOKUMENTFELDER BLEIBEN log::error MIT FREIEM STRING, UND HIER IST DER
+            // GRUND EIN ANDERER ALS OBEN — er ist betrieblich, nicht formal.
+            //
+            // Fehlt user_id, clearance oder permission, bleibt das Tor auf 401 beziehungsweise
+            // faellt auf den verweigernden Boden. Das ist ein SICHERHEITSEREIGNIS.
+            //
+            // BIS 2026-08-23 STAND HIER EIN FREIER STRING, und die Begruendung war richtig: die
+            // einzige kategorisierte Form fuer diesen Fall war eine WARNUNG, und die haette die
+            // Zeile aus dem ERR-Filter geworfen — Filterbarkeit gewonnen, Sichtbarkeit verloren
+            // (Betreiber-Entscheid 2026-08-22).
+            //
+            // GEMESSEN am 2026-08-23: ACCESS_DENIED (ERR::CAT; die Nummer, die hier stand, ist
+            // entfernt und nicht ersetzt — Bestand in core/ase-log/data/log_categories.json,
+            // die Kategorie IST ihr Name) ist eine FEHLER-Kategorie, und
+            // ihr Hilfetext sagt ausdruecklich "Decision belongs in the error stream, not as a
+            // warning". Die PRAEMISSE des Entscheids — Kategorie hiesse Abstieg auf WRN —
+            // trifft damit nicht mehr zu.
+            //
+            // WAS DARAUS FOLGT, IST EINE ABWAEGUNG UND KEINE MESSUNG, und sie steht hier als
+            // solche: dass eine weggefallene Praemisse den Entscheid aufhebt, ist meine
+            // Schlussfolgerung, kein nachgeschlagener Grundsatz — im Wissensbestand ist dazu
+            // nichts zu finden. Die Umstellung wurde dem Auftraggeber am 2026-08-23 mit genau
+            // dieser Kennzeichnung zum Widerruf vorgelegt. Wer sie zurueckdreht, dreht eine
+            // Abwaegung zurueck und keinen Messfehler.
+            //
+            // WAS DER UMBAU KOSTET, damit es niemand suchen muss: req_id faellt aus der Zeile.
+            // Es ist ein uint64_t, und die kategorisierten Formen fuehren uint32_t owner — eine
+            // abgeschnittene 64-Bit-Kennung waere eine ANDERE Kennung und damit eine
+            // Falschaussage in der strukturierten Form. Dieselbe Abwaegung wie bei den
+            // Frame-Pruefungen oben.
+            //
+            // OHNE owner, und das ist hier kein Mangel: user_id ist GENAU DAS, was fehlt. Die
+            // Zeile sagt damit wahrheitsgemaess, dass die Identitaet nicht aufgeloest werden
+            // konnte — Punkt 1 des Hilfetexts.
+            log::error(log::ERR::CAT::ACCESS_DENIED, "StorageEdgeKycdResDrn",
+                       "EDGE_KYCD_RES_user_id");
             msg_len = 0;
             continue;
         }
@@ -353,12 +421,18 @@ void StorageEdgeKycdResDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // rather than grants on partial data.
         uint32_t clearance = 0;
         if (!parse_num_field(doc, payload_len, "\"clearance\"", clearance)) {
-            log::error("[StorageEdgeKycdResDrn] EDGE_KYCD_RES document missing clearance (req_id={})", req_id);
+            // MIT owner, anders als der user_id-Fall oben: ab Zeile 383 ist die Identitaet
+            // aufgeloest, und sie ist genau die Achse, nach der die Kategorie fragt
+            // ("Required clearance/permission recorded for that identity"). req_id faellt aus
+            // demselben Grund wie oben weg (uint64_t gegen uint32_t owner).
+            log::error(log::ERR::CAT::ACCESS_DENIED, "StorageEdgeKycdResDrn", owner,
+                       "EDGE_KYCD_RES_clearance");
             clearance = 0;
         }
         uint32_t permission = 0;
         if (!parse_num_field(doc, payload_len, "\"permission\"", permission)) {
-            log::error("[StorageEdgeKycdResDrn] EDGE_KYCD_RES document missing permission (req_id={})", req_id);
+            log::error(log::ERR::CAT::ACCESS_DENIED, "StorageEdgeKycdResDrn", owner,
+                       "EDGE_KYCD_RES_permission");
             permission = 0;
         }
 

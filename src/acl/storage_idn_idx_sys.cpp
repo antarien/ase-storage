@@ -87,7 +87,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -198,7 +198,9 @@ void StorageIdnIdxSystem::tick(ecs::Registry& registry, float dt) {
 
     auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
     if (!idx_ptr || !(*idx_ptr)) {
-        log::error("[StorageIdnIdx] StorageAcssIndexResourceManager not in ctx (StorageAcssIdxSystem registers it)");
+        // SCHEDULE_ORDER: der Erzeuger (StorageAcssIdxSystem) hat den ctx-Halter noch nicht angelegt.
+        log::error(log::ERR::CAT::SCHEDULE_ORDER, "StorageIdnIdxSystem",
+                   "StorageAcssIndexResourceManager");
         return;
     }
     auto& idx = **idx_ptr;

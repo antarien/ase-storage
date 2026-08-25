@@ -76,7 +76,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -146,12 +146,14 @@
 // Components from same module
 #include <ase/storage/components/state/storage_sta_cur_cur_comp.hpp>
 #include <ase/storage/components/state/storage_req_cur_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_cur_req.hpp>
-#include <ase/storage/components/tag/storage_tag_cur_done.hpp>
-#include <ase/storage/components/tag/storage_tag_cur_unrated.hpp>
-#include <ase/storage/components/tag/storage_tag_cur_approved.hpp>
-#include <ase/storage/components/tag/storage_tag_cur_rejected.hpp>
-#include <ase/storage/components/tag/storage_tag_cur_rework.hpp>
+#include <ase/storage/components/state/storage_req_cur_prm_comp.hpp>
+#include <ase/storage/components/state/storage_cur_asmt_comp.hpp>
+#include <ase/storage/components/tag/storage_cur_req_tag.hpp>
+#include <ase/storage/components/tag/storage_cur_done_tag.hpp>
+#include <ase/storage/components/tag/storage_rvw_pend_tag.hpp>
+#include <ase/storage/components/tag/storage_rvw_acpt_tag.hpp>
+#include <ase/storage/components/tag/storage_rvw_rjct_tag.hpp>
+#include <ase/storage/components/tag/storage_rvw_rvse_tag.hpp>
 #include <ase/storage/storage_acss_index_resource_manager.hpp>
 // types.hpp for constants (NO magic numbers!)
 #include <ase/storage/types.hpp>
@@ -177,10 +179,10 @@ namespace {
  * Called before emplacing the new status Tag to ensure mutual exclusion.
  */
 void remove_all_cur_tags(ecs::Registry& registry, entt::entity entity) {
-    registry.remove<StorageCurUnratedTag>(entity);
-    registry.remove<StorageCurApprovedTag>(entity);
-    registry.remove<StorageCurRejectedTag>(entity);
-    registry.remove<StorageCurReworkTag>(entity);
+    registry.remove<StorageRvwPendTag>(entity);
+    registry.remove<StorageRvwAcptTag>(entity);
+    registry.remove<StorageRvwRjctTag>(entity);
+    registry.remove<StorageRvwRvseTag>(entity);
 }
 
 /**
@@ -190,13 +192,13 @@ void remove_all_cur_tags(ecs::Registry& registry, entt::entity entity) {
 void emplace_cur_tag(ecs::Registry& registry, entt::entity entity, uint8_t target_tag) {
     remove_all_cur_tags(registry, entity);
     if (target_tag == CUR_ST_APPROVED) {
-        registry.emplace<StorageCurApprovedTag>(entity);
+        registry.emplace<StorageRvwAcptTag>(entity);
     } else if (target_tag == CUR_ST_REJECTED) {
-        registry.emplace<StorageCurRejectedTag>(entity);
+        registry.emplace<StorageRvwRjctTag>(entity);
     } else if (target_tag == CUR_ST_NEEDS_REWORK) {
-        registry.emplace<StorageCurReworkTag>(entity);
+        registry.emplace<StorageRvwRvseTag>(entity);
     } else {
-        registry.emplace<StorageCurUnratedTag>(entity);
+        registry.emplace<StorageRvwPendTag>(entity);
     }
 }
 
@@ -212,18 +214,21 @@ void StorageCurPrcSystem::on_start(ecs::Registry& /*registry*/) {
 void StorageCurPrcSystem::tick(ecs::Registry& registry, float /*dt*/) {
     auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
     if (!idx_ptr || !(*idx_ptr)) {
-        log::error("[StorageCurPrcSystem] StorageAcssIndexResourceManager not in ctx (StorageAcssIdxSystem must run first)");
+        // SCHEDULE_ORDER: der Erzeuger (StorageAcssIdxSystem) hat den ctx-Halter noch nicht angelegt.
+        log::error(log::ERR::CAT::SCHEDULE_ORDER, "StorageCurPrcSystem",
+                   "StorageAcssIndexResourceManager");
         return;
     }
     auto& idx = **idx_ptr;
 
     // PASS 1: Process pending requests (single-pass)
     // View: requests with StorageCurReqTag, excluding already-processed (StorageCurDoneTag)
-    auto req_view = registry.view<StorageReqCurComponent, StorageCurReqTag>(
-        entt::exclude<StorageCurDoneTag>);
+    auto req_view = registry.view<StorageReqCurComponent, StorageReqCurPrmComponent,
+                                  StorageCurReqTag>(entt::exclude<StorageCurDoneTag>);
 
     for (auto req_entity : req_view) {
         auto& req = req_view.get<StorageReqCurComponent>(req_entity);
+        auto& prm = req_view.get<StorageReqCurPrmComponent>(req_entity);
 
         // The curation row is reached by its (project, key) pair - the key the index is
         // built on. The former version walked EVERY curation row for EVERY request
@@ -244,7 +249,8 @@ void StorageCurPrcSystem::tick(ecs::Registry& registry, float /*dt*/) {
             ase::utils::str_copy(cur.key, CUR_MAX_KEY, req.key);
             cur.key_hash = req_key_hash;
             cur.project_ref = req.project_ref;
-            registry.emplace<StorageCurUnratedTag>(cur_entity);
+            registry.emplace<StorageCurAsmtComponent>(cur_entity);
+            registry.emplace<StorageRvwPendTag>(cur_entity);
             // Registered IMMEDIATELY, not on the next rebuild: a second request naming the
             // same asset in this same pass must find THIS row, or both create their own
             // and the later rating lands on a duplicate nobody reads.
@@ -252,26 +258,40 @@ void StorageCurPrcSystem::tick(ecs::Registry& registry, float /*dt*/) {
             log::info("[StorageCurPrcSystem] Created curation entity for key '{}'", req.key);
         }
 
-        auto& cur = registry.get<StorageStaCurCurComponent>(cur_entity);
+        auto& asmt = registry.get<StorageCurAsmtComponent>(cur_entity);
 
         // Apply action — separate View per action type not needed here
         // because action is from external input, not entity classification
         if (req.action == CUR_ACT_RATE) {
-            if (req.rating > 5) {
-                log::warn("[StorageCurPrcSystem] Invalid rating {} for key '{}'", req.rating, req.key);
+            if (prm.rating > 5) {
+                // INPUT_REJECTED: die Eingabe kommt von AUSSEN, und der Bestand nennt genau
+                // diesen Fall — "foreign caller sent something unserviceable", mit dem Zusatz
+                // "caller must correct it - not an engine fault". Der Durchlauf geht weiter,
+                // also die WRN-Haelfte. NICHT VALUE_INVALID: das beschriebe einen Wert, der IM
+                // SYSTEM ungueltig wurde — hier ist die HERKUNFT der Unterschied.
+                //
+                // DIE FRUEHERE BEGRUENDUNG IST ABGELAUFEN: sie stuetzte die Wahl darauf, dass
+                // VALUE_INVALID "Fix: Value will be set to default" ZUSAGE und damit eine
+                // Korrektur behaupte, die hier nicht stattfindet. Der Bestand hat jede Zusage
+                // ueber den Kontrollfluss zurueckgezogen. Dass der else-Zweig zuweist und
+                // dieser Zweig nicht, bleibt als BEOBACHTUNG richtig — es traegt die
+                // Kategoriewahl nur nicht mehr.
+                log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageCurPrcSystem", "cur_rating");
             } else {
-                cur.rating = req.rating;
+                asmt.rating = prm.rating;
             }
         } else if (req.action == CUR_ACT_STATUS) {
-            emplace_cur_tag(registry, cur_entity, req.target_tag);
+            emplace_cur_tag(registry, cur_entity, prm.target_tag);
         } else if (req.action == CUR_ACT_NOTES) {
-            ase::utils::str_copy(cur.notes, CUR_MAX_NOTES, req.notes);
+            ase::utils::str_copy(asmt.notes, CUR_MAX_NOTES, prm.notes);
         } else {
-            log::warn("[StorageCurPrcSystem] Unknown action {} for key '{}'", req.action, req.key);
+            // Gleiche Lage wie beim Rating: die Aktion kommt aus externer Eingabe und wird
+            // zurueckgewiesen — der Aufrufer muss sie korrigieren, es ist kein Engine-Fehler.
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageCurPrcSystem", "cur_action");
         }
 
         // Update metadata
-        ase::utils::str_copy(cur.user_id, CUR_MAX_USERID, req.user_id);
+        ase::utils::str_copy(asmt.user_id, CUR_MAX_USERID, req.user_id);
         // updated_at is set by the route handler (wall clock from HTTP request)
 
         // Mark request as processed (deferred deletion)

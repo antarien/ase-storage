@@ -74,7 +74,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -143,7 +143,7 @@
 #include <ase/storage/systems/keycard/storage_kycd_drn_sys.hpp>
 // Components from same module
 #include <ase/storage/components/state/storage_sta_tkn_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_pend.hpp>
+#include <ase/storage/components/tag/storage_kycd_pend_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 // Hub API (counter)
 #include <ase/hub/api.hpp>

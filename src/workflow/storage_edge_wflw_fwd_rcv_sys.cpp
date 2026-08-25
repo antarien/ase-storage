@@ -76,7 +76,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -251,14 +251,20 @@ void StorageEdgeWflwFwdRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
     while (queue->pop_inbound(transport::LANE_WFLW, buf, transport::LANE_BUF_SZ, msg_len)) {
         if (msg_len < EDGE_WFLW_FWD_HDR + 1u) {
-            log::error("[StorageEdgeWflwFwdRcv] EDGE_WFLW_FWD frame too short: {} bytes", msg_len);
+            // INPUT_REJECTED (WRN::CAT, SSOT core/ase-log/data/log_categories.json — die
+            // Kategorie IST ihr Name, eine Nummer gibt es seit dem Hash-Umbau nicht mehr),
+            // Dreier-Form ohne owner: der Frame kommt von aussen und
+            // wird verworfen. Die drei aelteren WRN-Kategorien sagen eine Korrektur zu, die
+            // hier nicht stattfindet; ERR hat fuer einen Wire-Frame keinen Namen.
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeWflwFwdRcv",
+                      "EDGE_WFLW_FWD_frame_len");
             msg_len = 0;
             continue;
         }
         uint8_t msg_type = static_cast<uint8_t>(buf[0]);
         if (msg_type != EDGE_WFLW_BIN_MSG_FWD) {
-            log::warn("[StorageEdgeWflwFwdRcv] unexpected inbound type={} ({} bytes) skipped",
-                      static_cast<uint32_t>(msg_type), msg_len);
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeWflwFwdRcv",
+                      "EDGE_WFLW_FWD_msg_type");
             msg_len = 0;
             continue;
         }
@@ -367,8 +373,8 @@ void StorageEdgeWflwFwdRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // Reply frame [114][cli_conn:u32][status:u8][json_len:u32][json] onto the outbound queue;
         // the Replica relays it VERBATIM to the ase-cli connection.
         if (outq == nullptr) {
-            log::error("[StorageEdgeWflwFwdRcv] outbound queue unavailable - verdict dropped (cli_conn={})",
-                       cli_conn);
+            log::error(log::ERR::CAT::RESOURCE_UNAVAIL, "StorageEdgeWflwFwdRcv", cli_conn,
+                       "EDGE_WFLW_outbound_queue");
             msg_len = 0;
             continue;
         }
@@ -380,8 +386,19 @@ void StorageEdgeWflwFwdRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
         std::memcpy(frame + 6, &jl, 4);
         for (uint32_t k = 0; k < jl; ++k) frame[EDGE_WFLW_RES_HDR + k] = json[k];
         if (!outq->push_outbound(frame, EDGE_WFLW_RES_HDR + jl)) {
-            log::warn("[StorageEdgeWflwFwdRcv] verdict push failed - outbound queue full (cli_conn={})",
-                      cli_conn);
+            // KATEGORIE: CAPACITY_REACHED, nicht RESOURCE_UNAVAIL. Der `outq == nullptr`-Zweig
+            // weiter oben hat den Fall "Queue fehlt" schon abgefangen; wer hier ankommt, hat
+            // eine Queue, die DA ist und ARBEITET — ihr fehlt nur der Platz. Genau so trennt
+            // die Abgrenzung an der Konstanten die beiden: dort ist die Ressource nicht zu
+            // belegen, hier ist sie belegt. Dass beide Zweige dieselbe Wirkung haben (das
+            // Verdikt ist weg), macht sie nicht zur selben Ursache — und der Leser bekommt
+            // zwei verschiedene naechste Schritte.
+            //
+            // EBENE: ERR und nicht die WRN-Haelfte. Der Unterschied ist nicht die Schwere,
+            // sondern ob danach noch etwas passiert: dieses Verdikt wird von keinem spaeteren
+            // Durchlauf nachgeholt, der Aufrufer wartet auf eine Antwort, die nie kommt.
+            log::error(log::ERR::CAT::CAPACITY_REACHED, "StorageEdgeWflwFwdRcv", cli_conn,
+                       "EDGE_WFLW_outbound_capacity");
         }
 
         msg_len = 0;

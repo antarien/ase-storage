@@ -4,16 +4,21 @@
  * ASE ECS COMPONENT (STATE)
  *
  * @file        storage_buf_audt_comp.hpp
- * @brief       StorageBufAudtComponent - Audit entry buffer for batch persistence
- * @description One entity per access decision (grant or deny) with full context.
- *              Batch-written to MongoDB by StgAudtWrtSystem at 1Hz.
+ * @brief       StorageBufAudtComponent - Context of one audited access attempt
+ * @description WHO reached for WHAT asset, WHERE and WHEN: realm, project, user,
+ *              path and the timestamp of the attempt. What was attempted and how
+ *              it was decided lives in StorageAudtOutcComponent on the same
+ *              entity - split 2026-08-19, the God-Component gate allows five
+ *              fields and the combined row carried eight. Both rows are emplaced
+ *              together with StorageAudtPendTag and batch-written to MongoDB by
+ *              StorageAudtWritSystem at 1Hz.
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
  * @created     2026-04-04
- * @modified    2026-04-05
- * @version     1.0.0
+ * @modified    2026-08-19
+ * @version     1.1.0
  *
  * ECS COMPONENT COMPLIANCE
  *
@@ -49,10 +54,12 @@
 namespace ase::storage {
 
 /**
- * @brief StorageBufAudtComponent - Audit entry for every access decision
+ * @brief StorageBufAudtComponent - the context of one audit entry
  *
- * Created by StgAcssChkSystem after every grant or deny decision.
- * Tagged with StorageAudtPendTag until StgAudtWrtSystem persists to MongoDB.
+ * Created by every system that decides an access - StorageAcssChkSystem, the
+ * three workflow systems and the edge drain. Tagged with StorageAudtPendTag
+ * until StorageAudtWritSystem persists it to MongoDB. Its verdict half is
+ * StorageAudtOutcComponent and is read in the same view, never fetched again.
  *
  * @hub_reads  none
  * @hub_writes none
@@ -61,11 +68,8 @@ struct StorageBufAudtComponent {
     uint32_t relm_ref = 0;                    // Entity ref to realm where access was attempted
     uint32_t proj_ref = 0;                    // Entity ref to project (0 = realm-level access)
     char user_id[64] = {};                    // User who attempted access (MongoDB ObjectId hex)
-    uint8_t action = 0;                       // What was attempted (AUD_READ, AUD_WRITE, etc.)
     char path[256] = {};                      // Asset path that was accessed
     uint64_t timestamp = 0;                   // Unix timestamp of the access attempt
-    uint8_t result = 0;                       // Outcome (AUD_GRANTED, AUD_DENIED, AUD_ESCALATED)
-    char reason[64] = {};                     // Deny reason (e.g. "missing_cwrd(SHADER)")
 };
 
 }  // namespace ase::storage

@@ -7,7 +7,7 @@
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
- * @schedule    Ingestion
+ * @schedule    Integration
  * @created     2026-06-24
  * @modified    2026-06-24
  * @version     1.0.0
@@ -83,7 +83,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -153,10 +153,11 @@
 // Components from same module
 #include <ase/storage/components/state/storage_sta_idn_comp.hpp>
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
+#include <ase/storage/components/state/storage_kycd_grnt_comp.hpp>
 #include <ase/storage/components/state/storage_kycd_idn_comp.hpp>
 #include <ase/storage/storage_acss_index_resource_manager.hpp>
 #include <ase/storage/components/state/storage_kycd_cwrd_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
+#include <ase/storage/components/tag/storage_kycd_vld_tag.hpp>
 // Module constants (MAX_OWNER_ID, MAX_CODEWORD_LEN)
 #include <ase/storage/types.hpp>
 // Hub API for cross-module session contract keys
@@ -218,7 +219,9 @@ void StorageKycdCwrdPubSystem::tick(ecs::Registry& registry, float /*dt*/) {
     // enforce them WITHOUT the codeword string ever crossing the Hub.
     auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
     if (!idx_ptr || !(*idx_ptr)) {
-        log::error("[StorageKycdCwrdPub] StorageAcssIndexResourceManager not in ctx (StorageAcssIdxSystem must run first)");
+        // SCHEDULE_ORDER: der Erzeuger (StorageAcssIdxSystem) hat den ctx-Halter noch nicht angelegt.
+        log::error(log::ERR::CAT::SCHEDULE_ORDER, "StorageKycdCwrdPubSystem",
+                   "StorageAcssIndexResourceManager");
         return;
     }
     auto& idx = **idx_ptr;
@@ -259,15 +262,18 @@ void StorageKycdCwrdPubSystem::tick(ecs::Registry& registry, float /*dt*/) {
     // The session set is ASKED, never assumed. Publishing for every keycard would hand
     // clearance to users who hold a card but no session - a wider grant dressed up as a
     // faster loop. That is the whole reason the index carries the set at all.
-    for (auto [kycd_entity, kycd, kycd_idn] :
-         registry.view<StorageStaKycdComponent, StorageKycdIdnComponent>().each()) {
+    for (auto [kycd_entity, kycd, grnt, kycd_idn] :
+         registry
+             .view<StorageStaKycdComponent, StorageKycdGrntComponent, StorageKycdIdnComponent>()
+             .each()) {
         (void)kycd_entity;
+        (void)kycd;
         if (!idx.has_session(kycd_idn.issued_to_hash)) {
             continue;
         }
         const uint32_t owner = kycd_idn.issued_to_hash;
-        hub::set(registry, owner, "SES_CLEARANCE"_hs, static_cast<float>(kycd.clrn));
-        hub::set(registry, owner, "SES_KYCD_PERM"_hs, static_cast<float>(kycd.perm));
+        hub::set(registry, owner, "SES_CLEARANCE"_hs, static_cast<float>(grnt.clrn));
+        hub::set(registry, owner, "SES_KYCD_PERM"_hs, static_cast<float>(grnt.perm));
     }
 
     // PASS 3 - the held codewords, one walk over the LEAVES. Each grant names its keycard,

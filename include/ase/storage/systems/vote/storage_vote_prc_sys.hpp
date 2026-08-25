@@ -38,14 +38,14 @@ namespace ase::storage {
  * @brief StorageVotePrcSystem - Vote evaluation at 1Hz
  *
  * @schedule Observation - Checks open votes for quorum or deadline
- * @reads    StorageVotPendTag + StorageStaVoteComponent + StorageVoteCntComponent
+ * @reads    StorageVotePendTag + StorageStaVoteComponent + StorageVoteCntComponent
  *           + StorageBlltVoteComponent (the ballots, walked child-first)
- * @writes   Re-derives the tallies, removes StorageVotPendTag, and on a passed
+ * @writes   Re-derives the tallies, removes StorageVotePendTag, and on a passed
  *           motion creates a keycard REQUEST entity (StorageReqKycdComponent +
  *           StorageReqKycdRelmComponent + hub::HubStgKycdPendTag) for
  *           StorageKycdReqDrnSystem to mint - never a call into that system.
- * @depends  HTTP routes create vote entities with StorageVotPendTag
- *           (the tag is StorageVotPendTag, not StorageVotePendTag - the older
+ * @depends  HTTP routes create vote entities with StorageVotePendTag
+ *           (the tag is StorageVotePendTag, not StorageVotePendTag - the older
  *           spelling in this contract named no existing type)
  */
 class StorageVotePrcSystem : public ecs::System {

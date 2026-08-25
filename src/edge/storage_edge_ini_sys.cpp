@@ -27,7 +27,7 @@
  *   │  WRITES:                                    │
  *   │    - edge_binaries realm directory tree     │
  *   │    - StorageStaRelmComponent (edge realm)   │
- *   │    - StorageRelmPublicTag + RelmActiveTag    │
+ *   │    - StorageRelmGlobTag + RelmActiveTag    │
  *   │    - StorageAcssRuleComponent (release path)│
  *   │    - StorageAcssCwrdComponent (BINARY)       │
  *   └─────────────────────────────────────────────┘
@@ -76,7 +76,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -145,11 +145,12 @@
 #include <ase/storage/systems/edge/storage_edge_ini_sys.hpp>
 // Components from same module
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
+#include <ase/storage/components/state/storage_relm_quot_comp.hpp>
 #include <ase/storage/components/state/storage_acss_rule_comp.hpp>
 #include <ase/storage/components/state/storage_acss_cwrd_comp.hpp>
 #include <ase/storage/components/state/storage_wflw_edge_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_public.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_active.hpp>
+#include <ase/storage/components/tag/storage_relm_glob_tag.hpp>
+#include <ase/storage/components/tag/storage_relm_actv_tag.hpp>
 #include <ase/storage/components/tag/storage_relm_edge_tag.hpp>
 #include <ase/storage/components/state/storage_relm_idn_comp.hpp>
 #include <ase/storage/components/state/storage_rule_idn_comp.hpp>
@@ -246,7 +247,10 @@ void StorageEdgeIniSystem::on_start(ecs::Registry& registry) {
 
     auto* mgr_ptr = registry.ctx().find<StorageResourceManager*>();
     if (!mgr_ptr || !(*mgr_ptr)) {
-        log::error("[StorageEdgeIni] StorageResourceManager not in ctx (StorageIniSystem must run first)");
+        // SCHEDULE_ORDER: "System runs before its dependency". Der Erzeuger steht
+        // im freien String, die Kategorie macht daraus etwas Zaehlbares. Das `return` darunter ist
+        // unbedenklich — ERR-Hilfetexte sind Checklisten und sagen keine Wertkorrektur zu.
+        log::error(log::ERR::CAT::SCHEDULE_ORDER, "StorageEdgeIniSystem", "StorageResourceManager");
         return;
     }
     auto& mgr = **mgr_ptr;
@@ -274,15 +278,16 @@ void StorageEdgeIniSystem::on_start(ecs::Registry& registry) {
     relm_idn.id_hash = EDGE_REALM_HASH;
     relm.default_protection = PROTECTION_PUBLIC;
     relm.tier = TIER_ENTERPRISE;
-    relm.quota_bytes = EDGE_REALM_QUOTA_BYTES;
-    registry.emplace<StorageRelmPublicTag>(realm_ent);
-    registry.emplace<StorageRelmActiveTag>(realm_ent);
+    auto& relm_quot = registry.emplace<StorageRelmQuotComponent>(realm_ent);
+    relm_quot.quota_bytes = EDGE_REALM_QUOTA_BYTES;
+    registry.emplace<StorageRelmGlobTag>(realm_ent);
+    registry.emplace<StorageRelmActvTag>(realm_ent);
     // Identity marker: this system is the ONLY producer of the edge realm, so the
     // tag is the SSOT for "which entity is EDGE_REALM_ID". The workflow systems
     // read it instead of scanning every realm and comparing the id string.
     registry.emplace<StorageRelmEdgeTag>(realm_ent);
     log::info("[StorageEdgeIni] edge_binaries realm entity registered (tier=Enterprise, public, quota={} bytes)",
-              relm.quota_bytes);
+              relm_quot.quota_bytes);
 
     // A/ACS rules (Entity-per-Item pairs rule+codeword). ALL FOUR edge codeword
     // axes are realm ACL DATA — not just BINARY with suffix-only enforcement in

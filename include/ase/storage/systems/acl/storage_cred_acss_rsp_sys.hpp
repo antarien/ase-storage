@@ -5,7 +5,7 @@
  *
  * @file        storage_cred_acss_rsp_sys.hpp
  * @brief       StorageCredAcssRspSystem - Ships the A/ACS verdict back to the Replica
- * @description After StorageAcssChkSystem renders StorageAcssGrantTag/StorageAcssDenyTag on a
+ * @description After StorageAcssChkSystem renders StorageAcssGrntTag/StorageAcssDenyTag on a
  *              credential access-check request (carrying StorageCredAcssPndComponent), this system
  *              emits the CACSS_WIRE_RES frame [87][req_id][verdict][reason] onto the transport
  *              outbound queue (the L2 demux ws->send()s it to the Replica) and destroys the request
@@ -42,7 +42,7 @@ namespace ase::storage {
 /**
  * @brief StorageCredAcssRspSystem - outbound credential A/ACS verdict emitter.
  *
- * Reads request entities that carry StorageCredAcssPndComponent + a StorageAcssGrantTag/DenyTag,
+ * Reads request entities that carry StorageCredAcssPndComponent + a StorageAcssGrntTag/DenyTag,
  * pushes CACSS_WIRE_RES to the transport outbound queue, and destroys them (collect-then-destroy).
  *
  * @schedule Reception - after StorageCredAcssRcvSystem + the Integration ladder verdict

@@ -85,7 +85,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -166,7 +166,7 @@
 #include <ase/storage/components/tag/storage_acss_rule_sufx_tag.hpp>
 #include <ase/storage/components/state/storage_sta_idn_comp.hpp>
 #include <ase/storage/components/state/storage_sta_cur_cur_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
+#include <ase/storage/components/tag/storage_kycd_vld_tag.hpp>
 #include <ase/storage/components/state/storage_sta_task_comp.hpp>
 #include <ase/storage/storage_acss_index_resource_manager.hpp>
 #include <ase/storage/types.hpp>
@@ -211,7 +211,10 @@ void StorageAcssIdxSystem::tick(ecs::Registry& registry, float dt) {
 
     auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
     if (!idx_ptr || !(*idx_ptr)) {
-        log::error("[StorageAcssIdx] StorageAcssIndexResourceManager not in ctx (on_start must run first)");
+        // SCHEDULE_ORDER auch hier, obwohl der Erzeuger das EIGENE on_start ist: tick vor on_start
+        // ist dieselbe Sache — eine Stelle laeuft vor ihrer Voraussetzung.
+        log::error(log::ERR::CAT::SCHEDULE_ORDER, "StorageAcssIdxSystem",
+                   "StorageAcssIndexResourceManager");
         return;
     }
     auto& idx = **idx_ptr;

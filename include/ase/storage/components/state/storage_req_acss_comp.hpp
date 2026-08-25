@@ -4,16 +4,22 @@
  * ASE ECS COMPONENT (STATE)
  *
  * @file        storage_req_acss_comp.hpp
- * @brief       StorageReqAcssComponent - Access check request from HTTP route
- * @description Created by HTTP route handlers for StgAcssChkSystem to evaluate.
- *              Result communicated via StorageAcssGrantTag or StorageAcssDenyTag.
+ * @brief       StorageReqAcssComponent - What an access request asks for
+ * @description WHAT the caller wants to do and to which asset: target realm,
+ *              target project, path and the requested action. WHO is asking and
+ *              with what standing lives in StorageReqCredComponent on the same
+ *              entity - split 2026-08-19, the God-Component gate allows five
+ *              fields and the combined row carried seven. Created by
+ *              StorageCredAcssRcvSystem from the wire frame, evaluated by
+ *              StorageAcssChkSystem; the verdict comes back as
+ *              StorageAcssGrntTag or StorageAcssDenyTag on the same entity.
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
  * @created     2026-04-04
- * @modified    2026-04-05
- * @version     1.0.0
+ * @modified    2026-08-19
+ * @version     1.1.0
  *
  * ECS COMPONENT COMPLIANCE
  *
@@ -51,9 +57,9 @@ namespace ase::storage {
 /**
  * @brief StorageReqAcssComponent - Request entity for A/ACS access check
  *
- * Created by HTTP route handler, processed by StgAcssChkSystem.
- * Result: StorageAcssGrantTag (proceed) or StorageAcssDenyTag (reject).
- * Entity destroyed after HTTP response sent.
+ * Created by StorageCredAcssRcvSystem, processed by StorageAcssChkSystem.
+ * Result: StorageAcssGrntTag (proceed) or StorageAcssDenyTag (reject).
+ * Entity destroyed after the verdict has been sent.
  *
  * @hub_reads  none
  * @hub_writes none
@@ -63,9 +69,6 @@ struct StorageReqAcssComponent {
     uint32_t proj_ref = 0;                    // Entity ref to target project (0 = realm-level)
     char path[256] = {};                      // Asset path being accessed
     uint8_t action = 0;                       // Requested action (AUD_READ, AUD_WRITE, etc.)
-    uint8_t clrn = 0;                        // Clearance from auth header (pre-resolved by route)
-    uint16_t perm = 0;                        // Permissions from auth header (pre-resolved by route)
-    char user_id[64] = {};                    // User ID from auth header (pre-resolved by route)
 };
 
 }  // namespace ase::storage

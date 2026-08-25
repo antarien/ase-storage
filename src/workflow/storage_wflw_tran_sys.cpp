@@ -80,7 +80,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -155,14 +155,15 @@
 #include <ase/storage/components/state/storage_acss_rule_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
+#include <ase/storage/components/state/storage_audt_outc_comp.hpp>
 #include <ase/storage/components/state/storage_buf_wflw_comp.hpp>
 #include <ase/storage/components/state/storage_wflw_retr_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_wflw_pend.hpp>
-#include <ase/storage/components/tag/storage_tag_wflw_retr.hpp>
+#include <ase/storage/components/tag/storage_wflw_pend_tag.hpp>
+#include <ase/storage/components/tag/storage_wflw_retr_tag.hpp>
 #include <ase/storage/components/tag/storage_relm_edge_tag.hpp>
-#include <ase/storage/components/tag/storage_tag_wflw_gate.hpp>
-#include <ase/storage/components/tag/storage_tag_wflw_pst_pend.hpp>
-#include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
+#include <ase/storage/components/tag/storage_wflw_gate_tag.hpp>
+#include <ase/storage/components/tag/storage_wflw_pst_pend_tag.hpp>
+#include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
 // Hub API (perm read + verdict/stage publish)
@@ -194,11 +195,12 @@ void emit_tran_audit(ecs::Registry& registry, uint32_t relm_ref, const char* use
     aud.relm_ref = relm_ref;
     aud.proj_ref = 0;
     ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, user_id);
-    aud.action = AUD_PROMOTE;
     ase::utils::str_copy(aud.path, MAX_PATH_LEN, path);
     aud.timestamp = timestamp;
-    aud.result = result;
-    ase::utils::str_copy(aud.reason, MAX_REASON_LEN, reason);
+    auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+    outc.action = AUD_PROMOTE;
+    outc.result = result;
+    ase::utils::str_copy(outc.reason, MAX_REASON_LEN, reason);
     registry.emplace<StorageAudtPendTag>(aud_ent);
 }
 
@@ -250,7 +252,13 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
     // Requests still carrying StorageWflwGateTag belong to StorageWflwGateSystem.
     auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
     if (!idx_ptr || !(*idx_ptr)) {
-        log::error("[StorageWflwTran] StorageAcssIndexResourceManager not in ctx (StorageAcssIdxSystem must run first)");
+        // SCHEDULE_ORDER, woertlich: „System runs before its dependency". Der
+        // freie String sagte dasselbe in Prosa. Ebene bleibt error, und das `return` darunter
+        // ist unbedenklich: die ERR-Hilfetexte sind Diagnose-Checklisten („Check: 1) … 2) …"),
+        // sie sagen — anders als die drei WRN-Texte — keine Korrektur des Wertes zu.
+        // Der volle Klassenname wie in der bereits kategorisierten Zeile weiter unten.
+        log::error(log::ERR::CAT::SCHEDULE_ORDER, "StorageWflwTranSystem",
+                   "StorageAcssIndexResourceManager");
         return;
     }
     auto& idx = **idx_ptr;
@@ -293,8 +301,58 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
             hub::set(registry, owner, "STG_WFLW_RES"_hs, static_cast<float>(WFLW_RES_DENIED_PERM));
             emit_tran_audit(registry, relm_ref, req.requested_by, req.path, now,
                             AUD_DENIED, "missing_perm(PROMOTE)");
-            log::warn("[StorageWflwTran] DENIED {} -> {} — requester {} lacks PERM_PROMOTE",
-                      req.path, req.target_label, req.requested_by);
+            // DIE BEIDEN DENIED-ZEILEN DIESER DATEI BLEIBEN FREIE STRINGS — hier und bei der
+            // Kantenpruefung weiter unten. Zwei Gruende, jeder allein ausreichend:
+            //
+            // 1. ES IST EIN AUTORISIERUNGSENTSCHEID. Auf diesem Pfad ist die EBENE wichtiger
+            //    als die Kategorie: eine kategorisierte Zeile waere filterbar und faende sich
+            //    trotzdem nicht mehr dort, wo jemand nach abgelehnten Zugriffen sucht.
+            //    (Betreiber-Entscheid 2026-08-22, gleiche Klasse wie die drei Dokumentfelder
+            //    in storage_edge_kycd_res_drn_sys.cpp.)
+            // 2. KEINE KATEGORISIERTE FORM TRAEGT DIESE ZEILE. Sie nennt drei Bezeichner —
+            //    Quellpfad, Ziel-Label, Antragsteller. Die Ueberladungen tragen EINEN String
+            //    plus eine uint32-Stelle; zwei der drei muessten also verschwinden, und welche
+            //    davon man opfert, entscheidet nachher, welche Ablehnung noch auffindbar ist.
+            //
+            // NACHTRAG 2026-08-23: DIE HAELFTE DIESER BEGRUENDUNG IST WEGGEFALLEN, DIE ANDERE
+            // TRAEGT — und wer nur die alte Fassung gelesen haette, haette hier falsch migriert.
+            //
+            // Weggefallen: bis heute schieden die WRN-Kategorien zusaetzlich am Hilfetext aus,
+            // weil alle drei eine Korrektur des Wertes zusagten und diese Stelle nichts
+            // korrigiert. Inzwischen gibt es ACCESS_DENIED in ERR::CAT — eine FEHLER-Kategorie,
+            // die semantisch genau diesen Fall meint und im Hilfetext nichts zusagt. Das Argument
+            // "Kategorie hiesse Abstieg auf WRN" gilt nicht mehr.
+            //
+            // Was TRAEGT, ist der Formgrund oben, und er ist durch ACCESS_DENIED unveraendert:
+            // error(cat, system, owner, value_id) fuehrt EINE uint32-Stelle und EINEN String.
+            // Diese Zeile fuehrt drei Bezeichner (path, target_label, requested_by), die
+            // zweite DENIED-Zeile weiter unten sogar vier. Zwei beziehungsweise drei davon
+            // muessten verschwinden, und welche man opfert, entscheidet nachher, welche
+            // Ablehnung noch auffindbar ist. Eine Ablehnung, die man nicht mehr einer Anfrage
+            // zuordnen kann, ist als Sicherheitsspur wertlos.
+            //
+            // Der Auditsatz daneben (emit_tran_audit) haelt die Spur vollstaendig; diese
+            // Logzeile ist ihr lesbares Echo und verliert nichts, solange sie freier Text ist.
+            // MIGRIERT. Der Formgrund, der hier stand, nannte nur die Ueberladung
+            // error(cat, system, owner, value_id) — EINE uint32-Stelle und EINEN String — und
+            // schloss daraus, zwei der drei Bezeichner muessten verschwinden. Es gibt eine
+            // Ueberladung mit owner, value_id UND detail. `owner` traegt den Pfad-Hash (weiter
+            // oben berechnet), value_id den lesbaren Pfad, der detail den Rest. Alle drei
+            // bleiben, die Ablehnung bleibt einer Anfrage zuordenbar.
+            //
+            // ACCESS_DENIED auf ERR-Ebene: hier geht es um eine BERECHTIGUNG — der Anfragende
+            // hat PERM_PROMOTE nicht. Die Kategorie liegt laut ihrer Abgrenzung bewusst im
+            // Fehlerstrom, damit eine Ablehnung aus keinem ERR-Filter faellt; davon lebt eine
+            // Sicherheitsspur. Der Vorgang endet hier auch wirklich: die Anfrage wird
+            // abgeschlossen, kein spaeterer Durchlauf holt sie nach.
+            char perm_detail[256] = {};
+            ase::utils::str_copy(perm_detail, 256, "target=");
+            ase::utils::str_append(perm_detail, 256, req.target_label);
+            ase::utils::str_append(perm_detail, 256, " requester=");
+            ase::utils::str_append(perm_detail, 256, req.requested_by);
+            ase::utils::str_append(perm_detail, 256, " missing_perm=PERM_PROMOTE");
+            log::error(log::ERR::CAT::ACCESS_DENIED, "StorageWflwTran", owner, req.path,
+                       perm_detail);
             done[done_n] = req_ent;
             ++done_n;
             continue;
@@ -329,7 +387,12 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
                 hub::set(registry, owner, "STG_WFLW_RES"_hs, static_cast<float>(WFLW_RES_NOT_FOUND));
                 emit_tran_audit(registry, relm_ref, req.requested_by, req.path, now,
                                 AUD_DENIED, "wflw_no_asset");
-                log::error("[StorageWflwTran] NOT_FOUND: no ACL rule and no on-disk asset for {}", req.path);
+                // Diese Zeile ging schon vor der Migration der beiden DENIED-Zeilen glatt
+                // durch: sie fuehrt genau EINEN Bezeichner (req.path), und der ist bei
+                // RESOURCE_UNAVAIL die Kennung der Ressource selbst — Punkt 1 des Hilfetexts
+                // fragt woertlich, ob sie existiert und erreichbar ist. owner steht in
+                // Reichweite und bleibt erhalten, es geht nichts verloren.
+                log::error(log::ERR::CAT::RESOURCE_UNAVAIL, "StorageWflwTran", owner, req.path);
                 done[done_n] = req_ent;
                 ++done_n;
                 continue;
@@ -395,8 +458,28 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
             compose_edge_reason(reason, MAX_REASON_LEN, "wflw_edge", rule.label, req.target_label);
             emit_tran_audit(registry, relm_ref, req.requested_by, req.path, now,
                             AUD_DENIED, reason);
-            log::warn("[StorageWflwTran] DENIED edge {} -> {} for {} (by {})",
-                      rule.label, req.target_label, req.path, req.requested_by);
+            // MIGRIERT, zusammen mit der PERM_PROMOTE-Zeile oben — beide in EINEM Schrieb, weil
+            // das Tor das Dateiergebnis prueft und ein Teilschritt geblockt haette.
+            //
+            // ANDERE KATEGORIE ALS OBEN, und das ist der Punkt: dort fehlte dem Anfragenden ein
+            // RECHT, hier ist die verlangte KANTE nicht vorgesehen. Der Anfragende darf
+            // promoten; er hat nur einen Uebergang benannt, den der Graph nicht kennt. Das ist
+            // INPUT_REJECTED — ein fremder Aufrufer hat etwas Unbedienbares geschickt — und die
+            // ERR-Haelfte davon, weil der Vorgang hier endet statt weiterzulaufen. Wer
+            // Ablehnungen im Fehlerstrom auswertet, findet beide Sorten dort und kann sie an
+            // der Kategorie AUSEINANDERHALTEN; ein gemeinsames "DENIED" konnte das nie.
+            //
+            // WORK_PRECLUDED waere die Alternative gewesen (der Zustand erlaubt die Arbeit
+            // nicht) und ist bewusst nicht gewaehlt: der Zustand des Assets ist in Ordnung, es
+            // ist die ANFRAGE, die ein unmoegliches Ziel nennt. `reason` traegt bereits
+            // "wflw_edge(von->nach)" und damit beide Label exakt; der detail haengt den
+            // Anfragenden an, value_id fuehrt den Pfad, owner seinen Hash. Alle vier bleiben.
+            char edge_detail[256] = {};
+            ase::utils::str_copy(edge_detail, 256, reason);
+            ase::utils::str_append(edge_detail, 256, " requester=");
+            ase::utils::str_append(edge_detail, 256, req.requested_by);
+            log::error(log::ERR::CAT::INPUT_REJECTED, "StorageWflwTran", owner, req.path,
+                       edge_detail);
             done[done_n] = req_ent;
             ++done_n;
             continue;

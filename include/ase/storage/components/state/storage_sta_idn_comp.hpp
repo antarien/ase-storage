@@ -5,15 +5,20 @@
  *
  * @file        storage_sta_idn_comp.hpp
  * @brief       StorageStaIdnComponent - Authenticated user identity
- * @description Validated identity extracted from keycard JWT claims.
- *              Placed on client entity after successful keycard verification.
+ * @description WHO the authenticated user is, straight out of the keycard JWT
+ *              claims: the user id, its hash, the email and the display name.
+ *              Nothing here changes while the user stays the same user. What binds
+ *              that identity to a live connection - client id, active keycard,
+ *              time of validation - lives in StorageStaSessComponent on the same
+ *              entity, split 2026-08-19 because the God-Component gate allows five
+ *              fields and the combined row carried seven.
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
  * @created     2026-04-04
- * @modified    2026-04-04
- * @version     1.0.0
+ * @modified    2026-08-19
+ * @version     1.1.0
  *
  * ECS COMPONENT COMPLIANCE
  *
@@ -44,16 +49,18 @@
  * [ ] Component stores ONLY primitive ID (uint32_t) referencing external resource
  */
 
-#include <ase/storage/types.hpp>
 #include <cstdint>
+
+#include <ase/storage/types.hpp>
 
 namespace ase::storage {
 
 /**
  * @brief StorageStaIdnComponent - Validated user identity from keycard
  *
- * Developer identity extracted from platform keycard (JWT).
- * Placed on client entity by StgKcdLnkSystem after successful verification.
+ * Developer identity extracted from platform keycard (JWT). Placed on the client
+ * entity by StorageKycdLnkSystem after successful verification, and on the token
+ * entity by StorageKycdReqDrnSystem at issuance - the same identity, two moments.
  *
  * @hub_reads  none
  * @hub_writes none
@@ -63,9 +70,6 @@ struct StorageStaIdnComponent {
     uint32_t user_id_hash = 0;                // FNV-1a32 of user_id (== entt::hashed_string); exact gate owner, string-independent
     char email[MAX_EMAIL_LEN] = {};           // Email address from JWT claims
     char display_name[MAX_DISPLAY_NAME] = {}; // User display name from JWT claims
-    uint32_t client_id = 0;                   // Network client ID from ase-network WebRTC
-    uint32_t active_keycard = 0;              // Entity ref to active keycard entity
-    uint64_t authenticated_at = 0;            // Unix timestamp when keycard was validated
 };
 
 }  // namespace ase::storage

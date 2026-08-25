@@ -32,7 +32,7 @@
  *   │    - StorageStaTaskComponent (need-to-know) │
  *   │                                             │
  *   │  WRITES:                                    │
- *   │    - StorageAcssGrantTag or AcssDenyTag     │
+ *   │    - StorageAcssGrntTag or AcssDenyTag     │
  *   │    - StorageBufAudtComponent + AudtPendTag  │
  *   └─────────────────────────────────────────────┘
  *          │
@@ -80,7 +80,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -149,12 +149,14 @@
 #include <ase/storage/systems/acl/storage_acss_chk_sys.hpp>
 // Components from same module
 #include <ase/storage/components/state/storage_req_acss_comp.hpp>
+#include <ase/storage/components/state/storage_req_cred_comp.hpp>
 #include <ase/storage/components/state/storage_acss_rule_comp.hpp>
 #include <ase/storage/components/state/storage_acss_cwrd_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
 #include <ase/storage/components/state/storage_kycd_cwrd_comp.hpp>
 #include <ase/storage/components/state/storage_lat_lnk_comp.hpp>
+#include <ase/storage/components/state/storage_lnk_cnst_comp.hpp>
 #include <ase/storage/components/state/storage_sta_task_comp.hpp>
 #include <ase/storage/components/state/storage_relm_idn_comp.hpp>
 #include <ase/storage/components/state/storage_rule_idn_comp.hpp>
@@ -162,11 +164,12 @@
 #include <ase/storage/components/state/storage_lnk_idn_comp.hpp>
 #include <ase/storage/components/state/storage_task_idn_comp.hpp>
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_acss_grant.hpp>
-#include <ase/storage/components/tag/storage_tag_acss_deny.hpp>
-#include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_conceal.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_public.hpp>
+#include <ase/storage/components/state/storage_audt_outc_comp.hpp>
+#include <ase/storage/components/tag/storage_acss_grnt_tag.hpp>
+#include <ase/storage/components/tag/storage_acss_deny_tag.hpp>
+#include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
+#include <ase/storage/components/tag/storage_relm_cncm_tag.hpp>
+#include <ase/storage/components/tag/storage_relm_glob_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/storage_acss_index_resource_manager.hpp>
 #include <ase/storage/types.hpp>
@@ -201,11 +204,12 @@ void emit_audit(ecs::Registry& registry, uint32_t relm_ref, uint32_t proj_ref,
     aud.relm_ref = relm_ref;
     aud.proj_ref = proj_ref;
     ase::utils::str_copy(aud.user_id, 64, user_id);
-    aud.action = action;
     ase::utils::str_copy(aud.path, 256, path);
     aud.timestamp = timestamp;
-    aud.result = result;
-    ase::utils::str_copy(aud.reason, 64, reason);
+    auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+    outc.action = action;
+    outc.result = result;
+    ase::utils::str_copy(outc.reason, 64, reason);
     registry.emplace<StorageAudtPendTag>(aud_ent);
 }
 
@@ -265,7 +269,9 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
     auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
     if (!idx_ptr || !(*idx_ptr)) {
-        log::error("[StorageAcssChk] StorageAcssIndexResourceManager not in ctx (StorageAcssIdxSystem must run first)");
+        // SCHEDULE_ORDER: der Erzeuger (StorageAcssIdxSystem) hat den ctx-Halter noch nicht angelegt.
+        log::error(log::ERR::CAT::SCHEDULE_ORDER, "StorageAcssChkSystem",
+                   "StorageAcssIndexResourceManager");
         return;
     }
     auto& idx = **idx_ptr;
@@ -280,17 +286,22 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
     // id, so the classification is a membership test on the filtered view — O(1), and the
     // tag stays where the ECS rules want it: in the View filter, never in an all_of<Tag>
     // runtime check. Both were per-request scans over every realm before (WS-K.2c).
-    auto pub_view = registry.view<StorageStaRelmComponent, StorageRelmPublicTag>();
-    auto cnc_view = registry.view<StorageStaRelmComponent, StorageRelmConcealTag>();
+    auto pub_view = registry.view<StorageStaRelmComponent, StorageRelmGlobTag>();
+    auto cnc_view = registry.view<StorageStaRelmComponent, StorageRelmCncmTag>();
 
-    auto req_view = registry.view<StorageReqAcssComponent>(entt::exclude<StorageAcssGrantTag, StorageAcssDenyTag>);
+    // Both halves of the request in ONE view: what is asked (req) and what the
+    // caller brings (cred). A request without credentials never reaches the ladder -
+    // the view drops it, which is the same denial the empty user_id check gives.
+    auto req_view = registry.view<StorageReqAcssComponent, StorageReqCredComponent>(
+        entt::exclude<StorageAcssGrntTag, StorageAcssDenyTag>);
     for (auto entity : req_view) {
-        auto& req = req_view.get<StorageReqAcssComponent>(entity);
+        auto& req  = req_view.get<StorageReqAcssComponent>(entity);
+        auto& cred = req_view.get<StorageReqCredComponent>(entity);
 
         // ── Step 1: KEYCARD VALID ─ authenticated identity present
         // user_id is set by the HTTP route from the keycard JWT (validated by
         // StorageKycdVldSystem); an empty user_id means no valid keycard reached here.
-        if (req.user_id[0] == '\0') {
+        if (cred.user_id[0] == '\0') {
             registry.emplace<StorageAcssDenyTag>(entity);
             emit_audit(registry, req.relm_ref, req.proj_ref, "", req.action, req.path, now, AUD_DENIED, "not_authenticated");
             continue;
@@ -318,7 +329,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // The requester's identity, hashed ONCE per request. Every identity test below
         // is a 32-bit equality against this value: identity is a lookup, and a lookup
         // compares hashes, never characters (WRFL_ASE_STRING_HANDLING Section 3).
-        const uint32_t user_hash = entt::hashed_string(req.user_id).value();
+        const uint32_t user_hash = entt::hashed_string(cred.user_id).value();
         if (auto* rc = registry.try_get<StorageStaRelmComponent>(relm_ent)) {
             realm_found = true;
             ase::utils::str_copy(target_id, MAX_REALM_ID, rc->id);
@@ -338,7 +349,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
         }
         // Public realm classification via the tag on THAT realm (a realm carrying the
-        // StorageRelmPublicTag is public regardless of its id naming).
+        // StorageRelmGlobTag is public regardless of its id naming).
         if (realm_found && !public_realm) {
             public_realm = pub_view.contains(relm_ent);
         }
@@ -379,7 +390,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         if (!realm_found || concealed) {
             // Concealment leaks nothing: deny as realm_not_found, never access_denied.
             registry.emplace<StorageAcssDenyTag>(entity);
-            emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "realm_not_found");
+            emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "realm_not_found");
             continue;
         }
 
@@ -388,8 +399,8 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // codeword. Without the preset, the auth-header values are used verbatim. The public
         // realm needs no boost — its PUBLIC protection rule lets the auth-header values pass.
         (void)target_owner;
-        uint8_t  eff_clrn = owner_preset ? ACSS_OWNER_CLEARANCE : req.clrn;
-        uint16_t eff_perm = owner_preset ? ACSS_OWNER_PERMS     : req.perm;
+        uint8_t  eff_clrn = owner_preset ? ACSS_OWNER_CLEARANCE : cred.clrn;
+        uint16_t eff_perm = owner_preset ? ACSS_OWNER_PERMS     : cred.perm;
 
         // ── Step 2 (cont.): match the ACL rule for this path ─ clearance/label/codeword src.
         // The public realm contributes an implicit PUBLIC protection rule (level 0, no
@@ -511,12 +522,21 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
                                link_id, "StorageLnkIdnComponent");
                     continue;
                 }
+                // The consent row is the second half of the same link. A link entity
+                // without it is malformed, not un-approved - it is skipped like a link
+                // without an identity row, never read as "both sides said no".
+                auto* link_cnst = registry.try_get<StorageLnkCnstComponent>(link_ent);
+                if (link_cnst == nullptr) {
+                    log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageAcssChkSystem",
+                               link_id, "StorageLnkCnstComponent");
+                    continue;
+                }
                 if (link_idn->target_realm_hash != target_hash) { continue; }
                 if (link_idn->prefix_len < 1u) { continue; }
                 if (link_idn->prefix_len > path_len) { continue; }
                 if (pfx_hash[link_idn->prefix_len] != link_idn->prefix_hash) { continue; }
                 lattice_required = true;
-                bool approved = link.approved_by_source != 0 && link.approved_by_target != 0;
+                bool approved = link_cnst->approved_by_source != 0 && link_cnst->approved_by_target != 0;
                 bool live     = link.expires_at == 0 || link.expires_at > now;
                 bool perm_ok  = (link.permissions & required_perm) != 0;
                 bool clrn_ok  = required_protection <= link.max_clearance;
@@ -527,7 +547,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
             if (lattice_required && !lattice_ok) {
                 registry.emplace<StorageAcssDenyTag>(entity);
-                emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "no_lattice_link");
+                emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "no_lattice_link");
                 continue;
             }
         }
@@ -535,7 +555,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // ── Step 4: CLEARANCE ─ vertical Schutzstufe gate (public realm rule keeps PUBLIC)
         if (eff_clrn < required_protection) {
             registry.emplace<StorageAcssDenyTag>(entity);
-            emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "insufficient_clearance");
+            emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "insufficient_clearance");
             continue;
         }
 
@@ -570,7 +590,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
             if (missing_codeword) {
                 registry.emplace<StorageAcssDenyTag>(entity);
-                emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "missing_codeword");
+                emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "missing_codeword");
                 continue;
             }
         }
@@ -578,7 +598,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // ── Step 6: PERMISSION ─ action bitflag gate (owner preset holds all flags)
         if (!(eff_perm & required_perm)) {
             registry.emplace<StorageAcssDenyTag>(entity);
-            emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "permission_denied");
+            emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "permission_denied");
             continue;
         }
 
@@ -586,14 +606,14 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // retired = withdrawn build (no access); draft/review = team-only (clearance >= TEAM).
         if (rule_label_hash == EDGE_LABEL_RETIRED_HASH) {
             registry.emplace<StorageAcssDenyTag>(entity);
-            emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "retired_asset");
+            emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "retired_asset");
             continue;
         }
         if ((rule_label_hash == EDGE_LABEL_DRAFT_HASH ||
              rule_label_hash == EDGE_LABEL_REVIEW_HASH) &&
             eff_clrn < PROTECTION_TEAM) {
             registry.emplace<StorageAcssDenyTag>(entity);
-            emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "label_restricted");
+            emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "label_restricted");
             continue;
         }
 
@@ -634,7 +654,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
             if (has_active_task && !path_in_scope) {
                 registry.emplace<StorageAcssDenyTag>(entity);
-                emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "need_to_know");
+                emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "need_to_know");
                 continue;
             }
         }
@@ -648,14 +668,14 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             uint64_t used = mgr.get_realm_usage(target_id);
             if (used >= tier_limit) {
                 registry.emplace<StorageAcssDenyTag>(entity);
-                emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_DENIED, "quota_exceeded");
+                emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "quota_exceeded");
                 continue;
             }
         }
 
         // ── Step 10: GRANT + AUDIT(GRANTED) ─ reached only after every applicable step passed
-        registry.emplace<StorageAcssGrantTag>(entity);
-        emit_audit(registry, req.relm_ref, req.proj_ref, req.user_id, req.action, req.path, now, AUD_GRANTED, "");
+        registry.emplace<StorageAcssGrntTag>(entity);
+        emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_GRANTED, "");
     }
 }
 

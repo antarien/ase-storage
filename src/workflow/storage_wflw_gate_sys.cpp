@@ -77,7 +77,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -148,10 +148,11 @@
 #include <ase/storage/components/request/storage_req_wflw_tran_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_wflw_pend.hpp>
-#include <ase/storage/components/tag/storage_tag_wflw_gate.hpp>
+#include <ase/storage/components/state/storage_audt_outc_comp.hpp>
+#include <ase/storage/components/tag/storage_wflw_pend_tag.hpp>
+#include <ase/storage/components/tag/storage_wflw_gate_tag.hpp>
 #include <ase/storage/components/tag/storage_relm_edge_tag.hpp>
-#include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
+#include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
 // Hub API (verdict publish)
@@ -180,11 +181,12 @@ void emit_gate_audit(ecs::Registry& registry, uint32_t relm_ref, const char* use
     aud.relm_ref = relm_ref;
     aud.proj_ref = 0;
     ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, user_id);
-    aud.action = AUD_PROMOTE;
     ase::utils::str_copy(aud.path, MAX_PATH_LEN, path);
     aud.timestamp = timestamp;
-    aud.result = result;
-    ase::utils::str_copy(aud.reason, MAX_REASON_LEN, reason);
+    auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+    outc.action = AUD_PROMOTE;
+    outc.result = result;
+    ase::utils::str_copy(outc.reason, MAX_REASON_LEN, reason);
     registry.emplace<StorageAudtPendTag>(aud_ent);
 }
 
@@ -255,8 +257,14 @@ void StorageWflwGateSystem::tick(ecs::Registry& registry, float dt) {
 
         if (missing == nullptr) {
             // Gate passed: the transition system may now process this request.
-            registry.remove<StorageWflwGateTag>(req_ent);
+            //
+            // REIHENFOLGE IST BINDEND: erst req.path lesen, dann die Marke abnehmen.
+            // StorageWflwGateTag steht in der Signatur dieser Sicht, und EnTT sichert
+            // Referenzen nach dem Entfernen einer iterierten Component nicht mehr zu -
+            // "removing its components is allowed during iterations but it could invalidate
+            // references" (entt-src/docs/md/entity.md:2148). req stammt aus genau dieser Sicht.
             log::info("[StorageWflwGate] released-gate PASSED for {} (sig+sha256+sbom+smoke present)", req.path);
+            registry.remove<StorageWflwGateTag>(req_ent);
             continue;
         }
 
@@ -271,7 +279,24 @@ void StorageWflwGateSystem::tick(ecs::Registry& registry, float dt) {
         emit_gate_audit(registry, relm_ref, req.requested_by, req.path,
                         mgr.get_wall_time_seconds(), AUD_DENIED, reason);
 
-        log::warn("[StorageWflwGate] released-gate DENIED for {} — missing {}", req.path, missing);
+        // MIGRIERT. Hier stand ein Vermerk mit einer falschen Praemisse: er behauptete, es gebe
+        // fuer die ZWEI Bezeichner dieser Zeile nur EINEN String-Platz, und man muesse einen
+        // opfern. Die detail-Ueberladung hat zwei, und mit `owner` davor sogar drei. `req.path`
+        // sagt WAS verlangt wurde, `missing` sagt WORAN es scheiterte — beide bleiben.
+        //
+        // WORK_PRECLUDED und nicht ACCESS_DENIED, obwohl der Vermerk letzteres nannte: die
+        // beiden trennen sich an der FRAGE, nicht am Wort "DENIED". ACCESS_DENIED behandelt eine
+        // wohlgeformte Anfrage, die abgelehnt wird, weil der Anfragende NICHT DARF — eine
+        // Berechtigungsfrage, und deshalb liegt sie bewusst auf ERR-Ebene, damit sie aus keinem
+        // ERR-Filter faellt. Hier geht es um keine Berechtigung: es fehlen Artefakte
+        // (sig/sha256/sbom/smoke). Das ist woertlich WORK_PRECLUDED — der ZUSTAND erlaubt die
+        // Arbeit nicht, und nichts ist kaputt.
+        //
+        // warn und nicht error, weil derselbe Hilfetext sagt, dieser Zustand sei oft der
+        // gewollte: ein Tor, das ein unvollstaendiges Release zurueckhaelt, TUT seine Arbeit.
+        // Jede solche Ablehnung in den Fehlerstrom zu legen wuerde ihn mit Normalbetrieb fluten.
+        // Die revisionsfeste Spur haelt ohnehin der Auditsatz zwei Zeilen darueber (AUD_DENIED).
+        log::warn(log::WRN::CAT::WORK_PRECLUDED, "StorageWflwGate", req.path, missing);
 
         failed[failed_n] = req_ent;
         ++failed_n;

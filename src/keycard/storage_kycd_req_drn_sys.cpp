@@ -75,7 +75,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -147,12 +147,14 @@
 #include <ase/storage/components/request/storage_req_kycd_relm_comp.hpp>
 #include <ase/storage/components/request/storage_req_kycd_cwrd_comp.hpp>
 #include <ase/storage/components/state/storage_sta_idn_comp.hpp>
+#include <ase/storage/components/state/storage_sta_sess_comp.hpp>
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
+#include <ase/storage/components/state/storage_kycd_grnt_comp.hpp>
 #include <ase/storage/components/state/storage_kycd_idn_comp.hpp>
 #include <ase/storage/components/request/storage_req_kycd_tkn_comp.hpp>
 #include <ase/storage/components/state/storage_kycd_cwrd_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_pend.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_pst_pend.hpp>
+#include <ase/storage/components/tag/storage_kycd_pend_tag.hpp>
+#include <ase/storage/components/tag/storage_kycd_pst_pend_tag.hpp>
 // Hub API (discovery tag + counter)
 #include <ase/hub/api.hpp>
 // Types (L0 — is_not_found sentinel check)
@@ -213,11 +215,17 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // Carry the EXACT FNV user_hash so the codeword/clearance projection owner
         // is derived from the hash, never from the (possibly-empty/dangling) string.
         idn.user_id_hash = req.user_id_hash;
-        idn.authenticated_at = req.authenticated_at;
+        // Issuance stamps the session row with client_id still 0: the keycard exists
+        // before any connection has claimed it. StorageKycdLnkSystem fills that in.
+        auto& sess = registry.emplace<StorageStaSessComponent>(token_entity);
+        sess.authenticated_at = req.authenticated_at;
 
         auto& kycd = registry.emplace<StorageStaKycdComponent>(token_entity);
-        kycd.clrn = req.clearance;
-        kycd.expires_at = req.expires_at;
+        // The terms are a second row on the same entity: what the card opens and
+        // until when, apart from whose card it is and where it applies.
+        auto& grnt = registry.emplace<StorageKycdGrntComponent>(token_entity);
+        grnt.clrn = req.clearance;
+        grnt.expires_at = req.expires_at;
         // Bind the keycard recipient. The publisher matches keycard→session on the
         // HASH of the recipient, never on the characters: identity is a lookup
         // (WRFL_ASE_STRING_HANDLING Section 3). The string stays for audit records and
@@ -231,7 +239,7 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         const auto* relm_ext = registry.try_get<StorageReqKycdRelmComponent>(req_entity);
         if (relm_ext != nullptr) {
             kycd.relm_ref = relm_ext->relm_ref;
-            kycd.perm = relm_ext->perm;
+            grnt.perm = relm_ext->perm;
         }
 
         registry.emplace<StorageKycdPendTag>(token_entity);
@@ -254,7 +262,7 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         log::debug("[StorageKycdReqDrn] +StorageKycdPendTag token={} user='{}' clearance={} relm={} perm={} exp={}",
                    static_cast<uint32_t>(token_entity), req.user_id,
                    static_cast<uint32_t>(req.clearance),
-                   kycd.relm_ref, static_cast<uint32_t>(kycd.perm), req.expires_at);
+                   kycd.relm_ref, static_cast<uint32_t>(grnt.perm), req.expires_at);
 
         float issued_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_ISSUED_COUNT"_hs, 0.0f);
         if (ase::types::is_not_found(issued_count)) issued_count = 0.0f;

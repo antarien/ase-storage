@@ -41,7 +41,7 @@ namespace ase::storage {
  * @reads    StorageReqAcssComponent, StorageStaKycdComponent, StorageKycdCwrdComponent,
  *           StorageStaRelmComponent, StorageAcssRuleComponent, StorageAcssCwrdComponent,
  *           StorageLatLnkComponent, StorageStaTaskComponent
- * @writes   StorageAcssGrantTag or StorageAcssDenyTag + StorageBufAudtComponent
+ * @writes   StorageAcssGrntTag or StorageAcssDenyTag + StorageBufAudtComponent
  * @depends  HTTP routes create StorageReqAcssComponent entities
  */
 class StorageAcssChkSystem : public ecs::System {

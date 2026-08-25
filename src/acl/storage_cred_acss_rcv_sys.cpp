@@ -9,8 +9,8 @@
  * @category    process
  * @schedule    Reception
  * @created     2026-07-04
- * @modified    2026-07-04
- * @version     1.0.0
+ * @modified    2026-08-19
+ * @version     1.1.0
  *
  * CAUSAL CHAIN (Credential A/ACS Request Drain)
  *
@@ -35,6 +35,13 @@
  *          │ Integration StorageAcssChkSystem renders Grant/DenyTag
  *          ▼
  *   StorageCredAcssRspSystem ships CACSS_WIRE_RES back to the Replica.
+ *
+ * INDIZES JE PASS (2026-08-19): die Keycard- und Realm-Aufloesung laeuft ueber zwei
+ * O(1)-Indizes, die EINMAL vor der Frame-Schleife gebaut werden - vorher scannte
+ * jede Frame-Iteration beide Views voll (M Frames x N Zeilen; der Batch ist die
+ * aeussere Menge, weshalb kein nested-view-Check es sah). Der Realm-Index wird beim
+ * Anlegen eines Realms NACHGEFUEHRT, damit ein zweiter Frame desselben Kunden im
+ * SELBEN Batch die Zeile wiederverwendet statt sie zu duplizieren.
  *
  * HUB Pattern (N/A — transport lane + components, no Hub values)
  *
@@ -76,7 +83,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -142,17 +149,22 @@
 #include <ase/storage/systems/acl/storage_cred_acss_rcv_sys.hpp>
 // Components from same module
 #include <ase/storage/components/state/storage_req_acss_comp.hpp>
+#include <ase/storage/components/state/storage_req_cred_comp.hpp>
 #include <ase/storage/components/state/storage_cred_acss_pnd_comp.hpp>
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
+#include <ase/storage/components/state/storage_kycd_grnt_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
+#include <ase/storage/components/state/storage_relm_quot_comp.hpp>
 #include <ase/storage/components/state/storage_relm_idn_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_personal.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_active.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_conceal.hpp>
+#include <ase/storage/components/tag/storage_relm_usr_tag.hpp>
+#include <ase/storage/components/tag/storage_relm_actv_tag.hpp>
+#include <ase/storage/components/tag/storage_relm_cncm_tag.hpp>
 #include <ase/storage/types.hpp>
 // Lower layers
 #include <ase/transport/inbound_queue_resource_manager.hpp>
 #include <ase/transport/types.hpp>
+#include <ase/containers/hash_map.hpp>
+#include <ase/containers/int_hash.hpp>
 #include <ase/utils/strops.hpp>
 #include <ase/log/log.hpp>
 
@@ -204,15 +216,46 @@ void StorageCredAcssRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
     char buf[transport::LANE_BUF_SZ] = {};
     uint32_t msg_len = 0u;
 
+    // O(1)-Indizes, EINMAL je Pass gebaut - jede Frame-Iteration fragt "gibt es eine
+    // Zeile fuer diesen Schluessel" gegen den Index statt die Views voll zu scannen
+    // (der dekodierte Batch ist die aeussere Menge, M Frames x N Zeilen). Der
+    // Realm-Index wird beim Anlegen NACHGEFUEHRT, damit ein zweiter Frame desselben
+    // Kunden im SELBEN Batch die neue Zeile wiederverwendet statt sie zu duplizieren.
+    ase::containers::HashMap<uint32_t, ecs::Entity, ase::containers::IntMixHash> kycd_of_user;
+    for (auto [ke, kc] : registry.view<StorageStaKycdComponent>().each()) {
+        const uint32_t issued_hash = entt::hashed_string(kc.issued_to).value();
+        if (kycd_of_user.find(issued_hash) == kycd_of_user.end()) {
+            kycd_of_user[issued_hash] = ke;
+        }
+    }
+    ase::containers::HashMap<uint32_t, ecs::Entity, ase::containers::IntMixHash> relm_of_hash;
+    for (auto [re, rc_idn] : registry.view<StorageRelmIdnComponent>().each()) {
+        if (relm_of_hash.find(rc_idn.id_hash) == relm_of_hash.end()) {
+            relm_of_hash[rc_idn.id_hash] = re;
+        }
+    }
+
     // Frame: [86][req_id:u64][user_hash:u32][action:u8][project_id:char[64]][provider:char[64]] = 142 bytes.
     while (queue->pop_inbound(transport::LANE_CACSS, buf, transport::LANE_BUF_SZ, msg_len)) {
         if (msg_len < 142u) {
-            log::error("[StorageCredAcssRcv] CACSS_WIRE_REQ frame too short: {} bytes", msg_len);
+            // INPUT_REJECTED (WRN::CAT, SSOT core/ase-log/data/log_categories.json — die
+            // Kategorie IST ihr Name, eine Nummer gibt es seit dem Hash-Umbau nicht mehr):
+            // "Fix: Request rejected, caller must correct it — not an
+            // engine fault". Die Stelle verwirft (msg_len = 0; continue), und genau das sagt
+            // der Hilfetext: korrigieren muss der AUFRUFER. NICHT VALUE_INVALID oder
+            // OUT_OF_RANGE — die beschreiben einen Wert, der im System ungueltig ist oder
+            // seinen Bereich verlaesst; hier hat eine fremde Gegenstelle einen zu kurzen
+            // Rahmen geschickt, und die HERKUNFT ist der Unterschied, nicht die Reaktion.
+            // Die Dreier-Form ohne owner ist die dafuer gebaute; die Bytezahl faellt weg, der
+            // value_id benennt stattdessen die gebrochene Kontraktzusage.
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageCredAcssRcvSystem",
+                      "CACSS_WIRE_REQ_frame_len");
             msg_len = 0u;
             continue;
         }
         if (static_cast<uint8_t>(buf[0]) != transport::CACSS_WIRE_REQ) {
-            log::error("[StorageCredAcssRcv] unexpected inbound type={}", static_cast<uint32_t>(buf[0]));
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageCredAcssRcvSystem",
+                      "CACSS_WIRE_REQ_msg_type");
             msg_len = 0u;
             continue;
         }
@@ -226,21 +269,28 @@ void StorageCredAcssRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
         // Resolve the session keycard by user_hash (== hashed_string(issued_to)) → user_id + clrn + perm
         // + the realm it grants (A/ACS: Keycard → Realm-Membership). No keycard → empty user_id so the
-        // ladder denies at step 1 (fail-closed, no silent grant).
+        // ladder denies at step 1 (fail-closed, no silent grant). One O(1) lookup, no walk.
         char user_id[MAX_OWNER_ID] = {};
         uint8_t clrn = 0u;
         uint16_t perm = 0u;
         uint32_t kc_relm = 0u;
         uint32_t kc_proj = 0u;
-        for (auto [ke, kc] : registry.view<StorageStaKycdComponent>().each()) {
-            (void)ke;
-            if (entt::hashed_string(kc.issued_to).value() == user_hash) {
-                ase::utils::str_copy(user_id, MAX_OWNER_ID, kc.issued_to);
-                clrn = kc.clrn;
-                perm = kc.perm;
-                kc_relm = kc.relm_ref;
-                kc_proj = kc.proj_ref;
-                break;
+        auto kc_it = kycd_of_user.find(user_hash);
+        if (kc_it != kycd_of_user.end() && registry.valid(kc_it->second)) {
+            const auto& kc = registry.get<StorageStaKycdComponent>(kc_it->second);
+            ase::utils::str_copy(user_id, MAX_OWNER_ID, kc.issued_to);
+            kc_relm = kc.relm_ref;
+            kc_proj = kc.proj_ref;
+            // The terms are the second row of the same keycard. A card without them
+            // stays at clearance 0 / no permissions - the ladder then denies, which
+            // is the same fail-closed answer as no keycard at all.
+            const auto* kg = registry.try_get<StorageKycdGrntComponent>(kc_it->second);
+            if (kg != nullptr) {
+                clrn = kg->clrn;
+                perm = kg->perm;
+            } else {
+                log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageCredAcssRcvSystem",
+                           static_cast<uint32_t>(kc_it->second), "StorageKycdGrntComponent");
             }
         }
 
@@ -254,12 +304,10 @@ void StorageCredAcssRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
         uint32_t relm_ref = kc_relm;
         if (relm_ref == 0u && user_id[0] != '\0') {
             // A personal realm is named after its owner, so its id hash IS user_hash -
-            // the value that arrived on the wire. One 32-bit test per realm, no walk.
-            for (auto [re, rc_idn] : registry.view<StorageRelmIdnComponent>().each()) {
-                if (rc_idn.id_hash == user_hash) {
-                    relm_ref = static_cast<uint32_t>(re);
-                    break;
-                }
+            // the value that arrived on the wire. One O(1) lookup against the pass index.
+            auto rl_it = relm_of_hash.find(user_hash);
+            if (rl_it != relm_of_hash.end() && registry.valid(rl_it->second)) {
+                relm_ref = static_cast<uint32_t>(rl_it->second);
             }
             if (relm_ref == 0u) {
                 auto realm_ent = registry.create();
@@ -268,15 +316,21 @@ void StorageCredAcssRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
                 ase::utils::str_copy(relm.name, MAX_REALM_NAME, user_id);
                 ase::utils::str_copy(relm.owner, MAX_OWNER_ID, user_id);
                 relm.default_protection = PROTECTION_PROTECTED;
+                // The accounting row is created empty: a personal realm gets no
+                // ceiling here, and StorageQuotChkSystem skips a zero ceiling. The
+                // row still has to exist, or the realm would be invisible to the
+                // scan the day a ceiling IS set on it.
+                registry.emplace<StorageRelmQuotComponent>(realm_ent);
                 // A personal realm is named after its owner, so both hashes are the
                 // same value - written here, beside the strings, never re-derived later.
                 auto& relm_idn = registry.emplace<StorageRelmIdnComponent>(realm_ent);
                 relm_idn.id_hash = user_hash;
                 relm_idn.owner_hash = user_hash;
-                registry.emplace<StorageRelmPersonalTag>(realm_ent);
-                registry.emplace<StorageRelmActiveTag>(realm_ent);
-                registry.emplace<StorageRelmConcealTag>(realm_ent);
+                registry.emplace<StorageRelmUsrTag>(realm_ent);
+                registry.emplace<StorageRelmActvTag>(realm_ent);
+                registry.emplace<StorageRelmCncmTag>(realm_ent);
                 relm_ref = static_cast<uint32_t>(realm_ent);
+                relm_of_hash[user_hash] = realm_ent;  // nachgefuehrt - same-batch frames reuse it
                 log::info("[StorageCredAcssRcv] customer realm created (identity-bound owner='{}')", user_id);
             }
         }
@@ -297,9 +351,10 @@ void StorageCredAcssRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
         req.proj_ref = kc_proj;  // keycard project scope (0 = realm-wide access)
         ase::utils::str_copy(req.path, 256u, path);
         req.action = action;   // wire 0/1/2 == AUD_READ/WRITE/DELETE
-        req.clrn = clrn;
-        req.perm = perm;
-        ase::utils::str_copy(req.user_id, 64u, user_id);
+        auto& cred = registry.emplace<StorageReqCredComponent>(req_ent);
+        cred.clrn = clrn;
+        cred.perm = perm;
+        ase::utils::str_copy(cred.user_id, 64u, user_id);
 
         auto& pnd = registry.emplace<StorageCredAcssPndComponent>(req_ent);
         pnd.req_id = req_id;

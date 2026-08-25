@@ -21,18 +21,20 @@
 #include <ase/storage/components/state/storage_wflw_edge_comp.hpp>
 #include <ase/storage/components/state/storage_acss_rule_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
+#include <ase/storage/components/state/storage_relm_quot_comp.hpp>
 #include <ase/storage/components/state/storage_relm_idn_comp.hpp>
 #include <ase/storage/components/state/storage_rule_idn_comp.hpp>
 #include <ase/storage/components/tag/storage_relm_edge_tag.hpp>
 #include <ase/storage/systems/acl/storage_acss_idx_sys.hpp>
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
+#include <ase/storage/components/state/storage_audt_outc_comp.hpp>
 #include <ase/storage/components/state/storage_buf_wflw_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_wflw_pend.hpp>
-#include <ase/storage/components/tag/storage_tag_wflw_gate.hpp>
-#include <ase/storage/components/tag/storage_tag_wflw_pst_pend.hpp>
-#include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
+#include <ase/storage/components/tag/storage_wflw_pend_tag.hpp>
+#include <ase/storage/components/tag/storage_wflw_gate_tag.hpp>
+#include <ase/storage/components/tag/storage_wflw_pst_pend_tag.hpp>
+#include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
 #include <ase/storage/components/state/storage_wflw_retr_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_wflw_retr.hpp>
+#include <ase/storage/components/tag/storage_wflw_retr_tag.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_cln_sys.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
@@ -77,6 +79,9 @@ Entity seed_realm_and_rule(Registry& reg, const char* start_label) {
     auto relm_ent = reg.create();
     auto& relm = reg.emplace<StorageStaRelmComponent>(relm_ent);
     ase::utils::str_copy(relm.id, MAX_REALM_ID, EDGE_REALM_ID);
+    // The accounting row belongs to every realm, seeded or not - the quota scan
+    // joins on it and a seeded realm without it would silently leave the view.
+    reg.emplace<StorageRelmQuotComponent>(relm_ent);
     auto& relm_idn = reg.emplace<StorageRelmIdnComponent>(relm_ent);
     relm_idn.id_hash = EDGE_REALM_HASH;
     reg.emplace<StorageRelmEdgeTag>(relm_ent);
@@ -152,9 +157,11 @@ TEST_CASE("workflow edges: allowed transition applies label + attributed audit +
     CHECK(reg.view<StorageReqWflwTranComponent>().size() == 0);
     // Attributed audit entity: AUD_PROMOTE + GRANTED + the operator user_id.
     uint32_t granted_audits = 0;
-    for (auto [e, aud] : reg.view<StorageBufAudtComponent, StorageAudtPendTag>().each()) {
-        if (aud.action != AUD_PROMOTE) continue;
-        if (aud.result != AUD_GRANTED) continue;
+    for (auto [e, aud, outc] :
+         reg.view<StorageBufAudtComponent, StorageAudtOutcComponent, StorageAudtPendTag>()
+             .each()) {
+        if (outc.action != AUD_PROMOTE) continue;
+        if (outc.result != AUD_GRANTED) continue;
         if (!ase::utils::str_equal(aud.user_id, kOperator, MAX_OWNER_ID)) continue;
         if (!ase::utils::str_equal(aud.path, kAsset, MAX_PATH_LEN)) continue;
         ++granted_audits;
@@ -200,9 +207,12 @@ TEST_CASE("workflow edges: forbidden edge (draft to released) is denied, label u
     CHECK(reg.view<StorageReqWflwTranComponent>().size() == 0);
     // The deny is audited with the edge named in the reason.
     uint32_t denied_audits = 0;
-    for (auto [e, aud] : reg.view<StorageBufAudtComponent, StorageAudtPendTag>().each()) {
-        if (aud.result != AUD_DENIED) continue;
-        CHECK(std::strncmp(aud.reason, "wflw_edge(", 10) == 0);
+    for (auto [e, aud, outc] :
+         reg.view<StorageBufAudtComponent, StorageAudtOutcComponent, StorageAudtPendTag>()
+             .each()) {
+        (void)aud;
+        if (outc.result != AUD_DENIED) continue;
+        CHECK(std::strncmp(outc.reason, "wflw_edge(", 10) == 0);
         ++denied_audits;
     }
     CHECK(denied_audits == 1);
@@ -312,9 +322,11 @@ TEST_CASE("workflow retention: retired build older than 90 days is swept with ru
     CHECK(!reg.valid(rule_ent));
     // Exactly one AUD_DELETE audit, path-attributed, carrying the retention reason.
     uint32_t del_audits = 0;
-    for (auto [e, aud] : reg.view<StorageBufAudtComponent, StorageAudtPendTag>().each()) {
-        if (aud.action != AUD_DELETE) continue;
-        CHECK(std::strncmp(aud.reason, "wflw_retention", 14) == 0);
+    for (auto [e, aud, outc] :
+         reg.view<StorageBufAudtComponent, StorageAudtOutcComponent, StorageAudtPendTag>()
+             .each()) {
+        if (outc.action != AUD_DELETE) continue;
+        CHECK(std::strncmp(outc.reason, "wflw_retention", 14) == 0);
         CHECK(ase::utils::str_equal(aud.path, kAsset, MAX_PATH_LEN));
         ++del_audits;
     }
@@ -351,8 +363,14 @@ TEST_CASE("workflow retention: retired build within 90 days is kept, not swept")
     CHECK(reg.view<StorageWflwRetrComponent>().size() == 1);
     CHECK(reg.valid(rule_ent));
     uint32_t del_audits = 0;
-    for (auto [e, aud] : reg.view<StorageBufAudtComponent, StorageAudtPendTag>().each()) {
-        if (aud.action == AUD_DELETE) ++del_audits;
+    // A zero here would also come out of an empty view, so this check alone cannot
+    // tell "nothing was deleted" from "nobody emplaces the verdict row any more".
+    // The three positive counts above run against the same pairing and go red first.
+    for (auto [e, aud, outc] :
+         reg.view<StorageBufAudtComponent, StorageAudtOutcComponent, StorageAudtPendTag>()
+             .each()) {
+        (void)aud;
+        if (outc.action == AUD_DELETE) ++del_audits;
     }
     CHECK(del_audits == 0);
 

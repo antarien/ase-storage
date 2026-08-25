@@ -20,7 +20,7 @@
  *   (WS-K.2c M:N iteration). A Tag cannot carry these relations: every key is
  *   runtime DATA (a realm path, a user id, a codeword, an entity reference), and a
  *   Tag can only encode a type, never a value. Views stay the first choice wherever
- *   the question IS a type - StorageRelmPublicTag and StorageRelmConcealTag are
+ *   the question IS a type - StorageRelmGlobTag and StorageRelmCncmTag are
  *   answered by a Tag-filtered View plus contains(), not by this index.
  *
  * FLYWEIGHT PATTERN (from INST_ASE_ECS_SER):

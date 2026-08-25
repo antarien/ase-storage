@@ -53,10 +53,10 @@
  * [ ] build() registers all systems in correct schedules
  * [ ] Startup systems registered first (run once at start)
  * [ ] Initialization systems registered (entity creation)
- * [ ] Integration/FixedUpdate systems registered with run_after() ordering
- * [ ] Replication/Transmission systems registered (network sync)
- * [ ] Persistence systems registered (database writes)
- * [ ] Shutdown systems registered (cleanup)
+ * [ ] Integration/Dynamics systems registered with run_after() ordering
+ * [ ] Transmission systems registered (network sync)
+ * [ ] Preservation systems registered (database writes)
+ * [ ] Finalization systems registered (cleanup)
  * [ ] All system includes present
  * [ ] No circular dependencies
  */
@@ -139,8 +139,26 @@ struct StorageModule {
         // SDK Hub-bridge drain: convert SES_KYCD_NTF_* Hub keys into
         // StorageReqKycdComponent on the request entity before the main
         // keycard-req drain sees it (same tick).
-        app.add_system_with<StorageKycdNtfyDrnSystem>(ecs::Schedule::Ingestion)
-            .run_after("HubRcvDrnSystem");
+        //
+        // NO run_after ON HubRcvDrnSystem, AND THE ABSENCE IS THE POINT — without this note the
+        // next reader adds it back here and at StorageWflwDrnSystem below. Both edges existed
+        // and both were inert: run_after orders only WITHIN one schedule (dependency_sorter),
+        // and HubRcvDrnSystem is registered in Reception (hub_module.hpp) while these drains run
+        // in Ingestion. A name from another schedule is looked up, not found, and dropped
+        // without a word.
+        //
+        // THE ORDERING IS UNCONDITIONAL ANYWAY, BY ARRAY POSITION — not by frequency. Reception
+        // and Ingestion sit in the SAME tier: FRAME_SCHEDULES lists Reception at index 0 and
+        // Ingestion at index 1 (tick_scheduler.cpp), and a tier runs its schedules in
+        // array order. Frame carries interval 0.0f and therefore runs every tick without an
+        // accumulator (tick_scheduler.cpp). "Same tick" in the line above is thus
+        // guaranteed by the tier layout, not by an edge — and there is no delay a stall could
+        // widen, so this note carries no "in steady operation" qualifier and must not be given
+        // one. That qualifier belongs to cross-tier edges only.
+        //
+        // The edges BELOW that name Storage* systems are a different case and MUST STAY: both
+        // ends run in Ingestion, same schedule, so the sorter resolves them.
+        app.add_system<StorageKycdNtfyDrnSystem>(ecs::Schedule::Ingestion);
         // HTTP-posted keycard issuance drain runs after the notify bridge so it
         // sees StorageReqKycdComponent + HubStgKycdPendTag together.
         app.add_system_with<StorageKycdReqDrnSystem>(ecs::Schedule::Ingestion)
@@ -152,8 +170,11 @@ struct StorageModule {
         // Workflow-promote Hub-bridge drain: converts HubStgWflwReqComponent bridge
         // entities (sdk::emplace_workflow_promote_request) into module-local
         // StorageReqWflwTranComponent requests (+ released-gate tag).
-        app.add_system_with<StorageWflwDrnSystem>(ecs::Schedule::Ingestion)
-            .run_after("HubRcvDrnSystem");
+        //
+        // NO run_after ON HubRcvDrnSystem — same case as StorageKycdNtfyDrnSystem above, and
+        // the reasoning is written out there once: Reception and Ingestion share the Frame tier
+        // and run in array order, so the ordering holds without an edge.
+        app.add_system<StorageWflwDrnSystem>(ecs::Schedule::Ingestion);
 
         // Integration (60Hz): index → ACL → file ops → workflow → concealment
         // The index is built FIRST and read by the ladder in the same tick. Ordering it

@@ -95,7 +95,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -164,7 +164,8 @@
 #include <ase/storage/systems/audit/storage_audt_writ_sys.hpp>
 // Components from same module
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
+#include <ase/storage/components/state/storage_audt_outc_comp.hpp>
+#include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
 #include <ase/storage/types.hpp>
 // Transport (L1 via ctx — outbound frame staging, mirror StorageWflwPstSystem)
 #include <ase/transport/outbound_queue_resource_manager.hpp>
@@ -238,13 +239,16 @@ void StorageAudtWritSystem::tick(ecs::Registry& registry, float dt) {
     ecs::Entity done[AUDT_WRIT_BATCH];
     uint32_t done_n = 0;
 
-    auto aud_view = registry.view<StorageBufAudtComponent, StorageAudtPendTag>();
-    for (auto [aud_ent, aud] : aud_view.each()) {
+    // Both halves of the audit row in ONE view - the verdict is a component on the
+    // same entity, so naming it here costs a pointer per row and never a lookup.
+    auto aud_view =
+        registry.view<StorageBufAudtComponent, StorageAudtOutcComponent, StorageAudtPendTag>();
+    for (auto [aud_ent, aud, outc] : aud_view.each()) {
         if (done_n >= AUDT_WRIT_BATCH) break;  // bound ships to what we can also retire
 
         char doc[AUDT_PST_DOC_BUF] = {};
         build_audt_doc(doc, AUDT_PST_DOC_BUF, aud.relm_ref, aud.proj_ref, aud.user_id,
-                       aud.action, aud.path, aud.result, aud.reason, aud.timestamp);
+                       outc.action, aud.path, outc.result, outc.reason, aud.timestamp);
         const uint32_t doc_len = ase::utils::str_len(doc, AUDT_PST_DOC_BUF);
 
         // [122][req_id:u64][doc_len:u32][doc]. req_id is a correlation token only -
@@ -263,8 +267,8 @@ void StorageAudtWritSystem::tick(ecs::Registry& registry, float dt) {
         out->push_outbound(frame, AUDT_PST_HDR + doc_len);
 
         log::info("[StorageAudtWrit] persisted access decision user={} path={} action={} result={} (frame 122, {} bytes)",
-                  aud.user_id, aud.path, static_cast<uint32_t>(aud.action),
-                  static_cast<uint32_t>(aud.result), AUDT_PST_HDR + doc_len);
+                  aud.user_id, aud.path, static_cast<uint32_t>(outc.action),
+                  static_cast<uint32_t>(outc.result), AUDT_PST_HDR + doc_len);
 
         done[done_n] = aud_ent;
         ++done_n;

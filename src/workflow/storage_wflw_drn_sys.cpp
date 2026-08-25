@@ -75,7 +75,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -144,8 +144,8 @@
 #include <ase/storage/systems/workflow/storage_wflw_drn_sys.hpp>
 // Components from same module
 #include <ase/storage/components/request/storage_req_wflw_tran_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_wflw_pend.hpp>
-#include <ase/storage/components/tag/storage_tag_wflw_gate.hpp>
+#include <ase/storage/components/tag/storage_wflw_pend_tag.hpp>
+#include <ase/storage/components/tag/storage_wflw_gate_tag.hpp>
 #include <ase/storage/types.hpp>
 // Hub API (bridge component + discovery tag + verdict publish)
 #include <ase/hub/api.hpp>
@@ -190,7 +190,15 @@ void StorageWflwDrnSystem::tick(ecs::Registry& registry, float dt) {
         if (done_n >= WFLW_REQ_BATCH) break;
 
         if (breq.path[0] == '\0' || breq.target_label[0] == '\0' || breq.requested_by[0] == '\0') {
-            log::error("[StorageWflwDrn] NOT_FOUND: bridge request with empty field dropped (path/target/requester required)");
+            // INPUT_REJECTED (WRN::CAT, SSOT core/ase-log/data/log_categories.json — die
+            // Kategorie IST ihr Name, eine Nummer gibt es seit dem Hash-Umbau nicht mehr):
+            // eine Bruecken-Anfrage von aussen ohne Pflichtfeld wird
+            // verworfen — woertlich "caller sent something unserviceable". Die Ebene wechselt
+            // von error auf warn, und das ist hier KEIN Sichtbarkeitsverlust wie auf dem
+            // Autorisierungspfad: eine unvollstaendige Anfrage ist kein Sicherheitsereignis,
+            // sondern ein Formfehler des Aufrufers — genau das sagt der Hilfetext ("not an
+            // engine fault").
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageWflwDrn", "bridge_request_fields");
             done[done_n] = bridge_ent;
             ++done_n;
             continue;

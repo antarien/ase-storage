@@ -80,7 +80,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -150,8 +150,9 @@
 // Components from same module
 #include <ase/storage/components/state/storage_sta_idn_comp.hpp>
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
-#include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
+#include <ase/storage/components/state/storage_audt_outc_comp.hpp>
+#include <ase/storage/components/tag/storage_kycd_vld_tag.hpp>
+#include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
 // Hub API for owner-keyed audit-signal drain
@@ -224,14 +225,23 @@ void StorageEdgeAudtDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // not skipped, because a bumped SEQ guarantees the gate wrote them.
         float action_f = hub::get(registry, owner, "SES_EDGE_AUDIT_ACTION"_hs);
         if (ase::types::is_not_found(action_f)) {
-            log::error("[StorageEdgeAudtDrn] SES_EDGE_AUDIT_ACTION missing for owner={} (seq={})",
-                       owner, seq);
+            // HUB_NOT_FOUND ist die exakte Kategorie: hub::get liefert is_not_found, der Wert
+            // FEHLT also, er ist nicht ungueltig — Ebene bleibt error. Die 4-Argument-Form traegt
+            // genau das Paar, das diese Kategorie vorsieht (owner + value_id).
+            //
+            // `seq` faellt weg, und das ist der Preis: keine kategorisierte Ueberladung hat eine
+            // zweite Zahl. Die Sequenz stand hier als Beleg dafuer, DASS das Gate geschrieben
+            // haben muss — sie diagnostiziert nicht den fehlenden Wert, sondern begruendet, warum
+            // sein Fehlen ueberhaupt ein Fehler ist. Dieser Grund steht jetzt im Kommentar
+            // darueber statt in jeder Logzeile.
+            log::error(log::ERR::CAT::HUB_NOT_FOUND, "StorageEdgeAudtDrnSystem", owner,
+                       "SES_EDGE_AUDIT_ACTION");
             action_f = static_cast<float>(AUD_READ);
         }
         float result_f = hub::get(registry, owner, "SES_EDGE_AUDIT_RESULT"_hs);
         if (ase::types::is_not_found(result_f)) {
-            log::error("[StorageEdgeAudtDrn] SES_EDGE_AUDIT_RESULT missing for owner={} (seq={})",
-                       owner, seq);
+            log::error(log::ERR::CAT::HUB_NOT_FOUND, "StorageEdgeAudtDrnSystem", owner,
+                       "SES_EDGE_AUDIT_RESULT");
             result_f = static_cast<float>(AUD_DENIED);
         }
         float cwrd_f = hub::get(registry, owner, "SES_EDGE_AUDIT_CWRD"_hs, 0.0f);
@@ -257,11 +267,12 @@ void StorageEdgeAudtDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         aud.relm_ref = 0;
         aud.proj_ref = 0;
         ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, idn.user_id);
-        aud.action = static_cast<uint8_t>(action_f);
         ase::utils::str_copy(aud.path, MAX_PATH_LEN, EDGE_REALM_ID);
         aud.timestamp = now;
-        aud.result = static_cast<uint8_t>(result_f);
-        ase::utils::str_copy(aud.reason, MAX_REASON_LEN, cwrd_str);
+        auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+        outc.action = static_cast<uint8_t>(action_f);
+        outc.result = static_cast<uint8_t>(result_f);
+        ase::utils::str_copy(outc.reason, MAX_REASON_LEN, cwrd_str);
         registry.emplace<StorageAudtPendTag>(aud_ent);
 
         // Advance the watermark so the next tick only drains fresh decisions.

@@ -76,7 +76,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -147,8 +147,9 @@
 #include <ase/storage/components/state/storage_wflw_retr_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_wflw_retr.hpp>
-#include <ase/storage/components/tag/storage_tag_audt_pend.hpp>
+#include <ase/storage/components/state/storage_audt_outc_comp.hpp>
+#include <ase/storage/components/tag/storage_wflw_retr_tag.hpp>
+#include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
 #include <ase/storage/components/tag/storage_relm_edge_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
@@ -176,7 +177,21 @@ void remove_if_present(StorageResourceManager& mgr, const char* asset_abs, const
     }
     if (!mgr.file_exists(target)) return;
     if (!mgr.delete_file(target)) {
-        log::warn("[StorageWflwCln] could not remove {} (kept; retried next sweep)", target);
+        // KATEGORIE: HOST_OP_FAILED statt RESOURCE_UNAVAIL — die Abgrenzung an den Konstanten
+        // entscheidet das woertlich. RESOURCE_UNAVAIL heisst: die Ressource war von vornherein
+        // nicht da. Die Zeile darueber hat mit file_exists das GEGENTEIL festgestellt;
+        // delete_file ist gelaufen und hat versagt. Das ist ein gescheiterter Vorgang am
+        // Wirtssystem, dieselbe Klasse wie der write_file-Fehlschlag in
+        // storage_file_writ_sys.cpp, und `target` bleibt die richtige Kennung dafuer.
+        //
+        // EBENE: warn statt error. Das korrigiert eine fruehere Entscheidung von mir, die mit
+        // der SCHWERE argumentierte ("echte E/A-Verweigerung"). Genau die ist laut Abgrenzung
+        // NICHT das Kriterium — es zaehlt, ob danach noch etwas passiert. Hier passiert etwas:
+        // remove_if_present kehrt zurueck, die uebrigen Begleitdateien werden weiter geloescht,
+        // der Retention-Lauf endet ordentlich, und der naechste versucht es erneut. Das System
+        // arbeitet mit eingeschraenkter Faehigkeit weiter, die Datei bleibt liegen — der Fall,
+        // den die WRN-Haelfte mit "eine Datei nicht rotieren" ausdruecklich meint.
+        log::warn(log::WRN::CAT::HOST_OP_FAILED, "StorageWflwCln", target);
     }
 }
 
@@ -188,11 +203,12 @@ void emit_cln_audit(ecs::Registry& registry, uint32_t relm_ref, const char* path
     aud.relm_ref = relm_ref;
     aud.proj_ref = 0;
     ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, "system:wflw_cln");
-    aud.action = AUD_DELETE;
     ase::utils::str_copy(aud.path, MAX_PATH_LEN, path);
     aud.timestamp = timestamp;
-    aud.result = AUD_GRANTED;
-    ase::utils::str_copy(aud.reason, MAX_REASON_LEN, "wflw_retention(90d)");
+    auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+    outc.action = AUD_DELETE;
+    outc.result = AUD_GRANTED;
+    ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "wflw_retention(90d)");
     registry.emplace<StorageAudtPendTag>(aud_ent);
 }
 
@@ -237,8 +253,24 @@ void StorageWflwClnSystem::tick(ecs::Registry& registry, float dt) {
     for (auto [retr_ent, retr] : retr_view.each()) {
         if (done_n >= WFLW_REQ_BATCH) break;
         if (retr.retired_at > now) {
-            log::warn("[StorageWflwCln] record for {} carries a FUTURE retire time {} — skipped",
-                      retr.path, retr.retired_at);
+            // MIGRIERT. Hier stand ein Vermerk, der die freie Zeile mit einer FALSCHEN
+            // PRAEMISSE begruendete: er nahm an, eine Zahl koenne nur ueber den float-Platz
+            // der wert-tragenden Ueberladung mitfahren, und schloss daraus, ein uint64-
+            // Zeitstempel (rund 1,7 Milliarden, Mantisse exakt nur bis 2^24) sei nicht
+            // darstellbar, und `retr.path` falle dann auch noch weg. Beides trifft nicht zu:
+            // der detail-Platz nimmt einen String, und ase::utils::str_append_u64 rendert den
+            // Wert exakt, ohne Float und ohne Rundung. Beide Angaben bleiben erhalten —
+            // WELCHER Datensatz im value_id, WELCHE Zeit im detail. Es gab keine Formgrenze,
+            // nur eine ungeprueft uebernommene Annahme ueber die verfuegbaren Formen.
+            //
+            // VALUE_INVALID und nicht VALUE_OUT_OF_RANGE: die Zeit verletzt keine
+            // konfigurierte Grenze, sie ist in sich unmoeglich — ein Ruhestand, der noch nicht
+            // eingetreten ist. "Wert vorhanden, semantisch ungueltig" trifft genau das.
+            // warn und nicht error, weil `continue` nur diesen Datensatz ueberspringt und der
+            // Retention-Lauf danach weitergeht.
+            char retired_txt[24] = {};
+            ase::utils::str_append_u64(retired_txt, 24, retr.retired_at);
+            log::warn(log::WRN::CAT::VALUE_INVALID, "StorageWflwCln", retr.path, retired_txt);
             continue;
         }
         const uint64_t age = now - retr.retired_at;

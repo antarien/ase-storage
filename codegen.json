@@ -48,30 +48,30 @@
             "type": "create",
             "components": [
                 "StorageAcssDenyTag",
-                "StorageAcssGrantTag",
+                "StorageAcssGrntTag",
                 "StorageAcssRuleSufxTag",
                 "StorageAudtPendTag",
-                "StorageCurApprovedTag",
                 "StorageCurDoneTag",
-                "StorageCurRejectedTag",
                 "StorageCurReqTag",
-                "StorageCurReworkTag",
-                "StorageCurUnratedTag",
                 "StorageKycdExpTag",
                 "StorageKycdPendTag",
                 "StorageKycdRevTag",
                 "StorageKycdRjctTag",
                 "StorageKycdVldTag",
-                "StorageRelmActiveTag",
-                "StorageRelmArchivedTag",
-                "StorageRelmConcealTag",
+                "StorageRelmActvTag",
+                "StorageRelmArcvTag",
+                "StorageRelmCncmTag",
                 "StorageRelmEdgeTag",
+                "StorageRelmGlobTag",
                 "StorageRelmOrgTag",
-                "StorageRelmPersonalTag",
-                "StorageRelmPublicTag",
-                "StorageRelmSuspendedTag",
+                "StorageRelmSuspTag",
+                "StorageRelmUsrTag",
                 "StorageRelmVisbTag",
-                "StorageVotPendTag"
+                "StorageRvwAcptTag",
+                "StorageRvwPendTag",
+                "StorageRvwRjctTag",
+                "StorageRvwRvseTag",
+                "StorageVotePendTag"
             ]
         },
         {
@@ -80,30 +80,30 @@
             "type": "delete",
             "components": [
                 "StorageAcssDenyTag",
-                "StorageAcssGrantTag",
+                "StorageAcssGrntTag",
                 "StorageAcssRuleSufxTag",
                 "StorageAudtPendTag",
-                "StorageCurApprovedTag",
                 "StorageCurDoneTag",
-                "StorageCurRejectedTag",
                 "StorageCurReqTag",
-                "StorageCurReworkTag",
-                "StorageCurUnratedTag",
                 "StorageKycdExpTag",
                 "StorageKycdPendTag",
                 "StorageKycdRevTag",
                 "StorageKycdRjctTag",
                 "StorageKycdVldTag",
-                "StorageRelmActiveTag",
-                "StorageRelmArchivedTag",
-                "StorageRelmConcealTag",
+                "StorageRelmActvTag",
+                "StorageRelmArcvTag",
+                "StorageRelmCncmTag",
                 "StorageRelmEdgeTag",
+                "StorageRelmGlobTag",
                 "StorageRelmOrgTag",
-                "StorageRelmPersonalTag",
-                "StorageRelmPublicTag",
-                "StorageRelmSuspendedTag",
+                "StorageRelmSuspTag",
+                "StorageRelmUsrTag",
                 "StorageRelmVisbTag",
-                "StorageVotPendTag"
+                "StorageRvwAcptTag",
+                "StorageRvwPendTag",
+                "StorageRvwRjctTag",
+                "StorageRvwRvseTag",
+                "StorageVotePendTag"
             ]
         }
     ],
@@ -126,13 +126,13 @@
                 "name": "StorageAcssDenyTag",
                 "description": "Marker for request entities that failed an ACL check step",
                 "fields": [],
-                "file": "tag/storage_tag_acss_deny.hpp"
+                "file": "tag/storage_acss_deny_tag.hpp"
             },
             {
-                "name": "StorageAcssGrantTag",
-                "description": "Marker for request entities that passed all 10 ACL checks",
+                "name": "StorageAcssGrntTag",
+                "description": "StorageAcssGrntTag - Die Zugriffspruefung ist bestanden",
                 "fields": [],
-                "file": "tag/storage_tag_acss_grant.hpp"
+                "file": "tag/storage_acss_grnt_tag.hpp"
             },
             {
                 "name": "StorageAcssRuleComponent",
@@ -163,7 +163,7 @@
                 "name": "StorageAudtPendTag",
                 "description": "Marker for audit entities that need batch-write to database",
                 "fields": [],
-                "file": "tag/storage_tag_audt_pend.hpp"
+                "file": "tag/storage_audt_pend_tag.hpp"
             },
             {
                 "name": "StorageBlltVoteComponent",
@@ -179,40 +179,16 @@
                 "file": "state/storage_bllt_vote_comp.hpp"
             },
             {
-                "name": "StorageCurApprovedTag",
-                "description": "Curator has approved this image for use in the game",
-                "fields": [],
-                "file": "tag/storage_tag_cur_approved.hpp"
-            },
-            {
                 "name": "StorageCurDoneTag",
                 "description": "Marks a request entity as completed for deferred cleanup",
                 "fields": [],
-                "file": "tag/storage_tag_cur_done.hpp"
-            },
-            {
-                "name": "StorageCurRejectedTag",
-                "description": "Curator has rejected this image as not suitable",
-                "fields": [],
-                "file": "tag/storage_tag_cur_rejected.hpp"
+                "file": "tag/storage_cur_done_tag.hpp"
             },
             {
                 "name": "StorageCurReqTag",
                 "description": "Marks an entity with StorageReqCurComponent as unprocessed",
                 "fields": [],
-                "file": "tag/storage_tag_cur_req.hpp"
-            },
-            {
-                "name": "StorageCurReworkTag",
-                "description": "Curator flagged this image as needing changes before approval",
-                "fields": [],
-                "file": "tag/storage_tag_cur_rework.hpp"
-            },
-            {
-                "name": "StorageCurUnratedTag",
-                "description": "Default state for new curation entries awaiting curator review",
-                "fields": [],
-                "file": "tag/storage_tag_cur_unrated.hpp"
+                "file": "tag/storage_cur_req_tag.hpp"
             },
             {
                 "name": "StorageKycdCwrdComponent",
@@ -231,7 +207,7 @@
                 "name": "StorageKycdExpTag",
                 "description": "Marker for entities whose keycard lifetime has elapsed",
                 "fields": [],
-                "file": "tag/storage_tag_kycd_exp.hpp"
+                "file": "tag/storage_kycd_exp_tag.hpp"
             },
             {
                 "name": "StorageKycdIdnComponent",
@@ -250,29 +226,29 @@
                 "name": "StorageKycdPendTag",
                 "description": "Marker for entities whose keycard was drained from buffer",
                 "fields": [],
-                "file": "tag/storage_tag_kycd_pend.hpp"
+                "file": "tag/storage_kycd_pend_tag.hpp"
             },
             {
                 "name": "StorageKycdRevTag",
                 "description": "Marker for entities whose keycard was explicitly revoked",
                 "fields": [],
-                "file": "tag/storage_tag_kycd_rev.hpp"
+                "file": "tag/storage_kycd_rev_tag.hpp"
             },
             {
                 "name": "StorageKycdRjctTag",
                 "description": "Marker for entities whose keycard HMAC-SHA256 check failed",
                 "fields": [],
-                "file": "tag/storage_tag_kycd_rjct.hpp"
+                "file": "tag/storage_kycd_rjct_tag.hpp"
             },
             {
                 "name": "StorageKycdVldTag",
                 "description": "Marker for entities with a valid, non-expired keycard",
                 "fields": [],
-                "file": "tag/storage_tag_kycd_vld.hpp"
+                "file": "tag/storage_kycd_vld_tag.hpp"
             },
             {
                 "name": "StorageLatLnkComponent",
-                "description": "StorageLatLnkComponent - Lattice link between two realms",
+                "description": "StorageLatLnkComponent - What a lattice link grants",
                 "fields": [],
                 "file": "state/storage_lat_lnk_comp.hpp"
             },
@@ -311,31 +287,37 @@
                 "name": "StorageMgrTag",
                 "description": "Marks the single manager entity for the storage module",
                 "fields": [],
-                "file": "tag/storage_tag_mgr.hpp"
+                "file": "tag/storage_mgr_tag.hpp"
             },
             {
-                "name": "StorageRelmActiveTag",
-                "description": "Status tag for realms with full read-write access enabled",
+                "name": "StorageRelmActvTag",
+                "description": "StorageRelmActvTag - Der Bereich ist im Normalbetrieb",
                 "fields": [],
-                "file": "tag/storage_tag_relm_active.hpp"
+                "file": "tag/storage_relm_actv_tag.hpp"
             },
             {
-                "name": "StorageRelmArchivedTag",
-                "description": "Status tag for realms marked for deletion with read-only access",
+                "name": "StorageRelmArcvTag",
+                "description": "StorageRelmArcvTag - Der Bereich ist nur noch lesbar, vor der Loeschung",
                 "fields": [],
-                "file": "tag/storage_tag_relm_archived.hpp"
+                "file": "tag/storage_relm_arcv_tag.hpp"
             },
             {
-                "name": "StorageRelmConcealTag",
-                "description": "Concealment tag per DSGN_109 principle: existence not visible",
+                "name": "StorageRelmCncmTag",
+                "description": "StorageRelmCncmTag - Der Bereich ist fuer Nichtmitglieder unsichtbar",
                 "fields": [],
-                "file": "tag/storage_tag_relm_conceal.hpp"
+                "file": "tag/storage_relm_cncm_tag.hpp"
             },
             {
                 "name": "StorageRelmEdgeTag",
                 "description": "Identity tag for the single realm whose id is EDGE_REALM_ID",
                 "fields": [],
                 "file": "tag/storage_relm_edge_tag.hpp"
+            },
+            {
+                "name": "StorageRelmGlobTag",
+                "description": "StorageRelmGlobTag - Der plattformweite Bereich mit den Engine-Vorgaben",
+                "fields": [],
+                "file": "tag/storage_relm_glob_tag.hpp"
             },
             {
                 "name": "StorageRelmIdnComponent",
@@ -360,25 +342,19 @@
                 "name": "StorageRelmOrgTag",
                 "description": "Type tag for realms created as studio or team workspaces",
                 "fields": [],
-                "file": "tag/storage_tag_relm_org.hpp"
+                "file": "tag/storage_relm_org_tag.hpp"
             },
             {
-                "name": "StorageRelmPersonalTag",
-                "description": "Type tag for realms auto-created per registered user",
+                "name": "StorageRelmSuspTag",
+                "description": "StorageRelmSuspTag - Der Bereich ist von der Verwaltung stillgelegt",
                 "fields": [],
-                "file": "tag/storage_tag_relm_personal.hpp"
+                "file": "tag/storage_relm_susp_tag.hpp"
             },
             {
-                "name": "StorageRelmPublicTag",
-                "description": "Type tag for the engine defaults and shared templates realm",
+                "name": "StorageRelmUsrTag",
+                "description": "StorageRelmUsrTag - Der Bereich gehoert genau einem Nutzer",
                 "fields": [],
-                "file": "tag/storage_tag_relm_public.hpp"
-            },
-            {
-                "name": "StorageRelmSuspendedTag",
-                "description": "Status tag for realms with all access blocked by admin action",
-                "fields": [],
-                "file": "tag/storage_tag_relm_suspended.hpp"
+                "file": "tag/storage_relm_usr_tag.hpp"
             },
             {
                 "name": "StorageRelmVisbTag",
@@ -418,8 +394,32 @@
                 "file": "state/storage_rule_idn_comp.hpp"
             },
             {
+                "name": "StorageRvwAcptTag",
+                "description": "StorageRvwAcptTag - Der Pruefer hat das Bild angenommen",
+                "fields": [],
+                "file": "tag/storage_rvw_acpt_tag.hpp"
+            },
+            {
+                "name": "StorageRvwPendTag",
+                "description": "StorageRvwPendTag - Der Eintrag wartet auf die Pruefung",
+                "fields": [],
+                "file": "tag/storage_rvw_pend_tag.hpp"
+            },
+            {
+                "name": "StorageRvwRjctTag",
+                "description": "StorageRvwRjctTag - Der Pruefer hat das Bild abgelehnt",
+                "fields": [],
+                "file": "tag/storage_rvw_rjct_tag.hpp"
+            },
+            {
+                "name": "StorageRvwRvseTag",
+                "description": "StorageRvwRvseTag - Der Pruefer verlangt Nacharbeit",
+                "fields": [],
+                "file": "tag/storage_rvw_rvse_tag.hpp"
+            },
+            {
                 "name": "StorageStaCurCurComponent",
-                "description": "StorageStaCurCurComponent - Single curation entry for an image",
+                "description": "StorageStaCurCurComponent - Address of one curation row",
                 "fields": [],
                 "file": "state/storage_sta_cur_cur_comp.hpp"
             },
@@ -431,7 +431,7 @@
             },
             {
                 "name": "StorageStaKycdComponent",
-                "description": "StorageStaKycdComponent - Keycard entity core data",
+                "description": "StorageStaKycdComponent - Whose keycard this is and where it applies",
                 "fields": [],
                 "file": "state/storage_sta_kycd_comp.hpp"
             },
@@ -443,13 +443,25 @@
             },
             {
                 "name": "StorageStaTaskComponent",
-                "description": "StorageStaTaskComponent - Need-to-Know task scoping (Enterprise)",
+                "description": "StorageStaTaskComponent - Active window of one need-to-know task",
                 "fields": [
                     {
                         "name": "proj_ref",
                         "type": "uint32",
                         "default": "0",
                         "description": "Entity ref to project this task belongs to"
+                    },
+                    {
+                        "name": "starts_at",
+                        "type": "uint64",
+                        "default": "0",
+                        "description": "Unix timestamp when access begins"
+                    },
+                    {
+                        "name": "expires_at",
+                        "type": "uint64",
+                        "default": "0",
+                        "description": "Unix timestamp when access ends"
                     }
                 ],
                 "file": "state/storage_sta_task_comp.hpp"
@@ -512,12 +524,6 @@
                 "file": "state/storage_task_idn_comp.hpp"
             },
             {
-                "name": "StorageVotPendTag",
-                "description": "Marker for vote entities that are actively collecting ballots",
-                "fields": [],
-                "file": "tag/storage_tag_vot_pend.hpp"
-            },
-            {
                 "name": "StorageVoteCntComponent",
                 "description": "StorageVoteCntComponent - Vote ballot counts and deadline",
                 "fields": [
@@ -553,12 +559,37 @@
                     }
                 ],
                 "file": "state/storage_vote_cnt_comp.hpp"
+            },
+            {
+                "name": "StorageVotePendTag",
+                "description": "StorageVotePendTag - Die Vertrauensabstimmung nimmt noch Stimmen an",
+                "fields": [],
+                "file": "tag/storage_vote_pend_tag.hpp"
             }
         ],
         "server_only": [
             {
+                "name": "StorageAudtOutcComponent",
+                "description": "StorageAudtOutcComponent - What an audited access attempt tried and how it ended",
+                "fields": [
+                    {
+                        "name": "action",
+                        "type": "uint8",
+                        "default": "0",
+                        "description": "What was attempted (AUD_READ, AUD_WRITE, etc.)"
+                    },
+                    {
+                        "name": "result",
+                        "type": "uint8",
+                        "default": "0",
+                        "description": "Outcome (AUD_GRANTED, AUD_DENIED, AUD_ESCALATED)"
+                    }
+                ],
+                "file": "state/storage_audt_outc_comp.hpp"
+            },
+            {
                 "name": "StorageBufAudtComponent",
-                "description": "StorageBufAudtComponent - Audit entry buffer for batch persistence",
+                "description": "StorageBufAudtComponent - Context of one audited access attempt",
                 "fields": [
                     {
                         "name": "relm_ref",
@@ -657,26 +688,95 @@
                 "file": "state/storage_cred_acss_pnd_comp.hpp"
             },
             {
+                "name": "StorageCurAsmtComponent",
+                "description": "StorageCurAsmtComponent - The curator's verdict on one asset",
+                "fields": [
+                    {
+                        "name": "rating",
+                        "type": "uint8",
+                        "default": "0",
+                        "description": "Star rating (0-5, 0 = unrated)"
+                    }
+                ],
+                "file": "state/storage_cur_asmt_comp.hpp"
+            },
+            {
+                "name": "StorageKycdGrntComponent",
+                "description": "StorageKycdGrntComponent - What a keycard grants and until when",
+                "fields": [
+                    {
+                        "name": "clrn",
+                        "type": "uint8",
+                        "default": "0",
+                        "description": "Max Schutzstufe this keycard can access (0-9)"
+                    },
+                    {
+                        "name": "perm",
+                        "type": "uint16",
+                        "default": "0",
+                        "description": "Bitflags: PERM_READ | PERM_WRITE | PERM_DELETE | etc."
+                    },
+                    {
+                        "name": "expires_at",
+                        "type": "uint64",
+                        "default": "0",
+                        "description": "Unix timestamp when keycard becomes invalid (0 = no expiry)"
+                    }
+                ],
+                "file": "state/storage_kycd_grnt_comp.hpp"
+            },
+            {
                 "name": "StorageKycdPstDoneTag",
                 "description": "StorageKycdPstDoneTag - Keycard durable record already emitted",
                 "fields": [],
-                "file": "tag/storage_tag_kycd_pst_done.hpp"
+                "file": "tag/storage_kycd_pst_done_tag.hpp"
             },
             {
                 "name": "StorageKycdPstPendTag",
                 "description": "StorageKycdPstPendTag - Minted keycard not yet durably persisted",
                 "fields": [],
-                "file": "tag/storage_tag_kycd_pst_pend.hpp"
+                "file": "tag/storage_kycd_pst_pend_tag.hpp"
             },
             {
                 "name": "StorageKycdRevPstTag",
                 "description": "StorageKycdRevPstTag - Keycard revocation already durably emitted",
                 "fields": [],
-                "file": "tag/storage_tag_kycd_rev_pst.hpp"
+                "file": "tag/storage_kycd_rev_pst_tag.hpp"
+            },
+            {
+                "name": "StorageLnkCnstComponent",
+                "description": "StorageLnkCnstComponent - The two realms of a lattice link and their consent",
+                "fields": [],
+                "file": "state/storage_lnk_cnst_comp.hpp"
+            },
+            {
+                "name": "StorageRelmQuotComponent",
+                "description": "StorageRelmQuotComponent - A realm's storage ceiling and measured usage",
+                "fields": [
+                    {
+                        "name": "quota_bytes",
+                        "type": "uint64",
+                        "default": "0",
+                        "description": "Realm storage ceiling in bytes (seeded from types.hpp, 0 = unset)"
+                    },
+                    {
+                        "name": "used_bytes",
+                        "type": "uint64",
+                        "default": "0",
+                        "description": "Measured realm usage in bytes (StorageQuotChkSystem FS scan)"
+                    },
+                    {
+                        "name": "usage_scanned_at",
+                        "type": "uint64",
+                        "default": "0",
+                        "description": "Unix time of the last usage scan (paces the Observation rescan)"
+                    }
+                ],
+                "file": "state/storage_relm_quot_comp.hpp"
             },
             {
                 "name": "StorageReqAcssComponent",
-                "description": "StorageReqAcssComponent - Access check request from HTTP route",
+                "description": "StorageReqAcssComponent - What an access request asks for",
                 "fields": [
                     {
                         "name": "relm_ref",
@@ -694,10 +794,35 @@
                 "file": "state/storage_req_acss_comp.hpp"
             },
             {
+                "name": "StorageReqCredComponent",
+                "description": "StorageReqCredComponent - The caller's credentials on an access request",
+                "fields": [],
+                "file": "state/storage_req_cred_comp.hpp"
+            },
+            {
                 "name": "StorageReqCurComponent",
-                "description": "StorageReqCurComponent - Curator action request from HTTP",
+                "description": "StorageReqCurComponent - Curation command request core",
                 "fields": [],
                 "file": "state/storage_req_cur_comp.hpp"
+            },
+            {
+                "name": "StorageReqCurPrmComponent",
+                "description": "StorageReqCurPrmComponent - Action parameters of one curation request",
+                "fields": [
+                    {
+                        "name": "rating",
+                        "type": "uint8",
+                        "default": "0",
+                        "description": "New rating (for CUR_ACT_RATE)"
+                    },
+                    {
+                        "name": "target_tag",
+                        "type": "uint8",
+                        "default": "0",
+                        "hub_key": "CUR_ST_"
+                    }
+                ],
+                "file": "state/storage_req_cur_prm_comp.hpp"
             },
             {
                 "name": "StorageReqKycdComponent",
@@ -757,6 +882,37 @@
                 "file": "request/storage_req_wflw_tran_comp.hpp"
             },
             {
+                "name": "StorageStaSessComponent",
+                "description": "StorageStaSessComponent - What binds an identity to a live session",
+                "fields": [
+                    {
+                        "name": "client_id",
+                        "type": "uint32",
+                        "default": "0",
+                        "description": "Network client ID from ase-network WebRTC"
+                    },
+                    {
+                        "name": "active_keycard",
+                        "type": "uint32",
+                        "default": "0",
+                        "description": "Entity ref to active keycard entity"
+                    },
+                    {
+                        "name": "authenticated_at",
+                        "type": "uint64",
+                        "default": "0",
+                        "description": "Unix timestamp when keycard was validated"
+                    }
+                ],
+                "file": "state/storage_sta_sess_comp.hpp"
+            },
+            {
+                "name": "StorageTaskDescComponent",
+                "description": "StorageTaskDescComponent - Human-readable description of one task",
+                "fields": [],
+                "file": "state/storage_task_desc_comp.hpp"
+            },
+            {
                 "name": "StorageWflwEdgeComponent",
                 "description": "StorageWflwEdgeComponent - one allowed workflow-label transition edge",
                 "fields": [],
@@ -766,19 +922,19 @@
                 "name": "StorageWflwGateTag",
                 "description": "StorageWflwGateTag - released-gate artifact check outstanding",
                 "fields": [],
-                "file": "tag/storage_tag_wflw_gate.hpp"
+                "file": "tag/storage_wflw_gate_tag.hpp"
             },
             {
                 "name": "StorageWflwPendTag",
                 "description": "Marker for StorageReqWflwTranComponent entities not yet transitioned",
                 "fields": [],
-                "file": "tag/storage_tag_wflw_pend.hpp"
+                "file": "tag/storage_wflw_pend_tag.hpp"
             },
             {
                 "name": "StorageWflwPstPendTag",
                 "description": "StorageWflwPstPendTag - applied transition not yet durably persisted",
                 "fields": [],
-                "file": "tag/storage_tag_wflw_pst_pend.hpp"
+                "file": "tag/storage_wflw_pst_pend_tag.hpp"
             },
             {
                 "name": "StorageWflwRetrComponent",
@@ -797,7 +953,7 @@
                 "name": "StorageWflwRetrTag",
                 "description": "StorageWflwRetrTag - retired build inside the retention window",
                 "fields": [],
-                "file": "tag/storage_tag_wflw_retr.hpp"
+                "file": "tag/storage_wflw_retr_tag.hpp"
             }
         ]
     },

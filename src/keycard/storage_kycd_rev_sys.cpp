@@ -77,7 +77,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -146,8 +146,8 @@
 #include <ase/storage/systems/keycard/storage_kycd_rev_sys.hpp>
 // Components from same module
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_rev.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_rev_pst.hpp>
+#include <ase/storage/components/tag/storage_kycd_rev_tag.hpp>
+#include <ase/storage/components/tag/storage_kycd_rev_pst_tag.hpp>
 // Module constants (KYCD_PST_OP_REVOKE)
 #include <ase/storage/types.hpp>
 // Hub API for owner-keyed durable-revoke signal
@@ -193,8 +193,18 @@ void StorageKycdRevSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // Replica cannot locate its document to mark revoked. Mark done so it is
         // not re-scanned, and log the malformed state as an error.
         if (kycd.kycd_hash[0] == '\0') {
-            log::error("[StorageKycdRev] revoked keycard entity={} has empty kycd_hash — not durably revocable",
-                       static_cast<uint32_t>(entity));
+            // RESOURCE_UNAVAIL und NICHT das neue WORK_PRECLUDED, obwohl dessen Name hier
+            // verlockend klingt: sein Hilfetext lautet "State noted - nothing is missing,
+            // unreachable or unset; the work does not apply here" und schliesst diesen Fall
+            // damit ausdruecklich AUS — hier fehlt sehr wohl etwas, naemlich der Digest.
+            // Ohne ihn hat das dauerhafte Dokument keinen Primaerschluessel, der Replica kann
+            // es nicht adressieren: die Ressource ist da und unbrauchbar, Punkt 5 des
+            // RESOURCE_UNAVAIL-Hilfetexts.
+            //
+            // owner traegt die Entity, value_id benennt das leere Feld — beide Angaben der
+            // alten Zeile bleiben erhalten.
+            log::error(log::ERR::CAT::RESOURCE_UNAVAIL, "StorageKycdRev",
+                       static_cast<uint32_t>(entity), "STG_KYCD_kycd_hash");
             registry.emplace<StorageKycdRevPstTag>(entity);
             continue;
         }

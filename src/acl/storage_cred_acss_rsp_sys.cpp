@@ -14,7 +14,7 @@
  *
  * CAUSAL CHAIN (Credential A/ACS Verdict Emit)
  *
- *   [StorageAcssChkSystem emplaced StorageAcssGrantTag/DenyTag on the request entity]
+ *   [StorageAcssChkSystem emplaced StorageAcssGrntTag/DenyTag on the request entity]
  *          │
  *          │ request entity: StorageReqAcssComponent + StorageCredAcssPndComponent + verdict tag
  *          ▼
@@ -32,7 +32,7 @@
  *          │
  *          │ [87][req_id][verdict][reason] → L2 demux ws->send() → Replica
  *          ▼
- *   ReplicaRcvSystem correlates req_id → the pending credential request → gate the Vault op.
+ *   ReplicaRspRlySystem correlates req_id → the pending credential request → gate the Vault op.
  *
  * HUB Pattern (N/A — transport outbound + components, no Hub values)
  *
@@ -74,7 +74,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -141,8 +141,8 @@
 // Components + tags from same module
 #include <ase/storage/components/state/storage_req_acss_comp.hpp>
 #include <ase/storage/components/state/storage_cred_acss_pnd_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_acss_grant.hpp>
-#include <ase/storage/components/tag/storage_tag_acss_deny.hpp>
+#include <ase/storage/components/tag/storage_acss_grnt_tag.hpp>
+#include <ase/storage/components/tag/storage_acss_deny_tag.hpp>
 #include <ase/storage/types.hpp>
 // Lower layers
 #include <ase/transport/outbound_queue_resource_manager.hpp>
@@ -189,7 +189,7 @@ void StorageCredAcssRspSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
     // GRANT verdicts (Tag-filtered View).
     for (auto [ent, req, pnd] :
-         registry.view<StorageReqAcssComponent, StorageCredAcssPndComponent, StorageAcssGrantTag>().each()) {
+         registry.view<StorageReqAcssComponent, StorageCredAcssPndComponent, StorageAcssGrntTag>().each()) {
         (void)req;
         if (done_n >= CRED_ACSS_RSP_BATCH) break;  // bound emits to what we can also destroy (no double-emit)
         emit_verdict(out, pnd.req_id, true);

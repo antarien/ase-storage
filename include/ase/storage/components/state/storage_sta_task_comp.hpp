@@ -1,19 +1,34 @@
 #pragma once
 
 /**
- * ASE ECS COMPONENT (STATE)
+ * ASE ECS COMPONENT
  *
  * @file        storage_sta_task_comp.hpp
- * @brief       StorageStaTaskComponent - Need-to-Know task scoping (Enterprise)
- * @description Task-based access scoping: developer sees only assets within task scope.
- *              Task lifecycle via Tags: StorageTaskActiveTag, StorageTaskDoneTag, etc.
+ * @brief       StorageStaTaskComponent - Active window of one need-to-know task
+ * @description WHEN a task grants access and under which project bucket: the
+ *              project ref the access index buckets tasks by, and the Unix window
+ *              (starts_at/expires_at, 0 = unbounded) the A/ACS ladder checks in
+ *              Step 8. The human-readable description (assignee, task name, path
+ *              glob) lives in the sibling StorageTaskDescComponent - split
+ *              2026-08-19, the God-Component gate allows five fields and this row
+ *              carried six. The comparison values the ladder matches against
+ *              (assignee_hash, scope_hash/len) already live in the existing
+ *              StorageTaskIdnComponent sibling.
+ *
+ *              ERZEUGER-INVARIANTE: jede Task-Entity traegt Fenster-, Desc- UND
+ *              Idn-Zeile. Der fruehere Erzeuger storage_routes.cpp (L5) ist
+ *              geloescht; der dokumentierte kuenftige Weg ist die Hub-Migration
+ *              nach ase-pl-webserver (MIG_ASE_KERNEL_DLOPEN.md Phase 4b). Wer ihn
+ *              baut, emplaced ALLE Geschwister.
+ *
+ * sta = state, task selbst ist katalogisiert (entity/abstract/task)
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
- * @created     2026-04-05
- * @modified    2026-04-05
- * @version     1.0.0
+ * @created     2026-04-06
+ * @modified    2026-08-19
+ * @version     1.1.0
  *
  * ECS COMPONENT COMPLIANCE
  *
@@ -49,22 +64,10 @@
 namespace ase::storage {
 
 /**
- * @brief StorageStaTaskComponent - Need-to-Know task with scoped asset access
- *
- * Enterprise tier only. Limits developer access to a specific path pattern.
- * Task lifecycle via Tags (NOT uint8_t field):
- *   StorageTaskActiveTag = developer has scoped access
- *   StorageTaskDoneTag   = task finished, access revoked
- *   StorageTaskLapseTag  = deadline passed, access revoked
- *
- * @hub_reads  none
- * @hub_writes none
+ * StorageStaTaskComponent - which project bucket, and when the task is live
  */
 struct StorageStaTaskComponent {
     uint32_t proj_ref = 0;                    // Entity ref to project this task belongs to
-    char assignee[64] = {};                   // User ID assigned to this task
-    char task_name[128] = {};                 // Human-readable task name
-    char path_pattern[256] = {};              // Asset path glob (e.g. "assets/story/chapter-03/*")
     uint64_t starts_at = 0;                   // Unix timestamp when access begins
     uint64_t expires_at = 0;                  // Unix timestamp when access ends
 };

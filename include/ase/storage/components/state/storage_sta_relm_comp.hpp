@@ -5,17 +5,23 @@
  *
  * @file        storage_sta_relm_comp.hpp
  * @brief       StorageStaRelmComponent - Realm entity core data
- * @description Core data for an isolated security realm on the platform.
- *              Realm type via Tags: StorageRelmPersonalTag / StorageRelmOrgTag / StorageRelmPublicTag
- *              Realm status via Tags: StorageRelmActiveTag / StorageRelmSuspendedTag / StorageRelmArchivedTag
- *              Concealment via Tag: StorageRelmConcealTag (present = hidden from non-members)
+ * @description WHAT an isolated security realm is: its path identifier, display
+ *              name, creator, the protection level new assets inherit and the
+ *              license tier. Its byte accounting - ceiling, measured usage, last
+ *              scan - lives in StorageRelmQuotComponent on the same entity, split
+ *              2026-08-19 because the God-Component gate allows five fields and
+ *              the combined row carried eight; those three change on every quota
+ *              scan while these five do not move for the life of the realm.
+ *              Realm type via Tags: StorageRelmUsrTag / StorageRelmOrgTag / StorageRelmGlobTag
+ *              Realm status via Tags: StorageRelmActvTag / StorageRelmSuspTag / StorageRelmArcvTag
+ *              Concealment via Tag: StorageRelmCncmTag (present = hidden from non-members)
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
  * @created     2026-04-04
- * @modified    2026-04-04
- * @version     1.0.0
+ * @modified    2026-08-19
+ * @version     1.1.0
  *
  * ECS COMPONENT COMPLIANCE
  *
@@ -54,17 +60,19 @@ namespace ase::storage {
  * @brief StorageStaRelmComponent - Isolated security realm core data
  *
  * Type discrimination via Tags (NOT uint8_t field):
- *   StorageRelmPersonalTag  = per-user workspace
+ *   StorageRelmUsrTag  = per-user workspace
  *   StorageRelmOrgTag       = studio/team workspace
- *   StorageRelmPublicTag    = engine defaults
+ *   StorageRelmGlobTag    = engine defaults
  *
  * Status discrimination via Tags:
- *   StorageRelmActiveTag    = normal operation
- *   StorageRelmSuspendedTag = disabled by admin
- *   StorageRelmArchivedTag  = read-only before deletion
+ *   StorageRelmActvTag    = normal operation
+ *   StorageRelmSuspTag = disabled by admin
+ *   StorageRelmArcvTag  = read-only before deletion
  *
  * Concealment via Tag:
- *   StorageRelmConcealTag   = hidden from non-members (default for org/personal)
+ *   StorageRelmCncmTag   = hidden from non-members (default for org/personal)
+ *
+ * Byte accounting via StorageRelmQuotComponent on the same entity.
  *
  * @hub_reads  none
  * @hub_writes none
@@ -75,9 +83,6 @@ struct StorageStaRelmComponent {
     char owner[64] = {};                      // Creator user ID (MongoDB ObjectId hex)
     uint8_t default_protection = 0;           // Default Schutzstufe for new assets (0-9)
     uint8_t tier = 0;                         // License tier (0=indie, 1=pro, 2=enterprise)
-    uint64_t quota_bytes = 0;                 // Realm storage ceiling in bytes (seeded from types.hpp, 0 = unset)
-    uint64_t used_bytes = 0;                  // Measured realm usage in bytes (StorageQuotChkSystem FS scan)
-    uint64_t usage_scanned_at = 0;            // Unix time of the last usage scan (paces the Observation rescan)
 };
 
 }  // namespace ase::storage

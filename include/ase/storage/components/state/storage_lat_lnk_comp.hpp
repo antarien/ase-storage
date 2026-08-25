@@ -4,16 +4,21 @@
  * ASE ECS COMPONENT (STATE)
  *
  * @file        storage_lat_lnk_comp.hpp
- * @brief       StorageLatLnkComponent - Lattice link between two realms
- * @description Bilateral cross-realm bridge for sharing assets between studios.
- *              Both source and target must approve the link (bilateral consent).
+ * @brief       StorageLatLnkComponent - What a lattice link grants
+ * @description WHAT a cross-realm bridge hands over: the shared path prefix, the
+ *              highest protection level reachable through it, the permission bits,
+ *              an optional codeword and the expiry. WHO the two realms are and
+ *              whether both consented lives in the sibling StorageLnkCnstComponent
+ *              on the same entity - split 2026-08-19, the God-Component gate allows
+ *              five fields and this row carried nine. StorageAcssChkSystem reads
+ *              both rows together: consent first, then these terms.
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
  * @created     2026-04-04
- * @modified    2026-04-04
- * @version     1.0.0
+ * @modified    2026-08-19
+ * @version     1.1.0
  *
  * ECS COMPONENT COMPLIANCE
  *
@@ -49,23 +54,21 @@
 namespace ase::storage {
 
 /**
- * @brief StorageLatLnkComponent - Cross-realm sharing bridge (bilateral)
+ * @brief StorageLatLnkComponent - the terms of a cross-realm sharing bridge
  *
- * Lattice link is directed: source realm shares path_prefix with target realm.
- * Both sides must approve (approved_by_source + approved_by_target).
+ * The link is directed: the source realm shares path_prefix with the target realm.
+ * These fields say how far that sharing reaches - never whether it is allowed to
+ * happen at all. That answer is StorageLnkCnstComponent (bilateral consent) and is
+ * checked before any of these terms are looked at.
  *
  * @hub_reads  none
  * @hub_writes none
  */
 struct StorageLatLnkComponent {
-    char source_realm[64] = {};               // Realm ID that shares assets
-    char target_realm[64] = {};               // Realm ID that receives access
     char path_prefix[256] = {};               // Shared path glob (e.g. "shared/shaders/*")
     uint8_t max_clearance = 0;                // Max Schutzstufe accessible via this link (0-9)
     uint16_t permissions = 0;                 // Bitflags: PERM_READ or PERM_READ | PERM_WRITE
     char codeword[32] = {};                   // Optional codeword required for this link
-    uint8_t approved_by_source = 0;           // 1 = source realm owner approved
-    uint8_t approved_by_target = 0;           // 1 = target realm owner approved
     uint64_t expires_at = 0;                  // Unix timestamp (0 = no expiry)
 };
 

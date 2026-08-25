@@ -73,7 +73,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -142,7 +142,8 @@
 #include <ase/storage/systems/quota/storage_quot_chk_sys.hpp>
 // Components from same module
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_active.hpp>
+#include <ase/storage/components/state/storage_relm_quot_comp.hpp>
+#include <ase/storage/components/tag/storage_relm_actv_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
 // Hub API (widget broadcast, change-based)
@@ -153,6 +154,8 @@
 #include <entt/core/hashed_string.hpp>
 // Logging
 #include <ase/log/log.hpp>
+// Strings (L0 — exakte uint64-Wiedergabe fuer die Quota-Zeile in tick())
+#include <ase/utils/strops.hpp>
 
 using namespace entt::literals;
 
@@ -192,27 +195,31 @@ void StorageQuotChkSystem::tick(ecs::Registry& registry, float dt) {
 
     const uint64_t now = mgr.get_wall_time_seconds();
 
-    auto relm_view = registry.view<StorageStaRelmComponent, StorageRelmActiveTag>();
-    for (auto [relm_ent, relm] : relm_view.each()) {
+    // The accounting row joins the view: a realm without it carries no ceiling, and
+    // a realm without a ceiling was already skipped below - the two cases answer the
+    // same way, so the join costs nothing and drops no realm that would be scanned.
+    auto relm_view =
+        registry.view<StorageStaRelmComponent, StorageRelmQuotComponent, StorageRelmActvTag>();
+    for (auto [relm_ent, relm, quot] : relm_view.each()) {
         (void)relm_ent;
-        if (relm.quota_bytes < 1u) continue;  // no ceiling configured for this realm
+        if (quot.quota_bytes < 1u) continue;  // no ceiling configured for this realm
 
         // Pace the recursive FS scan: at most one scan per QUOTA_SCAN_INTERVAL_S
         // per realm (the pacing state is DATA on the realm, the system stays
         // stateless). First pass (usage_scanned_at == 0) scans immediately.
-        if (relm.usage_scanned_at > 0u) {
-            const uint64_t since_scan = now - relm.usage_scanned_at;
+        if (quot.usage_scanned_at > 0u) {
+            const uint64_t since_scan = now - quot.usage_scanned_at;
             if (since_scan < QUOTA_SCAN_INTERVAL_S) {
                 continue;
             }
         }
-        relm.usage_scanned_at = now;
+        quot.usage_scanned_at = now;
 
         // The filesystem IS the byte authority for realm storage: the measured
         // scan result rehydrates the in-memory mirror (ground truth, NEVER a
         // display echo — the Hub values below are derived FROM this, not vice versa).
         const uint64_t used = mgr.get_realm_usage(relm.id);
-        relm.used_bytes = used;
+        quot.used_bytes = used;
 
         // Widget broadcast over the Hub (NO engine HTTP endpoint): exact uint64
         // byte counts ride as two float-safe 24-bit words each — Hub values are
@@ -221,12 +228,33 @@ void StorageQuotChkSystem::tick(ecs::Registry& registry, float dt) {
         const uint32_t owner = entt::hashed_string(relm.id).value();
         publish_changed(registry, owner, "STG_RELM_USED_HI"_hs, static_cast<float>(used >> 24));
         publish_changed(registry, owner, "STG_RELM_USED_LO"_hs, static_cast<float>(used & 0xFFFFFFu));
-        publish_changed(registry, owner, "STG_RELM_QUOTA_HI"_hs, static_cast<float>(relm.quota_bytes >> 24));
-        publish_changed(registry, owner, "STG_RELM_QUOTA_LO"_hs, static_cast<float>(relm.quota_bytes & 0xFFFFFFu));
+        publish_changed(registry, owner, "STG_RELM_QUOTA_HI"_hs, static_cast<float>(quot.quota_bytes >> 24));
+        publish_changed(registry, owner, "STG_RELM_QUOTA_LO"_hs, static_cast<float>(quot.quota_bytes & 0xFFFFFFu));
 
-        if (used > relm.quota_bytes) {
-            log::warn("[StorageQuotChk] realm {} OVER QUOTA: used {} bytes exceeds ceiling {} bytes",
-                      relm.id, used, relm.quota_bytes);
+        if (used > quot.quota_bytes) {
+            // MIGRIERT. Hier stand ein Vermerk, dessen Praemisse falsch war: er behauptete,
+            // ALLE wert-tragenden warn-Ueberladungen naehmen `float`, und schloss daraus, eine
+            // exakte uint64-Byte-Zahl sei in der kategorisierten Form nicht darstellbar. Die
+            // detail-Ueberladung nimmt einen STRING, und ase::utils::str_append_u64 gibt einen
+            // uint64 exakt wieder — keine Mantissengrenze, keine Rundung. Es gab keine
+            // Formgrenze, nur eine ungeprueft uebernommene Annahme ueber die vorhandenen Formen.
+            //
+            // In EINEM Punkt hatte der Vermerk recht, und der bleibt gefaehrlich: wer `used`
+            // direkt in einen WERTPLATZ schreibt, bekommt weder Fehler noch Warnung — der
+            // uint64 bindet still an die float-Ueberladung, und der Baum uebersetzt mit
+            // -Wall -Wextra, nicht mit -Wconversion. Deshalb geht die Zahl hier ueber den
+            // String und NICHT ueber den Wertplatz. Dieselbe Vorsicht, die zwanzig Zeilen
+            // weiter oben die Hub-Werte in HI/LO teilt.
+            //
+            // VALUE_OUT_OF_RANGE: `used` ueberschreitet eine KONFIGURIERTE Obergrenze, und der
+            // Hilfetext ueberlaesst die Reaktion dem Aufrufer — hier wird nichts durchgesetzt,
+            // nur gemeldet. warn und nicht error, weil der Scan danach weiterlaeuft.
+            char quota_detail[80] = {};
+            ase::utils::str_copy(quota_detail, 80, "used_bytes=");
+            ase::utils::str_append_u64(quota_detail, 80, used);
+            ase::utils::str_append(quota_detail, 80, " ceiling_bytes=");
+            ase::utils::str_append_u64(quota_detail, 80, quot.quota_bytes);
+            log::warn(log::WRN::CAT::VALUE_OUT_OF_RANGE, "StorageQuotChk", relm.id, quota_detail);
         }
     }
 }

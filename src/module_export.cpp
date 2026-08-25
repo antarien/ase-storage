@@ -1,5 +1,9 @@
 #include <ase/ecs/plugin_interface.hpp>
-#include <ase/storage/storage_module.hpp>
+// Der Einstiegspunkt zieht den Umbrella, nicht den Modulheader allein: der Umbrella
+// enthaelt ihn und stellt zusaetzlich jeden Header des Moduls vor einen Compiler.
+// Ohne diese Kante wird das Sammelinclude von keiner Uebersetzungseinheit erreicht -
+// es existiert, wird ausgeliefert und ist nie uebersetzt worden.
+#include <ase/storage/storage.hpp>
 
 namespace {
 

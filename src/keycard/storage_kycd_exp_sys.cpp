@@ -73,7 +73,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -142,8 +142,9 @@
 #include <ase/storage/systems/keycard/storage_kycd_exp_sys.hpp>
 // Components from same module
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_exp.hpp>
+#include <ase/storage/components/state/storage_kycd_grnt_comp.hpp>
+#include <ase/storage/components/tag/storage_kycd_vld_tag.hpp>
+#include <ase/storage/components/tag/storage_kycd_exp_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 // Hub API (counter)
 #include <ase/hub/api.hpp>
@@ -179,17 +180,19 @@ void StorageKycdExpSystem::tick(ecs::Registry& registry, float /*dt*/) {
     }
 
     // SINGLE-PASS: check each valid keycard entity for expiry
-    auto view = registry.view<StorageStaKycdComponent, StorageKycdVldTag>();
+    auto view =
+        registry.view<StorageStaKycdComponent, StorageKycdGrntComponent, StorageKycdVldTag>();
     for (auto entity : view) {
         auto& kycd = view.get<StorageStaKycdComponent>(entity);
+        auto& grnt = view.get<StorageKycdGrntComponent>(entity);
 
         // Skip keycards with no expiry set (0 = permanent)
-        if (!kycd.expires_at) {
+        if (!grnt.expires_at) {
             continue;
         }
 
         // Check if keycard has expired
-        if (now > kycd.expires_at) {
+        if (now > grnt.expires_at) {
             registry.erase<StorageKycdVldTag>(entity);
             registry.emplace<StorageKycdExpTag>(entity);
             log::debug("[StorageKycdExp] -StorageKycdVldTag entity={} reason=expired",

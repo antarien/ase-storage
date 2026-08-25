@@ -41,7 +41,7 @@ namespace ase::storage {
  *
  * Creates the edge_binaries realm directory tree (release/, keys/), the realm
  * entity (StorageStaRelmComponent id=edge_binaries, tier=Enterprise,
- * default_protection=Public) with StorageRelmPublicTag + StorageRelmActiveTag
+ * default_protection=Public) with StorageRelmGlobTag + StorageRelmActvTag
  * (no conceal tag → concealment=false), and the release-path ACL rule
  * (protection=Public, label=released) plus its required BINARY codeword entity.
  *

@@ -4,17 +4,21 @@
  * ASE ECS COMPONENT (STATE)
  *
  * @file        storage_sta_kycd_comp.hpp
- * @brief       StorageStaKycdComponent - Keycard entity core data
- * @description Issued keycard with clearance, permissions, and expiry.
- *              Extended JWT carrying realm accreditations for A/ACS enforcement.
- *              Keycard type via Tags. Codewords via Entity-per-Item (StorageKycdCwrdComponent).
+ * @brief       StorageStaKycdComponent - Whose keycard this is and where it applies
+ * @description The fingerprint of one issued keycard, the realm and project it is
+ *              accredited for, and the two users it names: recipient and issuer.
+ *              What it grants - clearance, permissions, expiry - lives in
+ *              StorageKycdGrntComponent on the same entity, split 2026-08-19
+ *              because the God-Component gate allows five fields and the combined
+ *              row carried eight. Keycard type via Tags. Codewords via
+ *              Entity-per-Item (StorageKycdCwrdComponent).
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
  * @created     2026-04-04
- * @modified    2026-04-05
- * @version     1.0.0
+ * @modified    2026-08-19
+ * @version     1.1.0
  *
  * ECS COMPONENT COMPLIANCE
  *
@@ -47,6 +51,8 @@
 
 #include <cstdint>
 
+#include <ase/storage/types.hpp>
+
 namespace ase::storage {
 
 /**
@@ -56,6 +62,7 @@ namespace ase::storage {
  * Transferability via Tag (StorageKycdTransferTag)
  * Revocation via Tag (StorageKycdRevTag)
  * Codewords via Entity-per-Item (StorageKycdCwrdComponent)
+ * Terms via StorageKycdGrntComponent on the same entity
  *
  * @hub_reads  none
  * @hub_writes none
@@ -64,11 +71,8 @@ struct StorageStaKycdComponent {
     char kycd_hash[64] = {};                  // SHA-256 hex digest of this keycard
     uint32_t relm_ref = 0;                    // Entity ref to realm this keycard grants access to
     uint32_t proj_ref = 0;                    // Entity ref to project (0 = realm-wide access)
-    char issued_to[64] = {};                  // Recipient user ID (MongoDB ObjectId hex)
-    char issued_by[64] = {};                  // Issuer user ID (MongoDB ObjectId hex)
-    uint8_t clrn = 0;                        // Max Schutzstufe this keycard can access (0-9)
-    uint16_t perm = 0;                        // Bitflags: PERM_READ | PERM_WRITE | PERM_DELETE | etc.
-    uint64_t expires_at = 0;                  // Unix timestamp when keycard becomes invalid (0 = no expiry)
+    char issued_to[MAX_OWNER_ID] = {};        // Recipient user ID (MongoDB ObjectId hex)
+    char issued_by[MAX_OWNER_ID] = {};        // Issuer user ID (MongoDB ObjectId hex)
 };
 
 }  // namespace ase::storage

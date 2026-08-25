@@ -92,7 +92,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -161,11 +161,13 @@
 #include <ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp>
 // Components from same module
 #include <ase/storage/components/state/storage_sta_idn_comp.hpp>
+#include <ase/storage/components/state/storage_sta_sess_comp.hpp>
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
+#include <ase/storage/components/state/storage_kycd_grnt_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
 #include <ase/storage/storage_acss_index_resource_manager.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_rjct.hpp>
+#include <ase/storage/components/tag/storage_kycd_vld_tag.hpp>
+#include <ase/storage/components/tag/storage_kycd_rjct_tag.hpp>
 // Hub API for client identity mirror (Hub API 2.0: no L3→L3 network import)
 #include <ase/hub/api.hpp>
 // Types (L0 — is_not_found sentinel check)
@@ -202,7 +204,9 @@ void StorageKycdLnkSystem::on_start(ecs::Registry& /*registry*/) {
 void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
     auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
     if (!idx_ptr || !(*idx_ptr)) {
-        log::error("[StorageKycdLnk] StorageAcssIndexResourceManager not in ctx (StorageIdnIdxSystem must run first)");
+        // SCHEDULE_ORDER: der Erzeuger (StorageIdnIdxSystem) hat den ctx-Halter noch nicht angelegt.
+        log::error(log::ERR::CAT::SCHEDULE_ORDER, "StorageKycdLnkSystem",
+                   "StorageAcssIndexResourceManager");
         return;
     }
     auto& idx = **idx_ptr;
@@ -213,7 +217,16 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         entt::exclude<StorageKycdRjctTag>);
     for (auto auth_entity : auth_view) {
         auto& auth_idn = auth_view.get<StorageStaIdnComponent>(auth_entity);
-        uint32_t target_client_id = auth_idn.client_id;
+        // The session row is fetched, not joined into the view: this loop emplaces
+        // onto the client entity, and every pool the view iterates is a pool that
+        // must not grow while it does. One O(1) lookup on the same entity instead.
+        auto* auth_sess = registry.try_get<StorageStaSessComponent>(auth_entity);
+        if (auth_sess == nullptr) {
+            log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageKycdLnkSystem",
+                       static_cast<uint32_t>(auth_entity), "StorageStaSessComponent");
+            continue;
+        }
+        uint32_t target_client_id = auth_sess->client_id;
 
         // The client is reached by the id it publishes. StorageIdnIdxSystem indexed every
         // mirrored client at the start of this frame, so the answer is one lookup - the
@@ -225,9 +238,10 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
             // Copy identity to client entity
             auto& client_idn = registry.emplace_or_replace<StorageStaIdnComponent>(client_entity);
-            client_idn.client_id = auth_idn.client_id;
-            client_idn.authenticated_at = auth_idn.authenticated_at;
-            client_idn.active_keycard = static_cast<uint32_t>(auth_entity);
+            auto& client_sess = registry.emplace_or_replace<StorageStaSessComponent>(client_entity);
+            client_sess.client_id = auth_sess->client_id;
+            client_sess.authenticated_at = auth_sess->authenticated_at;
+            client_sess.active_keycard = static_cast<uint32_t>(auth_entity);
             // Carry the EXACT FNV user_hash so the codeword projection (cwrd_pub
             // reads idn.user_id_hash) lands at the gate owner even if the linked
             // session entity's user_id string is ever empty/dangling.
@@ -269,7 +283,7 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             // The browser has no mirror component, so the hash travels in two
             // exact-carry halves — each below 2^16 and therefore lossless in a
             // float32 hub value. Same split as SES_KYCD_NTF_USER_ID_HI/_LO
-            // (sdk_keycard_notify.cpp:109-110); useSessionStore.ts reassembles
+            // (sdk_keycard_notify.cpp); useSessionStore.ts reassembles
             // (HI << 16) | LO. Before this, useSessionStore read a bare
             // SES_USER_ID that no producer ever wrote and always saw 0.
             hub::set(registry, owner, "SES_USER_ID_HI"_hs,
@@ -278,9 +292,10 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
                      static_cast<float>(user_id_hash & 0xFFFFu));
 
             auto* kycd = registry.try_get<StorageStaKycdComponent>(auth_entity);
-            if (kycd != nullptr) {
-                hub::set(registry, owner, "SES_CLEARANCE"_hs, static_cast<float>(kycd->clrn));
-                hub::set(registry, owner, "SES_EXP_AT"_hs,    static_cast<float>(kycd->expires_at));
+            auto* grnt = registry.try_get<StorageKycdGrntComponent>(auth_entity);
+            if (kycd != nullptr && grnt != nullptr) {
+                hub::set(registry, owner, "SES_CLEARANCE"_hs, static_cast<float>(grnt->clrn));
+                hub::set(registry, owner, "SES_EXP_AT"_hs,    static_cast<float>(grnt->expires_at));
                 if (kycd->relm_ref != 0) {
                     auto relm_entity = static_cast<entt::entity>(kycd->relm_ref);
                     auto* relm = registry.try_get<StorageStaRelmComponent>(relm_entity);
@@ -294,7 +309,7 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
             log::debug("[StorageKycdLnk] SES_* published owner={} user='{}' user_hash={} clearance={}",
                        owner, auth_idn.user_id, user_id_hash,
-                       kycd != nullptr ? kycd->clrn : 0);
+                       grnt != nullptr ? grnt->clrn : 0);
 
             log::info("[StorageKycdLnk] Linked keycard to client {}", target_client_id);
             break;

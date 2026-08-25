@@ -75,7 +75,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -148,7 +148,7 @@
 #include <ase/storage/components/state/storage_bllt_vote_comp.hpp>
 #include <ase/storage/components/request/storage_req_kycd_comp.hpp>
 #include <ase/storage/components/request/storage_req_kycd_relm_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_vot_pend.hpp>
+#include <ase/storage/components/tag/storage_vote_pend_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
 // Hub API (the keycard drain filters on hub::HubStgKycdPendTag)
@@ -187,7 +187,12 @@ void StorageVotePrcSystem::tick(ecs::Registry& registry, float dt) {
     if (mgr_pp == nullptr || *mgr_pp == nullptr) return;  // no storage tier here
     const uint64_t now = (*mgr_pp)->get_wall_time_seconds();
     if (!now) {
-        log::warn("[StorageVotePrc] wall clock unavailable - deadlines cannot be evaluated this tick");
+        // VON warn AUF error: die Wanduhr ist eine Ressource des StorageResourceManager, und
+        // ohne sie faellt der GANZE Tick aus — das `return` steht direkt darunter, keine
+        // einzige Frist wird ausgewertet. Das ist ein Ausfall, kein Schoenheitsfehler, und
+        // RESOURCE_UNAVAIL liegt in ERR::CAT. Es geht nichts verloren: die Zeile trug nie
+        // einen Laufzeitwert, den eine Form haette schlucken koennen.
+        log::error(log::ERR::CAT::RESOURCE_UNAVAIL, "StorageVotePrc", "STG_wall_clock");
         return;
     }
 
@@ -197,7 +202,7 @@ void StorageVotePrcSystem::tick(ecs::Registry& registry, float dt) {
     // could never lower a tally - and a motion would pass on ballots that no
     // longer exist.
     for (auto [vote_ent, cnt] :
-         registry.view<StorageVoteCntComponent, StorageVotPendTag>().each()) {
+         registry.view<StorageVoteCntComponent, StorageVotePendTag>().each()) {
         (void)vote_ent;
         cnt.votes_for = 0;
         cnt.votes_against = 0;
@@ -212,7 +217,7 @@ void StorageVotePrcSystem::tick(ecs::Registry& registry, float dt) {
     // The decision is counted as ARITHMETIC on the ballot's data, not as a
     // dispatch on it - no branch per category, so the shape of this loop does
     // not change when a ballot kind is added.
-    auto cnt_view = registry.view<StorageVoteCntComponent, StorageVotPendTag>();
+    auto cnt_view = registry.view<StorageVoteCntComponent, StorageVotePendTag>();
     for (auto [bllt_ent, bllt] : registry.view<StorageBlltVoteComponent>().each()) {
         (void)bllt_ent;
         const auto vote_ent = static_cast<ecs::Entity>(bllt.vote_ref);
@@ -225,7 +230,7 @@ void StorageVotePrcSystem::tick(ecs::Registry& registry, float dt) {
 
     // ── PASS 3: conclude what can be concluded ──────────────────────────────
     // Deferred: nothing is created or retagged while the filtered View is being
-    // walked. StorageVotPendTag is the very filter of this View, so removing it
+    // walked. StorageVotePendTag is the very filter of this View, so removing it
     // inside the loop would mutate the range under the iterator.
     ecs::Entity done[VOTE_PRC_BATCH];
     ecs::Entity accepted[VOTE_PRC_BATCH];
@@ -233,14 +238,33 @@ void StorageVotePrcSystem::tick(ecs::Registry& registry, float dt) {
     uint32_t accepted_n = 0;
 
     for (auto [vote_ent, vote, cnt] :
-         registry.view<StorageStaVoteComponent, StorageVoteCntComponent, StorageVotPendTag>().each()) {
+         registry.view<StorageStaVoteComponent, StorageVoteCntComponent, StorageVotePendTag>().each()) {
         if (done_n >= VOTE_PRC_BATCH) break;
 
         if (!cnt.votes_required) {
             // A motion nobody has to answer can never be decided, and it would
             // otherwise sit open forever, costing a ballot scan every tick.
-            log::warn("[StorageVotePrc] vote on {} has votes_required=0 - undecidable, concluding as lapsed",
-                      vote.subject);
+            // MIGRIERT. VALUE_INVALID trifft votes_required=0 woertlich: der Wert ist da und
+            // semantisch ungueltig. warn, weil der Durchlauf weitergeht — die Abstimmung wird
+            // als erledigt vorgemerkt und die Schleife nimmt die naechste.
+            //
+            // DIESER KOMMENTAR HATTE ZWEI FALSCHE GRUENDE NACHEINANDER, und beide sind als
+            // Warnung wertvoller als ihr Ersatz:
+            //   1. Der erste sagte, der Hilfetext verspreche "Value will be set to default".
+            //      Das stimmte um 12:24 und war um 12:50, als es hier stand, schon falsch —
+            //      die WRN-Kontrollflusszusagen waren um 12:37 entfernt worden.
+            //   2. Der zweite sagte, die FORM sperre die Stelle: die wert-tragende warn-Form
+            //      fuehre nur EINEN String, also falle vote.subject weg. Auch das war falsch.
+            //      Es gibt eine Ueberladung mit value_id UND detail, also ZWEI Stringplaetzen.
+            //      Die Zeile traegt ohnehin nur EINEN Laufzeitwert (vote.subject); "welches
+            //      Feld null ist" und "wie aufgeloest wurde" sind Konstanten und gehoeren in
+            //      den detail. Nichts geht verloren.
+            //
+            // Das Muster hinter beiden Irrtuemern ist dasselbe: eine Annahme ueber den Bestand,
+            // die nie gegen den Bestand geprueft wurde. Der Kopf der Ueberladungsliste in
+            // log.hpp beantwortet die Frage in zehn Sekunden.
+            log::warn(log::WRN::CAT::VALUE_INVALID, "StorageVotePrc", vote.subject,
+                      "votes_required=0, undecidable - concluded as lapsed");
             done[done_n] = vote_ent;
             ++done_n;
             continue;
@@ -298,7 +322,7 @@ void StorageVotePrcSystem::tick(ecs::Registry& registry, float dt) {
     }
 
     for (uint32_t i = 0; i < done_n; ++i) {
-        registry.remove<StorageVotPendTag>(done[i]);
+        registry.remove<StorageVotePendTag>(done[i]);
     }
 }
 

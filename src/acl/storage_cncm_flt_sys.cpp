@@ -23,7 +23,7 @@
  *   │                                             │
  *   │  READS:                                     │
  *   │    - StorageStaRelmComponent (realm list)   │
- *   │    - StorageRelmConcealTag (hidden realms)  │
+ *   │    - StorageRelmCncmTag (hidden realms)  │
  *   │                                             │
  *   │  WRITES:                                    │
  *   │    - Filters realm list for non-members     │
@@ -73,7 +73,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -142,11 +142,11 @@
 #include <ase/storage/systems/acl/storage_cncm_flt_sys.hpp>
 // Components + tags from same module
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_public.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_active.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_conceal.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_suspended.hpp>
-#include <ase/storage/components/tag/storage_tag_relm_archived.hpp>
+#include <ase/storage/components/tag/storage_relm_glob_tag.hpp>
+#include <ase/storage/components/tag/storage_relm_actv_tag.hpp>
+#include <ase/storage/components/tag/storage_relm_cncm_tag.hpp>
+#include <ase/storage/components/tag/storage_relm_susp_tag.hpp>
+#include <ase/storage/components/tag/storage_relm_arcv_tag.hpp>
 #include <ase/storage/components/tag/storage_relm_visb_tag.hpp>
 // Logging
 #include <ase/log/log.hpp>
@@ -195,9 +195,9 @@ void StorageCncmFltSystem::tick(ecs::Registry& registry, float dt) {
     // under the iterator and no deferred array is needed.
 
     // GAINED: public and active, and none of the three hiding states.
-    auto listable_view = registry.view<StorageStaRelmComponent, StorageRelmPublicTag,
-                                       StorageRelmActiveTag>(
-        entt::exclude<StorageRelmConcealTag, StorageRelmSuspendedTag, StorageRelmArchivedTag>);
+    auto listable_view = registry.view<StorageStaRelmComponent, StorageRelmGlobTag,
+                                       StorageRelmActvTag>(
+        entt::exclude<StorageRelmCncmTag, StorageRelmSuspTag, StorageRelmArcvTag>);
     for (auto relm_ent : listable_view) {
         registry.emplace_or_replace<StorageRelmVisbTag>(relm_ent);
     }
@@ -205,23 +205,23 @@ void StorageCncmFltSystem::tick(ecs::Registry& registry, float dt) {
     // LOST: the tag is carried, but one condition stopped holding. Five disjoint
     // Views instead of one loop with five ifs - the conditions compose in the
     // type system, which is also what lets each one become its own becsy query.
-    auto conceal_view = registry.view<StorageRelmVisbTag, StorageRelmConcealTag>();
+    auto conceal_view = registry.view<StorageRelmVisbTag, StorageRelmCncmTag>();
     for (auto relm_ent : conceal_view) {
         registry.remove<StorageRelmVisbTag>(relm_ent);
     }
-    auto suspended_view = registry.view<StorageRelmVisbTag, StorageRelmSuspendedTag>();
+    auto suspended_view = registry.view<StorageRelmVisbTag, StorageRelmSuspTag>();
     for (auto relm_ent : suspended_view) {
         registry.remove<StorageRelmVisbTag>(relm_ent);
     }
-    auto archived_view = registry.view<StorageRelmVisbTag, StorageRelmArchivedTag>();
+    auto archived_view = registry.view<StorageRelmVisbTag, StorageRelmArcvTag>();
     for (auto relm_ent : archived_view) {
         registry.remove<StorageRelmVisbTag>(relm_ent);
     }
-    auto unpublic_view = registry.view<StorageRelmVisbTag>(entt::exclude<StorageRelmPublicTag>);
+    auto unpublic_view = registry.view<StorageRelmVisbTag>(entt::exclude<StorageRelmGlobTag>);
     for (auto relm_ent : unpublic_view) {
         registry.remove<StorageRelmVisbTag>(relm_ent);
     }
-    auto inactive_view = registry.view<StorageRelmVisbTag>(entt::exclude<StorageRelmActiveTag>);
+    auto inactive_view = registry.view<StorageRelmVisbTag>(entt::exclude<StorageRelmActvTag>);
     for (auto relm_ent : inactive_view) {
         registry.remove<StorageRelmVisbTag>(relm_ent);
     }

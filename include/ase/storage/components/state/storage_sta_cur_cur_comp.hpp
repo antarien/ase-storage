@@ -1,27 +1,27 @@
 #pragma once
 
 /**
- * ASE ECS COMPONENT (STATE)
+ * ASE ECS COMPONENT
  *
  * @file        storage_sta_cur_cur_comp.hpp
- * @brief       StorageStaCurCurComponent - Single curation entry for an image
- * @description Stores rating and notes for one curator image or version.
- *              One entity per curation key (Entity-per-Item pattern).
- *              Project scoping via project_ref → EngineProjDepoComponent.db_prefix
- *              determines MongoDB collection: {db_prefix}curator_curations
+ * @brief       StorageStaCurCurComponent - Address of one curation row
+ * @description WHICH asset a curation row is about: the curation key string, its
+ *              hash (the ONLY form ever compared - the access index composes its
+ *              bucket key from project_ref + key_hash) and the owning project.
+ *              The curator's verdict (rating, notes, who, when) lives in the
+ *              sibling StorageCurAsmtComponent on the same entity - split
+ *              2026-08-19, the God-Component gate allows five fields and this row
+ *              carried seven. StorageCurPrcSystem creates both rows idempotently
+ *              and registers the address in the index immediately.
  *
- *              Status discrimination via Tags (NOT uint8_t field):
- *                StorageCurUnratedTag    = not yet reviewed
- *                StorageCurApprovedTag   = approved for use
- *                StorageCurRejectedTag   = not suitable
- *                StorageCurReworkTag     = needs changes before approval
+ * sta = state, cur = curation, cur = current
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
  * @created     2026-04-06
- * @modified    2026-04-06
- * @version     1.0.0
+ * @modified    2026-08-19
+ * @version     1.1.0
  *
  * ECS COMPONENT COMPLIANCE
  *
@@ -57,29 +57,12 @@
 namespace ase::storage {
 
 /**
- * @brief StorageStaCurCurComponent - Curation entry per image/version
- *
- * Key format:
- *   "IMG_ID"       → base image curation
- *   "IMG_ID::v3"   → version-specific curation
- *
- * Type discrimination via Tags (NOT uint8_t field):
- *   StorageCurUnratedTag   = not yet reviewed (default)
- *   StorageCurApprovedTag  = approved for use in game
- *   StorageCurRejectedTag  = not suitable for intended purpose
- *   StorageCurReworkTag    = requires changes before approval
- *
- * @hub_reads  none
- * @hub_writes none
+ * StorageStaCurCurComponent - which asset the curation row addresses
  */
 struct StorageStaCurCurComponent {
     char key[160] = {};                       // Curation key ("IMG_ID" or "IMG_ID::v3")
     uint32_t key_hash = 0;                    // entt::hashed_string of key - the ONLY form compared
     uint32_t project_ref = 0;                 // Entity ref to EngineStaProjComponent (systems set value)
-    uint8_t rating = 0;                       // Star rating (0-5, 0 = unrated)
-    char notes[256] = {};                     // Free-text curator notes
-    char user_id[64] = {};                    // User who last modified this entry
-    uint64_t updated_at = 0;                  // Unix timestamp of last modification
 };
 
 }  // namespace ase::storage

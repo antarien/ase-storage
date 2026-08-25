@@ -7,7 +7,7 @@
  * @layer       3 (Module)
  *
  * Drives the REAL StorageKycdSessClnSystem against the exact key set
- * StorageKycdLnkSystem publishes (storage_kycd_lnk_sys.cpp:243-256 plus the
+ * StorageKycdLnkSystem publishes (storage_kycd_lnk_sys.cpp plus the
  * SES_USER_ID_HI/_LO halves). No main() here — test_storage_wflw.cpp owns
  * DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN for this executable.
  *
@@ -23,7 +23,7 @@
 #include <doctest/doctest.h>
 
 #include <ase/storage/systems/keycard/storage_kycd_sess_cln_sys.hpp>
-#include <ase/storage/components/tag/storage_tag_kycd_vld.hpp>
+#include <ase/storage/components/tag/storage_kycd_vld_tag.hpp>
 #include <ase/hub/api.hpp>
 #include <ase/ecs/app.hpp>
 #include <entt/core/hashed_string.hpp>

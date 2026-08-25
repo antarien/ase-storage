@@ -42,8 +42,8 @@ namespace ase::storage {
  * @schedule Integration - After StorageAcssChkSystem (ACL must pass first)
  * @reads    StorageReqCurComponent + StorageCurReqTag
  * @writes   StorageStaCurCurComponent fields + status Tags
- *           (StorageCurUnratedTag, StorageCurApprovedTag,
- *            StorageCurRejectedTag, StorageCurReworkTag)
+ *           (StorageRvwPendTag, StorageRvwAcptTag,
+ *            StorageRvwRjctTag, StorageRvwRvseTag)
  * @depends  curator_routes.cpp creates StorageReqCurComponent entities
  */
 class StorageCurPrcSystem : public ecs::System {

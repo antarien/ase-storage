@@ -10,7 +10,7 @@
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
- * @schedule    Observation
+ * @schedule    Preservation
  * @created     2026-04-05
  * @modified    2026-04-05
  * @version     1.0.0
@@ -37,7 +37,12 @@ namespace ase::storage {
 /**
  * @brief StorageSrvlLogSystem - Anomaly detection in access patterns
  *
- * @schedule Observation - 1Hz scan of recent audit entries
+ * @schedule Preservation - 1Hz scan of recent audit entries
+ *
+ * Corrected 2026-08-20: this line said Observation (72); storage_module.hpp registers the
+ * system in Preservation (71). Adjacent tiers - and for an AUDIT writer the distinction is the
+ * point: Preservation is where the write happens, Observation is where one would only watch
+ * it. Only the registration decides.
  * @reads    StorageBufAudtComponent (recent denied entries)
  * @writes   log::warn for suspicious patterns (rapid failures, bulk downloads)
  * @depends  StorageAcssChkSystem creates audit entities

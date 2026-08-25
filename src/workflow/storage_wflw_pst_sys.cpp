@@ -74,7 +74,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -143,7 +143,7 @@
 #include <ase/storage/systems/workflow/storage_wflw_pst_sys.hpp>
 // Components from same module
 #include <ase/storage/components/state/storage_buf_wflw_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_wflw_pst_pend.hpp>
+#include <ase/storage/components/tag/storage_wflw_pst_pend_tag.hpp>
 #include <ase/storage/types.hpp>
 // Transport (L1 via ctx — outbound frame staging, mirror StorageCredAcssRspSystem)
 #include <ase/transport/outbound_queue_resource_manager.hpp>

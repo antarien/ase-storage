@@ -23,7 +23,7 @@
  *   │                                             │
  *   │  READS:                                     │
  *   │    - StorageReqAcssComponent (file path)    │
- *   │    - StorageAcssGrantTag (granted requests) │
+ *   │    - StorageAcssGrntTag (granted requests) │
  *   │    - StorageStaRelmComponent (realm info)   │
  *   │                                             │
  *   │  WRITES:                                    │
@@ -74,7 +74,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -145,7 +145,7 @@
 #include <ase/storage/components/state/storage_req_acss_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
 #include <ase/storage/components/state/storage_cred_acss_pnd_comp.hpp>
-#include <ase/storage/components/tag/storage_tag_acss_grant.hpp>
+#include <ase/storage/components/tag/storage_acss_grnt_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/utils/strops.hpp>
 // Logging
@@ -179,7 +179,7 @@ void StorageFileWritSystem::tick(ecs::Registry& registry, float /*dt*/) {
     // SINGLE-PASS: process each granted access request. Exclude credential A/ACS checks (they carry
     // StorageCredAcssPndComponent) — those are Vault-credential gate decisions, not filesystem writes;
     // StorageCredAcssRspSystem consumes their verdict and the Replica performs the Vault op.
-    auto grant_view = registry.view<StorageReqAcssComponent, StorageAcssGrantTag>(
+    auto grant_view = registry.view<StorageReqAcssComponent, StorageAcssGrntTag>(
         entt::exclude<StorageCredAcssPndComponent>);
     for (auto entity : grant_view) {
         auto& req = grant_view.get<StorageReqAcssComponent>(entity);
@@ -188,19 +188,25 @@ void StorageFileWritSystem::tick(ecs::Registry& registry, float /*dt*/) {
         char resolved[512] = {};
         auto relm_ent = static_cast<entt::entity>(req.relm_ref);
         if (!registry.valid(relm_ent)) {
-            log::error("[StorageFileWrit] Realm entity invalid for ref={}", req.relm_ref);
+            // INVALID_ENTITY: "Entity ID is invalid or destroyed" — genau das
+            // sagt `!registry.valid(relm_ent)`. Die 3-Argument-Form nimmt die Entity direkt,
+            // ohne value_id: es fehlt kein Feld, die Referenz selbst ist tot.
+            log::error(log::ERR::CAT::INVALID_ENTITY, "StorageFileWritSystem", req.relm_ref);
             continue;
         }
         auto* relm = registry.try_get<StorageStaRelmComponent>(relm_ent);
         if (!relm) {
-            log::error("[StorageFileWrit] Realm component missing for ref={}", req.relm_ref);
+            // COMPONENT_MISSING: die Entity lebt (die Pruefung darueber ist bestanden), ihr fehlt
+            // die Component. Gleiche Form wie storage_acss_idx_sys.cpp im selben Modul.
+            log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageFileWritSystem", req.relm_ref,
+                       "StorageStaRelmComponent");
             continue;
         }
         mgr.resolve_path(relm->id, nullptr, req.path, resolved, 512);
 
         // Write file via ResourceManager filesystem bridge
         if (!mgr.write_file(resolved, req.path, ase::utils::str_len(req.path, 256))) {
-            log::error("[StorageFileWrit] Write failed: {}", resolved);
+            log::error(log::ERR::CAT::HOST_OP_FAILED, "StorageFileWritSystem", resolved);
         }
     }
 }

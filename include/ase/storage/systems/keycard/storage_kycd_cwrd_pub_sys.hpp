@@ -11,7 +11,7 @@
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
- * @schedule    Ingestion
+ * @schedule    Integration
  * @created     2026-06-24
  * @modified    2026-06-24
  * @version     1.0.0
@@ -38,7 +38,11 @@ namespace ase::storage {
 /**
  * @brief StorageKycdCwrdPubSystem - Publishes session codewords to the Hub
  *
- * @schedule Ingestion - run_after StorageKycdLnkSystem
+ * @schedule Integration - run_after StorageKycdLnkSystem
+ *
+ * Corrected 2026-08-20: this line said Ingestion (11); storage_module.hpp registers the system
+ * in Integration (12). The run_after edge it names is real and unchanged - only the tier was
+ * wrong, and the two are neighbours. Only the registration decides.
  * @reads    StorageStaIdnComponent + StorageKycdVldTag (authenticated session)
  *           StorageStaKycdComponent (keycard issued_to match)
  *           StorageKycdCwrdComponent (codewords by kycd_ref)

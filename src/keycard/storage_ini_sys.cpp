@@ -76,7 +76,7 @@
  * [ ] Layer dependencies respected (no upward dependencies)?
  * [ ] NO inline nlohmann::json + .dump() in broadcast systems?
  * [ ] Serializer functions in anonymous namespace?
- * [ ] *NetBctReqSystem (Update) + *NetBctSndSystem (Replication) pattern?
+ * [ ] *NetBctReqSystem + *NetBctSndSystem pattern?
  * [ ] Math functions from ase-math? (lerp, clamp, noise)
  * [ ] Containers from ase-containers? (RingBuffer)
  * [ ] Types from ase-types? (Result, Option)
@@ -144,7 +144,7 @@
 // Own header FIRST
 #include <ase/storage/systems/keycard/storage_ini_sys.hpp>
 // Components from same module
-#include <ase/storage/components/tag/storage_tag_mgr.hpp>
+#include <ase/storage/components/tag/storage_mgr_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
 // Logging
@@ -191,7 +191,16 @@ void StorageIniSystem::on_start(ecs::Registry& registry) {
         mgr.set_jwt_secret(secret, len);
         log::info("[StorageIni] JWT secret loaded ({} bytes)", len);
     } else {
-        log::warn("[StorageIni] AUTH_JWT_SECRET not set");
+        // CONFIG_MISSING (ERR::CAT, SSOT core/ase-log/data/log_categories.json — die Kategorie
+        // IST ihr Name; die frueher hier genannte Nummer gibt es seit dem Hash-Umbau nicht
+        // mehr, und sie war ab da still falsch): "Env/config value absent —
+        // lives BEFORE the registry". Woertlich dieser Fall — es gibt dazu keine Hub-Zeile,
+        // keine Entity und keine Component, der Wert kommt aus der .env des Tiers.
+        // Ebene error statt warn: ein fehlendes Signaturgeheimnis ist kein ungueltiger Wert,
+        // sondern ein fehlender. Der Hilfetext ist eine Checkliste (".env geladen? Tippfehler?
+        // leer?") und sagt keine Korrektur zu, das `return`/Weiterlaufen darunter ist also
+        // unbedenklich.
+        log::error(log::ERR::CAT::CONFIG_MISSING, "StorageIniSystem", "AUTH_JWT_SECRET");
     }
 
     // Set data directory: ASE_DATA_DIR env
