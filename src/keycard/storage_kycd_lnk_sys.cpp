@@ -255,7 +255,7 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             registry.emplace_or_replace<StorageKycdVldTag>(client_entity);
             log::debug("[StorageKycdLnk] +StorageKycdVldTag client={} user='{}'",
                        static_cast<uint32_t>(client_entity), auth_idn.user_id);
-            float lnk_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_LNK_COUNT"_hs, 0.0f);
+            float lnk_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_LNK_COUNT"_hs);
             if (types::is_not_found(lnk_count)) lnk_count = 0.0f;
             hub::set(registry, hub::GLOBAL, "STG_KYCD_LNK_COUNT"_hs, lnk_count + 1.0f);
 

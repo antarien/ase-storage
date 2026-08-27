@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
+# @plane: kern — Infrastruktur: tickt auch ohne RegionRect-Coverage (Region-Domain-Gate, module.toml via generate_toml_manifests.sh)
 
 #[[
 ASE MODULE BUILD CONFIGURATION

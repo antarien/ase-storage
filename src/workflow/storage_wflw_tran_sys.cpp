@@ -287,7 +287,7 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
         // A missing key (no live session on this dist) means NO permissions —
         // fail-closed, never a silent grant.
         const uint32_t requester = entt::hashed_string(req.requested_by).value();
-        float perm_f = hub::get(registry, requester, "SES_KYCD_PERM"_hs, 0.0f);
+        float perm_f = hub::get(registry, requester, "SES_KYCD_PERM"_hs);
         if (ase::types::is_not_found(perm_f)) {
             perm_f = 0.0f;
         }

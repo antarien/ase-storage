@@ -167,7 +167,7 @@ namespace {
 // Change-based publish of one Hub value: read-validate-compare-set, so the
 // 1Hz Observation scan never floods the Hub broadcast with unchanged values.
 void publish_changed(ecs::Registry& registry, uint32_t owner, uint32_t value_id, float value) {
-    float current = hub::get(registry, owner, value_id, 0.0f);
+    float current = hub::get(registry, owner, value_id);
     if (ase::types::is_not_found(current)) {
         current = -1.0f;  // unpublished — force the first publish
     }

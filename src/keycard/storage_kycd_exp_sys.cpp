@@ -197,7 +197,7 @@ void StorageKycdExpSystem::tick(ecs::Registry& registry, float /*dt*/) {
             registry.emplace<StorageKycdExpTag>(entity);
             log::debug("[StorageKycdExp] -StorageKycdVldTag entity={} reason=expired",
                        static_cast<uint32_t>(entity));
-            float exp_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_EXP_COUNT"_hs, 0.0f);
+            float exp_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_EXP_COUNT"_hs);
             if (ase::types::is_not_found(exp_count)) exp_count = 0.0f;
             hub::set(registry, hub::GLOBAL, "STG_KYCD_EXP_COUNT"_hs, exp_count + 1.0f);
             log::info("[StorageKycdExp] Keycard expired: {}", kycd.kycd_hash);

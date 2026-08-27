@@ -210,7 +210,7 @@ void StorageKycdRevSystem::tick(ecs::Registry& registry, float /*dt*/) {
         }
 
         uint32_t owner = entt::hashed_string{kycd.issued_to}.value();
-        float seq_f = hub::get(registry, owner, "SES_KYCD_PERSIST_SEQ"_hs, 0.0f);
+        float seq_f = hub::get(registry, owner, "SES_KYCD_PERSIST_SEQ"_hs);
         if (ase::types::is_not_found(seq_f)) {
             seq_f = 0.0f;
         }

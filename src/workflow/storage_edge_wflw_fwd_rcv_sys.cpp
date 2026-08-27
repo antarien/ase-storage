@@ -304,12 +304,12 @@ void StorageEdgeWflwFwdRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
                 // Read-OR / max so a real live keycard session on this dist is never downgraded. This
                 // grants NO more than the Replica already verified; it does not bypass that gate.
                 const uint32_t op_owner = entt::hashed_string(by).value();
-                float cur_perm_f = hub::get(registry, op_owner, "SES_KYCD_PERM"_hs, 0.0f);
+                float cur_perm_f = hub::get(registry, op_owner, "SES_KYCD_PERM"_hs);
                 if (ase::types::is_not_found(cur_perm_f) || cur_perm_f < 0.0f) { cur_perm_f = 0.0f; }
                 const uint16_t granted_perm =
                     static_cast<uint16_t>(static_cast<uint16_t>(cur_perm_f) | PERM_PROMOTE);
                 hub::set(registry, op_owner, "SES_KYCD_PERM"_hs, static_cast<float>(granted_perm));
-                float cur_clr_f = hub::get(registry, op_owner, "SES_CLEARANCE"_hs, 0.0f);
+                float cur_clr_f = hub::get(registry, op_owner, "SES_CLEARANCE"_hs);
                 if (ase::types::is_not_found(cur_clr_f) ||
                     cur_clr_f < static_cast<float>(EDGE_CLEARANCE_OPERATOR)) {
                     hub::set(registry, op_owner, "SES_CLEARANCE"_hs,

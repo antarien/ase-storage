@@ -264,7 +264,7 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
                    static_cast<uint32_t>(req.clearance),
                    kycd.relm_ref, static_cast<uint32_t>(grnt.perm), req.expires_at);
 
-        float issued_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_ISSUED_COUNT"_hs, 0.0f);
+        float issued_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_ISSUED_COUNT"_hs);
         if (ase::types::is_not_found(issued_count)) issued_count = 0.0f;
         hub::set(registry, hub::GLOBAL, "STG_KYCD_ISSUED_COUNT"_hs, issued_count + 1.0f);
 

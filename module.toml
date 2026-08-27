@@ -8,6 +8,7 @@ version = "00.00.28.00028"
 type = "module"
 layer = 3
 api_version = 1
+plane = "kern"
 
 [dependencies]
 ase-hub = "^00.02"

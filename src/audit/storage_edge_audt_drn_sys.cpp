@@ -207,7 +207,7 @@ void StorageEdgeAudtDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
             // No gate decision recorded for this owner yet — nothing to drain.
             continue;
         }
-        float drained_f = hub::get(registry, owner, "SES_EDGE_AUDIT_DRAINED_SEQ"_hs, 0.0f);
+        float drained_f = hub::get(registry, owner, "SES_EDGE_AUDIT_DRAINED_SEQ"_hs);
         if (ase::types::is_not_found(drained_f)) {
             drained_f = 0.0f;
         }
@@ -244,7 +244,7 @@ void StorageEdgeAudtDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
                        "SES_EDGE_AUDIT_RESULT");
             result_f = static_cast<float>(AUD_DENIED);
         }
-        float cwrd_f = hub::get(registry, owner, "SES_EDGE_AUDIT_CWRD"_hs, 0.0f);
+        float cwrd_f = hub::get(registry, owner, "SES_EDGE_AUDIT_CWRD"_hs);
         if (ase::types::is_not_found(cwrd_f)) {
             cwrd_f = 0.0f;
         }

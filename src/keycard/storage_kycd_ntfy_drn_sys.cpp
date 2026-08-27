@@ -210,7 +210,7 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // halves (a single float cast would truncate the gate owner via the
         // 24-bit mantissa). Both halves are <= 65535 → exactly representable, so
         // the reconstruction below is bit-exact and lands at the gate's owner.
-        float user_hash_hi_f = hub::get(registry, owner, "SES_KYCD_NTF_USER_ID_HI"_hs, 0.0f);
+        float user_hash_hi_f = hub::get(registry, owner, "SES_KYCD_NTF_USER_ID_HI"_hs);
         if (ase::types::is_not_found(user_hash_hi_f)) {
             // HUB_NOT_FOUND ist hier die exakte Kategorie und die Ebene bleibt error: der
             // Wert FEHLT, er ist nicht ungueltig. is_not_found auf ein hub::get-Ergebnis ist
@@ -220,26 +220,26 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
                        "SES_KYCD_NTF_USER_ID_HI");
             continue;
         }
-        float user_hash_lo_f = hub::get(registry, owner, "SES_KYCD_NTF_USER_ID_LO"_hs, 0.0f);
+        float user_hash_lo_f = hub::get(registry, owner, "SES_KYCD_NTF_USER_ID_LO"_hs);
         if (ase::types::is_not_found(user_hash_lo_f)) {
             log::error(log::ERR::CAT::HUB_NOT_FOUND, "StorageKycdNtfyDrnSystem", owner,
                        "SES_KYCD_NTF_USER_ID_LO");
             continue;
         }
-        float exp_at_f = hub::get(registry, owner, "SES_KYCD_NTF_EXP_AT"_hs, 0.0f);
+        float exp_at_f = hub::get(registry, owner, "SES_KYCD_NTF_EXP_AT"_hs);
         if (ase::types::is_not_found(exp_at_f)) {
             log::error(log::ERR::CAT::HUB_NOT_FOUND, "StorageKycdNtfyDrnSystem", owner,
                        "SES_KYCD_NTF_EXP_AT");
             continue;
         }
-        float clearance_f = hub::get(registry, owner, "SES_KYCD_NTF_CLRN"_hs, 0.0f);
+        float clearance_f = hub::get(registry, owner, "SES_KYCD_NTF_CLRN"_hs);
         if (ase::types::is_not_found(clearance_f)) clearance_f = 0.0f;
         // realm_hash is an FNV uint32 carried as two exact 16-bit halves (the SDK
         // producer splits it); reconstruct bit-exact so the realm match at line ~246
         // succeeds and the realm+permission binding is applied (single-float truncated).
-        float realm_hash_hi_f = hub::get(registry, owner, "SES_KYCD_NTF_REALM_ID_HI"_hs, 0.0f);
+        float realm_hash_hi_f = hub::get(registry, owner, "SES_KYCD_NTF_REALM_ID_HI"_hs);
         if (ase::types::is_not_found(realm_hash_hi_f)) realm_hash_hi_f = 0.0f;
-        float realm_hash_lo_f = hub::get(registry, owner, "SES_KYCD_NTF_REALM_ID_LO"_hs, 0.0f);
+        float realm_hash_lo_f = hub::get(registry, owner, "SES_KYCD_NTF_REALM_ID_LO"_hs);
         if (ase::types::is_not_found(realm_hash_lo_f)) realm_hash_lo_f = 0.0f;
 
         uint32_t user_hash  = (static_cast<uint32_t>(user_hash_hi_f) << 16)
@@ -276,7 +276,7 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // hash to its realm entity and carry it + permission bits as a sibling
         // request component. Absent for the legacy auth-gate flow (realm_hash 0).
         if (realm_hash != 0) {
-            float perm_f = hub::get(registry, owner, "SES_KYCD_NTF_PERM"_hs, 0.0f);
+            float perm_f = hub::get(registry, owner, "SES_KYCD_NTF_PERM"_hs);
             if (ase::types::is_not_found(perm_f)) perm_f = 0.0f;
             // The realm is reached by its id hash, which is exactly the key the index is
             // built on. The former version walked EVERY realm per notification and
@@ -301,7 +301,7 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         const char* grant_cwrd[] = { EDGE_CWRD_BINARY, EDGE_CWRD_SIG, EDGE_CWRD_SBOM,
                                      EDGE_CWRD_METADATA };
         for (uint32_t gi = 0; gi < sizeof(grant_keys) / sizeof(grant_keys[0]); ++gi) {
-            float grant_f = hub::get(registry, owner, entt::hashed_string(grant_keys[gi]).value(), 0.0f);
+            float grant_f = hub::get(registry, owner, entt::hashed_string(grant_keys[gi]).value());
             if (ase::types::is_not_found(grant_f)) continue;
             if (grant_f < 0.5f) continue;
             auto cw_ent = registry.create();

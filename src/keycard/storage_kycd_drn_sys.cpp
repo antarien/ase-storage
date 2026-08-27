@@ -197,7 +197,7 @@ void StorageKycdDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         registry.emplace<StorageKycdPendTag>(entity);
 
         log::debug("[StorageKycdDrn] +StorageKycdPendTag client_id={} token_id={}", client_id, token_id);
-        float drn_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_DRN_COUNT"_hs, 0.0f);
+        float drn_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_DRN_COUNT"_hs);
         if (ase::types::is_not_found(drn_count)) drn_count = 0.0f;
         hub::set(registry, hub::GLOBAL, "STG_KYCD_DRN_COUNT"_hs, drn_count + 1.0f);
     }
