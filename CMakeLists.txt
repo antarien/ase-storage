@@ -1,5 +1,4 @@
 cmake_minimum_required(VERSION 3.20)
-# @plane: kern — Infrastruktur: tickt auch ohne RegionRect-Coverage (Region-Domain-Gate, module.toml via generate_toml_manifests.sh)
 
 #[[
 ASE MODULE BUILD CONFIGURATION
@@ -11,9 +10,9 @@ ASE MODULE BUILD CONFIGURATION
 
 @module      ase-storage
 @layer       3 (Module)
-@created     2026-04-04
-@modified    2026-04-05
-@version     00.00.01.00001 [seed]
+@created     2026-05-11
+@modified    2026-09-08
+@version     00.00.35.00035 [core]
 
 CMAKE MODULE COMPLIANCE
 
@@ -54,6 +53,10 @@ if(NOT DEFINED ASE_STORAGE_VERSION)
 endif()
 
 project(ase-storage VERSION ${ASE_STORAGE_VERSION} LANGUAGES CXX)
+
+# @plane: kern — Infrastruktur: tickt auch ohne RegionRect-Coverage (Region-Domain-Gate, module.toml via generate_toml_manifests.sh)
+
+
 
 # Generate version.hpp from template (SSOT)
 configure_file(
