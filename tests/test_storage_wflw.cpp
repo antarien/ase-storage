@@ -1,4 +1,3 @@
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
 /**
@@ -6,7 +5,7 @@
  *
  * Drives the REAL StorageWflwTranSystem over the data-driven transition graph
  * (die Kanten): the allowed edges draft→review→approved→released→retired are
- * seeded exactly as StorageEdgeIniSystem seeds them, requests are the same
+ * seeded exactly as StorageWflwEdgeIniSystem seeds them, requests are the same
  * StorageReqWflwTranComponent + StorageWflwPendTag entities StorageWflwDrnSystem
  * stages, and every verdict is asserted on the REAL side effects — the ACL rule
  * label, the owner-scoped STG_WFLW_RES Hub verdict, the attributed audit entity
@@ -17,6 +16,7 @@
 
 #include <ase/storage/storage_module.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_tran_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_perm_sys.hpp>
 #include <ase/storage/components/request/storage_req_wflw_tran_comp.hpp>
 #include <ase/storage/components/state/storage_wflw_edge_comp.hpp>
 #include <ase/storage/components/state/storage_acss_rule_comp.hpp>
@@ -54,7 +54,7 @@ namespace {
 constexpr const char* kAsset    = "release/linux-x86_64/ase-edge-daemon-test";
 constexpr const char* kOperator = "op-user-1";
 
-// Seed the fixed release-pipeline graph exactly as StorageEdgeIniSystem does.
+// Seed the fixed release-pipeline graph exactly as StorageWflwEdgeIniSystem does.
 void seed_edges(Registry& reg) {
     const char* chain_from[4] = {EDGE_LABEL_DRAFT, EDGE_LABEL_REVIEW,
                                  EDGE_LABEL_APPROVED, EDGE_LABEL_RELEASED};
@@ -71,7 +71,8 @@ void seed_edges(Registry& reg) {
 }
 
 // Edge realm + per-asset rule at the given starting label; returns the rule entity.
-// Seeded EXACTLY as StorageEdgeIniSystem seeds it: the identity hashes and the edge
+// Seeded EXACTLY as production does it - the realm and its tag by StorageEdgeIniSystem,
+// the per-asset rule by StorageAcssEdgeIniSystem: the identity hashes and the edge
 // realm tag are part of the production shape, not extras. A realm without the tag is
 // invisible to the transition system, and a rule without its identity component cannot
 // be gated - the test would then assert against a system that never saw its data.
@@ -120,26 +121,82 @@ void grant_promote(Registry& reg, uint16_t perm) {
     ase::hub::set(reg, owner, "SES_KYCD_PERM"_hs, static_cast<float>(perm));
 }
 
+// DIE ANWESENHEIT WIRD HIER ZUGESICHERT UND NICHT AN DIE VIER AUFRUFER DELEGIERT — und das ist
+// der Unterschied zu einer echten Fassade. Bei sdk::get darf keine Pruefung stehen, weil der
+// AUFRUFER weiss, ob ein fehlender Wert ein Fehler ist; eine Pruefung dort naehme jedem Aufrufer
+// den Rohwert weg. Hier ist die Lage umgekehrt und gemessen: alle vier Aufrufstellen (200, 273,
+// 338, 392) vergleichen gegen ein erwartetes Urteil, keine einzige haelt sein Fehlen fuer
+// zulaessig, und -1.0f kommt in der ganzen Datei nur in dieser einen Zeile vor.
+//
+// WAS DIE ZEILE VERHINDERT: ohne sie ist "das System hat ein falsches Urteil veroeffentlicht"
+// von "das System hat ueberhaupt nichts veroeffentlicht" nicht zu unterscheiden — beide enden
+// im selben fehlgeschlagenen Vergleich, und die zweite Ursache liegt woanders als die erste.
 float read_verdict(Registry& reg) {
     const uint32_t owner = entt::hashed_string(kAsset).value();
-    return ase::hub::get(reg, owner, "STG_WFLW_RES"_hs, -1.0f);
+    const float verdict = ase::hub::get(reg, owner, "STG_WFLW_RES"_hs, -1.0f);
+    REQUIRE(ase::hub::is_measured(reg, owner, "STG_WFLW_RES"_hs));
+    return verdict;
 }
 
 }  // namespace
 
+// DER VERWALTER LIEGT IN ALLEN SECHS FAELLEN AUF DEM STAPEL, der ctx bekommt seine ADRESSE.
+// Diese Begruendung gilt fuer die ganze Datei und steht deshalb einmal hier.
+//
+// Vorher stand in jedem Fall `auto* mgr = new StorageResourceManager();` mit einem `delete mgr;`
+// am Ende. Der ctx nimmt weiterhin einen ZEIGER (StorageResourceManager*), so wie der
+// Produktivcode ihn erwartet — nur der Besitz wandert vom Freispeicher auf den Stapel.
+//
+// ES IST NICHT NUR FORMKONFORM, SONDERN SICHERER: das `delete` stand am ENDE des Falles. Bricht
+// ein REQUIRE davor ab, wird es nie erreicht und der Verwalter leckt. Ein Stapelobjekt raeumt auf
+// jedem Weg aus dem Block auf, auch auf dem, den niemand vorsah.
+//
+// ZUR LEBENSDAUER, weil die Reihenfolge hier zaehlt: `mgr` steht NACH `App app;`, wird also VOR
+// ihm zerstoert. Der ctx haelt danach einen ungueltigen Zeiger — unbedenklich, weil ein roher
+// Zeiger beim Zerstoeren nicht dereferenziert wird und die Systeme zu diesem Zeitpunkt ueber
+// app.shutdown() bereits stehen. Wer hier spaeter etwas einbaut, das den Zeiger IM Destruktor von
+// App liest, muss `mgr` vor `app` deklarieren.
+//
+// ZWEI STELLEN LASEN DEN VERWALTER MIT `mgr->`, und der Umbau hat sie mitgezogen (jetzt `mgr.`).
+// Das war kein Nebenschauplatz: haette ich nur die Anlage getauscht, waere die Datei nicht mehr
+// uebersetzbar gewesen — und der Validator haette das NICHT gemeldet, weil er Quelltext prueft
+// und keine Uebersetzbarkeit. Gefunden hat es der Sprachdienst, belegt die Syntaxprobe.
 TEST_CASE("workflow edges: allowed transition applies label + attributed audit + persist buffer") {
     App app;
     app.set_source("ase-storage");
     // The index is production wiring, not test scaffolding: StorageWflwTranSystem reads
     // its realm rules from it, so a run without it would exercise a system that finds
     // nothing and would pass or fail for the wrong reason.
+    //
+    // DASSELBE GILT FUER DAS RECHTETOR, UND HIER FEHLTE ES (nachgezogen 2026-08-31).
+    //
+    // Die Berechtigung ist seit dem 2026-08-29 ein EIGENES System: StorageWflwPermSystem
+    // prueft die PERM_PROMOTE-Achse der Keycard-Sitzung, schliesst seine Ablehnungen im
+    // selben Tick ab und laesst nur Berechtigte weiter — `storage_wflw_tran_sys.cpp:244-254`
+    // sagt es ausdruecklich: „Was hier ankommt, ist bereits berechtigt."
+    // `storage_module.hpp:207-212` verdrahtet die Kette Perm → Ini → Tran.
+    //
+    // Diese Datei registrierte nur Idx + Tran. Damit lief das Rechtetor NIE, und der Fall
+    // „requester without PERM_PROMOTE is denied fail-closed" mass eine Aufstellung, die
+    // die Frage gar nicht beantworten kann: STG_WFLW_RES stand auf WFLW_RES_APPLIED (1)
+    // statt WFLW_RES_DENIED_PERM (4), weil der Uebergang nach seinem eigenen Vertrag
+    // korrekt anwandte. Der Code war richtig; die VERDRAHTUNG des Tests war es nicht.
+    //
+    // DIE SCHWERERE HAELFTE IST NICHT DER ROTE TEST, SONDERN DIE STILLE: solange das System
+    // hier fehlte, war `grant_promote()` in JEDEM Fall dieser Datei wirkungslos — die Zusage
+    // „ohne PERM_PROMOTE wird fail-closed abgelehnt" wurde von NIEMANDEM geprueft. Deshalb
+    // steht das Tor jetzt in allen vier Kettenfaellen und nicht nur in dem, der rot war:
+    // ein Test, der die Produktionskette nur zur Haelfte aufbaut, misst eine Ordnung, die
+    // es nicht gibt.
     app.add_system<StorageAcssIdxSystem>(Schedule::Integration);
-    app.add_system_with<StorageWflwTranSystem>(Schedule::Integration)
+    app.add_system_with<StorageWflwPermSystem>(Schedule::Integration)
         .run_after("StorageAcssIdxSystem");
+    app.add_system_with<StorageWflwTranSystem>(Schedule::Integration)
+        .run_after("StorageWflwPermSystem");
     app.startup();
     auto& reg = app.registry();
-    auto* mgr = new StorageResourceManager();
-    reg.ctx().emplace<StorageResourceManager*>(mgr);
+    StorageResourceManager mgr;
+    reg.ctx().emplace<StorageResourceManager*>(&mgr);
 
     seed_edges(reg);
     auto rule_ent = seed_realm_and_rule(reg, EDGE_LABEL_DRAFT);
@@ -177,7 +234,6 @@ TEST_CASE("workflow edges: allowed transition applies label + attributed audit +
     CHECK(persist_buffers == 1);
 
     app.shutdown();
-    delete mgr;
 }
 
 TEST_CASE("workflow edges: forbidden edge (draft to released) is denied, label untouched") {
@@ -186,13 +242,36 @@ TEST_CASE("workflow edges: forbidden edge (draft to released) is denied, label u
     // The index is production wiring, not test scaffolding: StorageWflwTranSystem reads
     // its realm rules from it, so a run without it would exercise a system that finds
     // nothing and would pass or fail for the wrong reason.
+    //
+    // DASSELBE GILT FUER DAS RECHTETOR, UND HIER FEHLTE ES (nachgezogen 2026-08-31).
+    //
+    // Die Berechtigung ist seit dem 2026-08-29 ein EIGENES System: StorageWflwPermSystem
+    // prueft die PERM_PROMOTE-Achse der Keycard-Sitzung, schliesst seine Ablehnungen im
+    // selben Tick ab und laesst nur Berechtigte weiter — `storage_wflw_tran_sys.cpp:244-254`
+    // sagt es ausdruecklich: „Was hier ankommt, ist bereits berechtigt."
+    // `storage_module.hpp:207-212` verdrahtet die Kette Perm → Ini → Tran.
+    //
+    // Diese Datei registrierte nur Idx + Tran. Damit lief das Rechtetor NIE, und der Fall
+    // „requester without PERM_PROMOTE is denied fail-closed" mass eine Aufstellung, die
+    // die Frage gar nicht beantworten kann: STG_WFLW_RES stand auf WFLW_RES_APPLIED (1)
+    // statt WFLW_RES_DENIED_PERM (4), weil der Uebergang nach seinem eigenen Vertrag
+    // korrekt anwandte. Der Code war richtig; die VERDRAHTUNG des Tests war es nicht.
+    //
+    // DIE SCHWERERE HAELFTE IST NICHT DER ROTE TEST, SONDERN DIE STILLE: solange das System
+    // hier fehlte, war `grant_promote()` in JEDEM Fall dieser Datei wirkungslos — die Zusage
+    // „ohne PERM_PROMOTE wird fail-closed abgelehnt" wurde von NIEMANDEM geprueft. Deshalb
+    // steht das Tor jetzt in allen vier Kettenfaellen und nicht nur in dem, der rot war:
+    // ein Test, der die Produktionskette nur zur Haelfte aufbaut, misst eine Ordnung, die
+    // es nicht gibt.
     app.add_system<StorageAcssIdxSystem>(Schedule::Integration);
-    app.add_system_with<StorageWflwTranSystem>(Schedule::Integration)
+    app.add_system_with<StorageWflwPermSystem>(Schedule::Integration)
         .run_after("StorageAcssIdxSystem");
+    app.add_system_with<StorageWflwTranSystem>(Schedule::Integration)
+        .run_after("StorageWflwPermSystem");
     app.startup();
     auto& reg = app.registry();
-    auto* mgr = new StorageResourceManager();
-    reg.ctx().emplace<StorageResourceManager*>(mgr);
+    StorageResourceManager mgr;
+    reg.ctx().emplace<StorageResourceManager*>(&mgr);
 
     seed_edges(reg);
     auto rule_ent = seed_realm_and_rule(reg, EDGE_LABEL_DRAFT);
@@ -220,7 +299,6 @@ TEST_CASE("workflow edges: forbidden edge (draft to released) is denied, label u
     CHECK(reg.view<StorageBufWflwComponent>().size() == 0);
 
     app.shutdown();
-    delete mgr;
 }
 
 TEST_CASE("workflow edges: requester without PERM_PROMOTE is denied fail-closed") {
@@ -229,13 +307,36 @@ TEST_CASE("workflow edges: requester without PERM_PROMOTE is denied fail-closed"
     // The index is production wiring, not test scaffolding: StorageWflwTranSystem reads
     // its realm rules from it, so a run without it would exercise a system that finds
     // nothing and would pass or fail for the wrong reason.
+    //
+    // DASSELBE GILT FUER DAS RECHTETOR, UND HIER FEHLTE ES (nachgezogen 2026-08-31).
+    //
+    // Die Berechtigung ist seit dem 2026-08-29 ein EIGENES System: StorageWflwPermSystem
+    // prueft die PERM_PROMOTE-Achse der Keycard-Sitzung, schliesst seine Ablehnungen im
+    // selben Tick ab und laesst nur Berechtigte weiter — `storage_wflw_tran_sys.cpp:244-254`
+    // sagt es ausdruecklich: „Was hier ankommt, ist bereits berechtigt."
+    // `storage_module.hpp:207-212` verdrahtet die Kette Perm → Ini → Tran.
+    //
+    // Diese Datei registrierte nur Idx + Tran. Damit lief das Rechtetor NIE, und der Fall
+    // „requester without PERM_PROMOTE is denied fail-closed" mass eine Aufstellung, die
+    // die Frage gar nicht beantworten kann: STG_WFLW_RES stand auf WFLW_RES_APPLIED (1)
+    // statt WFLW_RES_DENIED_PERM (4), weil der Uebergang nach seinem eigenen Vertrag
+    // korrekt anwandte. Der Code war richtig; die VERDRAHTUNG des Tests war es nicht.
+    //
+    // DIE SCHWERERE HAELFTE IST NICHT DER ROTE TEST, SONDERN DIE STILLE: solange das System
+    // hier fehlte, war `grant_promote()` in JEDEM Fall dieser Datei wirkungslos — die Zusage
+    // „ohne PERM_PROMOTE wird fail-closed abgelehnt" wurde von NIEMANDEM geprueft. Deshalb
+    // steht das Tor jetzt in allen vier Kettenfaellen und nicht nur in dem, der rot war:
+    // ein Test, der die Produktionskette nur zur Haelfte aufbaut, misst eine Ordnung, die
+    // es nicht gibt.
     app.add_system<StorageAcssIdxSystem>(Schedule::Integration);
-    app.add_system_with<StorageWflwTranSystem>(Schedule::Integration)
+    app.add_system_with<StorageWflwPermSystem>(Schedule::Integration)
         .run_after("StorageAcssIdxSystem");
+    app.add_system_with<StorageWflwTranSystem>(Schedule::Integration)
+        .run_after("StorageWflwPermSystem");
     app.startup();
     auto& reg = app.registry();
-    auto* mgr = new StorageResourceManager();
-    reg.ctx().emplace<StorageResourceManager*>(mgr);
+    StorageResourceManager mgr;
+    reg.ctx().emplace<StorageResourceManager*>(&mgr);
 
     seed_edges(reg);
     auto rule_ent = seed_realm_and_rule(reg, EDGE_LABEL_DRAFT);
@@ -250,7 +351,6 @@ TEST_CASE("workflow edges: requester without PERM_PROMOTE is denied fail-closed"
     CHECK(reg.view<StorageReqWflwTranComponent>().size() == 0);
 
     app.shutdown();
-    delete mgr;
 }
 
 TEST_CASE("workflow edges: full chain draft to review to approved to released to retired") {
@@ -259,13 +359,36 @@ TEST_CASE("workflow edges: full chain draft to review to approved to released to
     // The index is production wiring, not test scaffolding: StorageWflwTranSystem reads
     // its realm rules from it, so a run without it would exercise a system that finds
     // nothing and would pass or fail for the wrong reason.
+    //
+    // DASSELBE GILT FUER DAS RECHTETOR, UND HIER FEHLTE ES (nachgezogen 2026-08-31).
+    //
+    // Die Berechtigung ist seit dem 2026-08-29 ein EIGENES System: StorageWflwPermSystem
+    // prueft die PERM_PROMOTE-Achse der Keycard-Sitzung, schliesst seine Ablehnungen im
+    // selben Tick ab und laesst nur Berechtigte weiter — `storage_wflw_tran_sys.cpp:244-254`
+    // sagt es ausdruecklich: „Was hier ankommt, ist bereits berechtigt."
+    // `storage_module.hpp:207-212` verdrahtet die Kette Perm → Ini → Tran.
+    //
+    // Diese Datei registrierte nur Idx + Tran. Damit lief das Rechtetor NIE, und der Fall
+    // „requester without PERM_PROMOTE is denied fail-closed" mass eine Aufstellung, die
+    // die Frage gar nicht beantworten kann: STG_WFLW_RES stand auf WFLW_RES_APPLIED (1)
+    // statt WFLW_RES_DENIED_PERM (4), weil der Uebergang nach seinem eigenen Vertrag
+    // korrekt anwandte. Der Code war richtig; die VERDRAHTUNG des Tests war es nicht.
+    //
+    // DIE SCHWERERE HAELFTE IST NICHT DER ROTE TEST, SONDERN DIE STILLE: solange das System
+    // hier fehlte, war `grant_promote()` in JEDEM Fall dieser Datei wirkungslos — die Zusage
+    // „ohne PERM_PROMOTE wird fail-closed abgelehnt" wurde von NIEMANDEM geprueft. Deshalb
+    // steht das Tor jetzt in allen vier Kettenfaellen und nicht nur in dem, der rot war:
+    // ein Test, der die Produktionskette nur zur Haelfte aufbaut, misst eine Ordnung, die
+    // es nicht gibt.
     app.add_system<StorageAcssIdxSystem>(Schedule::Integration);
-    app.add_system_with<StorageWflwTranSystem>(Schedule::Integration)
+    app.add_system_with<StorageWflwPermSystem>(Schedule::Integration)
         .run_after("StorageAcssIdxSystem");
+    app.add_system_with<StorageWflwTranSystem>(Schedule::Integration)
+        .run_after("StorageWflwPermSystem");
     app.startup();
     auto& reg = app.registry();
-    auto* mgr = new StorageResourceManager();
-    reg.ctx().emplace<StorageResourceManager*>(mgr);
+    StorageResourceManager mgr;
+    reg.ctx().emplace<StorageResourceManager*>(&mgr);
 
     seed_edges(reg);
     auto rule_ent = seed_realm_and_rule(reg, EDGE_LABEL_DRAFT);
@@ -285,7 +408,6 @@ TEST_CASE("workflow edges: full chain draft to review to approved to released to
     CHECK(reg.view<StorageBufWflwComponent>().size() == 4);
 
     app.shutdown();
-    delete mgr;
 }
 
 TEST_CASE("workflow retention: retired build older than 90 days is swept with rule + AUD_DELETE") {
@@ -294,15 +416,15 @@ TEST_CASE("workflow retention: retired build older than 90 days is swept with ru
     app.add_system<StorageWflwClnSystem>(Schedule::Observation);
     app.startup();
     auto& reg = app.registry();
-    auto* mgr = new StorageResourceManager();
-    reg.ctx().emplace<StorageResourceManager*>(mgr);
+    StorageResourceManager mgr;
+    reg.ctx().emplace<StorageResourceManager*>(&mgr);
 
     // Edge realm (audit ref) plus the retiring ACL rule that dies with the build.
     auto rule_ent = seed_realm_and_rule(reg, EDGE_LABEL_RETIRED);
 
     // get_wall_time_seconds is time(nullptr); guard against a zero clock so the
     // subtraction below stays a real past instant, never an unsigned wrap.
-    const uint64_t now = mgr->get_wall_time_seconds();
+    const uint64_t now = mgr.get_wall_time_seconds();
     REQUIRE(now > WFLW_RETIRED_RETENTION_S);
 
     // One retired record, retired well before the 90-day window closed. No file is
@@ -333,7 +455,6 @@ TEST_CASE("workflow retention: retired build older than 90 days is swept with ru
     CHECK(del_audits == 1);
 
     app.shutdown();
-    delete mgr;
 }
 
 TEST_CASE("workflow retention: retired build within 90 days is kept, not swept") {
@@ -342,11 +463,11 @@ TEST_CASE("workflow retention: retired build within 90 days is kept, not swept")
     app.add_system<StorageWflwClnSystem>(Schedule::Observation);
     app.startup();
     auto& reg = app.registry();
-    auto* mgr = new StorageResourceManager();
-    reg.ctx().emplace<StorageResourceManager*>(mgr);
+    StorageResourceManager mgr;
+    reg.ctx().emplace<StorageResourceManager*>(&mgr);
 
     auto rule_ent = seed_realm_and_rule(reg, EDGE_LABEL_RETIRED);
-    const uint64_t now = mgr->get_wall_time_seconds();
+    const uint64_t now = mgr.get_wall_time_seconds();
     REQUIRE(now > WFLW_RETIRED_RETENTION_S);
 
     // Just retired, deep inside the retention window.
@@ -375,5 +496,4 @@ TEST_CASE("workflow retention: retired build within 90 days is kept, not swept")
     CHECK(del_audits == 0);
 
     app.shutdown();
-    delete mgr;
 }

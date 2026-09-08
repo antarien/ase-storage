@@ -178,30 +178,15 @@ namespace {
  * @brief Remove all curation status Tags from entity (no View, no Query)
  * Called before emplacing the new status Tag to ensure mutual exclusion.
  */
-void remove_all_cur_tags(ecs::Registry& registry, entt::entity entity) {
-    registry.remove<StorageRvwPendTag>(entity);
-    registry.remove<StorageRvwAcptTag>(entity);
-    registry.remove<StorageRvwRjctTag>(entity);
-    registry.remove<StorageRvwRvseTag>(entity);
-}
-
-/**
- * @brief Emplace the correct status Tag based on CUR_ST_* value (no View, no Query)
- * One-time Tag assignment from external input — not type dispatch.
- */
-void emplace_cur_tag(ecs::Registry& registry, entt::entity entity, uint8_t target_tag) {
-    remove_all_cur_tags(registry, entity);
-    if (target_tag == CUR_ST_APPROVED) {
-        registry.emplace<StorageRvwAcptTag>(entity);
-    } else if (target_tag == CUR_ST_REJECTED) {
-        registry.emplace<StorageRvwRjctTag>(entity);
-    } else if (target_tag == CUR_ST_NEEDS_REWORK) {
-        registry.emplace<StorageRvwRvseTag>(entity);
-    } else {
-        registry.emplace<StorageRvwPendTag>(entity);
-    }
-}
-
+/* HIER STANDEN `remove_all_cur_tags` UND `emplace_cur_tag`, BEIDE MIT `ecs::Registry&`.
+ *
+ * Der zweite rief den ersten - eine Kette aus zwei verdeckten Markenschreibern hinter EINEM
+ * Aufruf. Eine Funktion, die die Registry nimmt, ist kein Helfer, und kein Zaehler sieht sie
+ * (INST_ASE_LINT.md, "Anonymous Namespace"). Beide Rumpfe stehen jetzt an ihrer einen
+ * Aufrufstelle in tick(), wo die gegenseitige Ausschliessung der vier Marken am Code
+ * ablesbar ist statt in zwei Funktionsnamen verteilt.
+ *
+ * Only pure functions over primitive types belong here - no registry, no view, no query. */
 }  // anonymous namespace
 
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
@@ -281,7 +266,41 @@ void StorageCurPrcSystem::tick(ecs::Registry& registry, float /*dt*/) {
                 asmt.rating = prm.rating;
             }
         } else if (req.action == CUR_ACT_STATUS) {
-            emplace_cur_tag(registry, cur_entity, prm.target_tag);
+            /**
+             * VIER SICH AUSSCHLIESSENDE ZUSTANDSMARKEN: ERST ALLE VIER WEG, DANN EINE.
+             *
+             * Das Abraeumen steht VOR dem Setzen und raeumt ALLE vier ab, nicht nur die
+             * zuletzt gesetzte. Ohne diesen Schritt traegt ein Eintrag, dessen Bewertung
+             * wechselt, zwei einander ausschliessende Marken gleichzeitig - und keine Sicht
+             * und kein Tor meldet das, weil beide Marken fuer sich korrekt aussehen.
+             * `registry.remove` auf eine abwesende Marke ist ein No-op.
+             *
+             * DIE KETTE UNTEN IST KEIN TYP-DISPATCH, und der Unterschied ist wichtig:
+             * `prm.target_tag` kommt aus EXTERNER EINGABE und steht erst zur Laufzeit fest.
+             * Waeren es Konstanten der Aufrufstellen - wie bei den Marker-Sichten in
+             * ase-recognition -, waere die Kette kuenstlich und muesste in tag-gefilterte
+             * Sichten aufgeloest werden. Hier ist sie die einmalige Uebersetzung eines
+             * eingegangenen Wertes in eine Marke.
+             *
+             * DER else-ZWEIG IST DIE VORGABE UND KEIN FEHLERFALL: ein unbekannter oder
+             * fehlender Wert landet auf "ausstehend" - dem Zustand, in dem ein Eintrag ohne
+             * Entscheidung stehen soll. Wer daraus einen Fehlerzweig macht, laesst Eintraege
+             * ganz ohne Marke zurueck.
+             */
+            registry.remove<StorageRvwPendTag>(cur_entity);
+            registry.remove<StorageRvwAcptTag>(cur_entity);
+            registry.remove<StorageRvwRjctTag>(cur_entity);
+            registry.remove<StorageRvwRvseTag>(cur_entity);
+
+            if (prm.target_tag == CUR_ST_APPROVED) {
+                registry.emplace<StorageRvwAcptTag>(cur_entity);
+            } else if (prm.target_tag == CUR_ST_REJECTED) {
+                registry.emplace<StorageRvwRjctTag>(cur_entity);
+            } else if (prm.target_tag == CUR_ST_NEEDS_REWORK) {
+                registry.emplace<StorageRvwRvseTag>(cur_entity);
+            } else {
+                registry.emplace<StorageRvwPendTag>(cur_entity);
+            }
         } else if (req.action == CUR_ACT_NOTES) {
             ase::utils::str_copy(asmt.notes, CUR_MAX_NOTES, prm.notes);
         } else {

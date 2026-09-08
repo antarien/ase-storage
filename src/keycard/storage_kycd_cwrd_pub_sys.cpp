@@ -181,28 +181,14 @@ namespace ase::storage {
 // NO View/Query operations in helpers! Only pure math!
 namespace {
 
-// Compare one held codeword against the fixed edge-distribution codewords and, on a match,
-// set the matching owner-scoped A/ACS hold-verdict boolean. The codeword itself never crosses
-// to the L4 edge gate: only these fixed, contract-registered booleans do.
+// INTENTIONALLY EMPTY.
 //
-// The comparison is on HASHES. Identity is a lookup, and a lookup compares hashes, never
-// characters (WRFL_ASE_STRING_HANDLING Section 3). The codeword's hash is written beside the
-// codeword when the grant is minted, so nothing is re-derived here.
-void set_edge_cwrd_hold(ecs::Registry& registry, uint32_t owner, uint32_t cwrd_hash) {
-    if (cwrd_hash == EDGE_CWRD_BINARY_HASH) {
-        hub::set(registry, owner, "SES_KYCD_HOLDS_BINARY"_hs, 1.0f);
-    }
-    if (cwrd_hash == EDGE_CWRD_SIG_HASH) {
-        hub::set(registry, owner, "SES_KYCD_HOLDS_SIG"_hs, 1.0f);
-    }
-    if (cwrd_hash == EDGE_CWRD_SBOM_HASH) {
-        hub::set(registry, owner, "SES_KYCD_HOLDS_SBOM"_hs, 1.0f);
-    }
-    if (cwrd_hash == EDGE_CWRD_METADATA_HASH) {
-        hub::set(registry, owner, "SES_KYCD_HOLDS_METADATA"_hs, 1.0f);
-    }
-}
-
+// `set_edge_cwrd_hold(ecs::Registry&, uint32_t, uint32_t)` stand hier und schrieb vier
+// Hub-Werte. Eine Funktion, die die Registry nimmt, ist kein Helfer, sondern Hub-I/O hinter
+// einem Aufruf, und kein Zaehler sieht sie (INST_ASE_LINT.md, "Anonymous Namespace"). Die
+// vier Vergleiche stehen jetzt offen in tick().
+//
+// Only pure functions over primitive types belong here - no registry, no view, no query.
 }  // anonymous namespace
 
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
@@ -293,9 +279,35 @@ void StorageKycdCwrdPubSystem::tick(ecs::Registry& registry, float /*dt*/) {
         if (!idx.has_session(kycd_idn->issued_to_hash)) {
             continue;
         }
-        // Hash A/ACS compare, server-internal — the codeword never crosses to the L4 edge
-        // gate; only the fixed hold-verdict booleans do.
-        set_edge_cwrd_hold(registry, kycd_idn->issued_to_hash, cwrd.cwrd_hash);
+        /**
+         * Hash A/ACS compare, server-internal — the codeword never crosses to the L4 edge
+         * gate; only the fixed hold-verdict booleans do.
+         *
+         * DER VERGLEICH LAEUFT AUF HASHES, NICHT AUF ZEICHEN. Identitaet ist ein Nachschlag,
+         * und ein Nachschlag vergleicht Streuwerte (WRFL_ASE_STRING_HANDLING Section 3). Der
+         * Streuwert des Codeworts wird NEBEN dem Codewort geschrieben, wenn die Erlaubnis
+         * ausgestellt wird - hier wird nichts neu abgeleitet.
+         *
+         * VIER PAARE, JEDES EINZELN GEPRUEFT - KEINE else-KETTE. Ein Codewort trifft genau
+         * einen der vier Streuwerte, aber die vier `if` stehen unabhaengig nebeneinander:
+         * kaeme ein fuenftes Codewort mit demselben Streuwert wie ein bestehendes, faenge
+         * eine else-Kette es still weg, waehrend vier eigenstaendige Pruefungen BEIDE Marken
+         * setzen und den Konflikt sichtbar machen. Die Zuordnung Streuwert → Schluessel ist
+         * die Stelle, an der ein Umbau lautlos kippt.
+         */
+        const uint32_t owner = kycd_idn->issued_to_hash;
+        if (cwrd.cwrd_hash == EDGE_CWRD_BINARY_HASH) {
+            hub::set(registry, owner, "SES_KYCD_HOLDS_BINARY"_hs, 1.0f);
+        }
+        if (cwrd.cwrd_hash == EDGE_CWRD_SIG_HASH) {
+            hub::set(registry, owner, "SES_KYCD_HOLDS_SIG"_hs, 1.0f);
+        }
+        if (cwrd.cwrd_hash == EDGE_CWRD_SBOM_HASH) {
+            hub::set(registry, owner, "SES_KYCD_HOLDS_SBOM"_hs, 1.0f);
+        }
+        if (cwrd.cwrd_hash == EDGE_CWRD_METADATA_HASH) {
+            hub::set(registry, owner, "SES_KYCD_HOLDS_METADATA"_hs, 1.0f);
+        }
         ++published;
     }
 

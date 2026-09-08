@@ -319,7 +319,7 @@ constexpr uint8_t EDGE_CLEARANCE_OPERATOR = 5;   // Release-manager full release
 
 // ── WORKFLOW TRANSITION ENGINE (Phase 12 Task 12.3) ─────────────────────
 // The label chain draft→review→approved→released→retired is DATA: each allowed
-// edge is a seeded StorageWflwEdgeComponent entity (StorageEdgeIniSystem), and
+// edge is a seeded StorageWflwEdgeComponent entity (StorageWflwEdgeIniSystem), and
 // StorageWflwTranSystem validates a requested transition purely by matching the
 // request against those edge entities — no switch/if-chain dispatch.
 

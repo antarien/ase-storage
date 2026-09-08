@@ -150,6 +150,9 @@
 #include <ase/storage/systems/keycard/storage_edge_kycd_res_drn_sys.hpp>
 // Module constants (EDGE_KYCD_* frame layout, codeword key buffers)
 #include <ase/storage/types.hpp>
+// Bounded field extraction out of the JSON payload (module-internal, pure byte scans;
+// a separate concern from draining the lane and publishing the session)
+#include <ase/storage/storage_kycd_payload.hpp>
 // Hub API for owner-keyed session publication
 #include <ase/hub/api.hpp>
 // Utils (L0 — safe C-string operations)
@@ -172,84 +175,13 @@ namespace ase::storage {
 
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 // NO STRUCTS HERE! NO View/Query operations in helpers! Only pure byte/char math!
-namespace {
-
-// Compare one recovered codeword against the fixed edge-distribution codewords and, on a
-// match, set the matching owner-scoped A/ACS hold-verdict boolean. The codeword itself never
-// re-enters the Hub (server-internal, A/ACS step 5): only these fixed, contract-registered
-// booleans reach the L4 edge gate.
 //
-// The comparison is on HASHES, against the compile-time constants in types.hpp. Identity is a
-// lookup, and a lookup compares hashes, never characters (WRFL_ASE_STRING_HANDLING Section 3).
-// The codeword is hashed where it is parsed out of the payload, so nothing is re-derived here.
-void set_edge_cwrd_hold(ecs::Registry& registry, uint32_t owner, uint32_t cwrd_hash) {
-    if (cwrd_hash == EDGE_CWRD_BINARY_HASH) {
-        hub::set(registry, owner, "SES_KYCD_HOLDS_BINARY"_hs, 1.0f);
-    }
-    if (cwrd_hash == EDGE_CWRD_SIG_HASH) {
-        hub::set(registry, owner, "SES_KYCD_HOLDS_SIG"_hs, 1.0f);
-    }
-    if (cwrd_hash == EDGE_CWRD_SBOM_HASH) {
-        hub::set(registry, owner, "SES_KYCD_HOLDS_SBOM"_hs, 1.0f);
-    }
-    if (cwrd_hash == EDGE_CWRD_METADATA_HASH) {
-        hub::set(registry, owner, "SES_KYCD_HOLDS_METADATA"_hs, 1.0f);
-    }
-}
-
-// Find the first occurrence of needle in [doc, doc+len). Returns the index of the
-// match start, or -1 when absent. Pure byte scan (no std::string, no strstr).
-int32_t find_token(const char* doc, uint32_t len, const char* needle) {
-    uint32_t nlen = ase::utils::str_len(needle, EDGE_KYCD_PAYLOAD_MAX);
-    if (nlen == 0u || nlen > len) return -1;
-    for (uint32_t i = 0; i + nlen <= len; ++i) {
-        uint32_t j = 0;
-        while (j < nlen && doc[i + j] == needle[j]) ++j;
-        if (j == nlen) return static_cast<int32_t>(i);
-    }
-    return -1;
-}
-
-// Parse the unsigned integer value of a '"key":<digits>' field into out_val.
-// Returns true when the key + a digit run is found. Bounded scan; tolerates
-// whitespace between the colon and the first digit.
-bool parse_num_field(const char* doc, uint32_t len, const char* quoted_key,
-                     uint32_t& out_val) {
-    int32_t at = find_token(doc, len, quoted_key);
-    if (at < 0) return false;
-    uint32_t i = static_cast<uint32_t>(at) + ase::utils::str_len(quoted_key, EDGE_KYCD_PAYLOAD_MAX);
-    while (i < len && (doc[i] == ' ' || doc[i] == ':')) ++i;
-    bool any = false;
-    uint32_t v = 0;
-    while (i < len && doc[i] >= '0' && doc[i] <= '9') {
-        v = v * 10u + static_cast<uint32_t>(doc[i] - '0');
-        any = true;
-        ++i;
-    }
-    if (!any) return false;
-    out_val = v;
-    return true;
-}
-
-// Copy the string value of a '"key":"<value>"' field into out (bounded). Returns
-// true when the key + a quoted value is found. Bounded scan.
-bool parse_str_field(const char* doc, uint32_t len, const char* quoted_key,
-                     char* out, uint32_t out_size) {
-    if (out_size == 0u) return false;
-    out[0] = '\0';
-    int32_t at = find_token(doc, len, quoted_key);
-    if (at < 0) return false;
-    uint32_t i = static_cast<uint32_t>(at) + ase::utils::str_len(quoted_key, EDGE_KYCD_PAYLOAD_MAX);
-    while (i < len && (doc[i] == ' ' || doc[i] == ':')) ++i;
-    if (i >= len || doc[i] != '"') return false;
-    ++i;  // opening quote
-    uint32_t o = 0;
-    while (i < len && doc[i] != '"' && o + 1u < out_size) {
-        out[o++] = doc[i++];
-    }
-    out[o] = '\0';
-    return o > 0u;
-}
+// EMPTY ON PURPOSE. The three payload scans that used to sit here - find_token,
+// parse_num_field, parse_str_field - moved to storage_kycd_payload.hpp. They were never
+// the concern of this file: this system drains a transport lane, validates a frame and
+// publishes a session, and pulling fields out of a JSON blob is a different job. As long
+// as both lived in one file that boundary existed but had no name.
+namespace {
 
 }  // anonymous namespace
 
@@ -473,8 +405,34 @@ void StorageEdgeKycdResDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
                             // that is where the string comes into being, so it is also where
                             // its identity is fixed. The codeword itself never re-enters the
                             // Hub; only the fixed hold-verdict booleans do.
-                            set_edge_cwrd_hold(registry, owner,
-                                               entt::hashed_string::value(cw, o));
+                            const uint32_t cwrd_hash = entt::hashed_string::value(cw, o);
+
+                            // Compare the recovered codeword against the fixed
+                            // edge-distribution codewords and, on a match, set the matching
+                            // owner-scoped A/ACS hold-verdict boolean. The codeword itself
+                            // never re-enters the Hub (server-internal, A/ACS step 5): only
+                            // these fixed, contract-registered booleans reach the L4 edge gate.
+                            //
+                            // The comparison is on HASHES, against the compile-time constants
+                            // in types.hpp. Identity is a lookup, and a lookup compares hashes,
+                            // never characters (WRFL_ASE_STRING_HANDLING Section 3). Nothing is
+                            // re-derived: the hash is the one computed one line above.
+                            //
+                            // FOUR INDEPENDENT ifs, not an else-chain: a codeword set is a SET,
+                            // the four axes are orthogonal grants, and an else would make them
+                            // mutually exclusive - a different access policy than this gate has.
+                            if (cwrd_hash == EDGE_CWRD_BINARY_HASH) {
+                                hub::set(registry, owner, "SES_KYCD_HOLDS_BINARY"_hs, 1.0f);
+                            }
+                            if (cwrd_hash == EDGE_CWRD_SIG_HASH) {
+                                hub::set(registry, owner, "SES_KYCD_HOLDS_SIG"_hs, 1.0f);
+                            }
+                            if (cwrd_hash == EDGE_CWRD_SBOM_HASH) {
+                                hub::set(registry, owner, "SES_KYCD_HOLDS_SBOM"_hs, 1.0f);
+                            }
+                            if (cwrd_hash == EDGE_CWRD_METADATA_HASH) {
+                                hub::set(registry, owner, "SES_KYCD_HOLDS_METADATA"_hs, 1.0f);
+                            }
                             ++count;
                         }
                     } else {

@@ -171,24 +171,19 @@ namespace ase::storage {
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 namespace {
 
-// Audit record for a gate decision (mirror storage_acss_chk_sys emit_audit):
-// one entity per decision, marked pending for the Preservation batch-writer.
-void emit_gate_audit(ecs::Registry& registry, uint32_t relm_ref, const char* user_id,
-                     const char* path, uint64_t timestamp, uint8_t result,
-                     const char* reason) {
-    auto aud_ent = registry.create();
-    auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
-    aud.relm_ref = relm_ref;
-    aud.proj_ref = 0;
-    ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, user_id);
-    ase::utils::str_copy(aud.path, MAX_PATH_LEN, path);
-    aud.timestamp = timestamp;
-    auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-    outc.action = AUD_PROMOTE;
-    outc.result = result;
-    ase::utils::str_copy(outc.reason, MAX_REASON_LEN, reason);
-    registry.emplace<StorageAudtPendTag>(aud_ent);
-}
+// Audit record for a gate decision: one entity per decision, marked pending for the
+// Preservation batch-writer. Dieselbe FORM wie in der Zugriffsleiter — dort steht sie seit dem
+// 2026-08-31 ebenfalls offen im Rumpf jeder entscheidenden Stelle. Der frueher hier genannte
+// Bezugspunkt `emit_audit` existiert nicht mehr; er war selbst ein Helfer mit `ecs::Registry&`.
+/* HIER STAND `emit_gate_audit(ecs::Registry&, ...)` MIT SIEBEN PARAMETERN.
+ *
+ * Sie erzeugte eine Entity, legte zwei Components an und setzte eine Marke - also
+ * Entity-Lebenszeit hinter einem Aufruf. Eine Funktion, die die Registry nimmt, ist kein
+ * Helfer, und kein Zaehler sieht sie (INST_ASE_LINT.md, "Anonymous Namespace"). Die
+ * Pruefspur wird jetzt an ihrer einen Aufrufstelle in tick() geschrieben, wo neben ihr
+ * steht, WARUM sie geschrieben wird.
+ *
+ * Only pure functions over primitive types belong here - no registry, no view, no query. */
 
 // Companion-artifact presence: <asset-abs-path><suffix> must exist. Pure
 // string composition + manager query, no views.
@@ -276,8 +271,35 @@ void StorageWflwGateSystem::tick(ecs::Registry& registry, float dt) {
         ase::utils::str_copy(reason, MAX_REASON_LEN, "wflw_gate(");
         ase::utils::str_append(reason, MAX_REASON_LEN, missing);
         ase::utils::str_append(reason, MAX_REASON_LEN, ")");
-        emit_gate_audit(registry, relm_ref, req.requested_by, req.path,
-                        mgr.get_wall_time_seconds(), AUD_DENIED, reason);
+        /**
+         * PRUEFSPUR FUER DIE ABWEISUNG.
+         *
+         * Die Zeile entsteht NUR im Verweigerungszweig: eine gewaehrte Freigabe wird von
+         * dem System protokolliert, das sie ausspricht, und eine zweite Zeile hier wuerde
+         * dieselbe Entscheidung doppelt in die Spur schreiben.
+         *
+         * `action` ist AUD_PROMOTE und NICHT AUD_DENIED - das ist kein Widerspruch zum
+         * `result`: die HANDLUNG, um die es ging, war eine Promotion; ihr ERGEBNIS war die
+         * Abweisung. Wer beim Umbauen `action` auf AUD_DENIED zieht, verliert die
+         * Information, WAS abgewiesen wurde, und behaelt nur, DASS etwas abgewiesen wurde.
+         *
+         * `proj_ref = 0` ist Absicht: das Tor entscheidet auf Reich-Ebene, ein Projekt ist
+         * an dieser Stelle nicht beteiligt.
+         */
+        auto aud_ent = registry.create();
+        auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
+        aud.relm_ref = relm_ref;
+        aud.proj_ref = 0;
+        ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, req.requested_by);
+        ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
+        aud.timestamp = mgr.get_wall_time_seconds();
+
+        auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+        outc.action = AUD_PROMOTE;
+        outc.result = AUD_DENIED;
+        ase::utils::str_copy(outc.reason, MAX_REASON_LEN, reason);
+
+        registry.emplace<StorageAudtPendTag>(aud_ent);
 
         // MIGRIERT. Hier stand ein Vermerk mit einer falschen Praemisse: er behauptete, es gebe
         // fuer die ZWEI Bezeichner dieser Zeile nur EINEN String-Platz, und man muesse einen

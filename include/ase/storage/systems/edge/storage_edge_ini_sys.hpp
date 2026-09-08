@@ -6,8 +6,10 @@
  * @file        storage_edge_ini_sys.hpp
  * @brief       StorageEdgeIniSystem - Edge-binary distribution realm seeding
  * @description Seeds the dedicated edge_binaries realm: directory tree, realm
- *              entity + Public/Active tags, and the release-path ACL rule plus
- *              its required BINARY codeword. Phase 12 A/ACS edge distribution.
+ *              entity + Public/Active tags and the StorageRelmEdgeTag that gives
+ *              the realm its identity. Phase 12 A/ACS edge distribution. The ACL
+ *              rules scoped to this realm belong to StorageAcssEdgeIniSystem, the
+ *              release-pipeline transition graph to StorageWflwEdgeIniSystem.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
@@ -39,16 +41,25 @@ namespace ase::storage {
 /**
  * @brief StorageEdgeIniSystem - Seeds the edge_binaries distribution realm
  *
- * Creates the edge_binaries realm directory tree (release/, keys/), the realm
+ * Creates the edge_binaries realm directory tree (release/, keys/) and the realm
  * entity (StorageStaRelmComponent id=edge_binaries, tier=Enterprise,
  * default_protection=Public) with StorageRelmGlobTag + StorageRelmActvTag
- * (no conceal tag → concealment=false), and the release-path ACL rule
- * (protection=Public, label=released) plus its required BINARY codeword entity.
+ * (no conceal tag → concealment=false), its quota and its id hash.
+ *
+ * StorageRelmEdgeTag is placed here and ONLY here: this system is the sole producer
+ * of the edge realm, which is what makes the tag the SSOT for "which entity is
+ * EDGE_REALM_ID". Every workflow system and the ACL seeder read it instead of
+ * scanning all realms and comparing id strings.
+ *
+ * Dedication: the REALM and nothing else. The ACL rules scoped to it belong to
+ * StorageAcssEdgeIniSystem, the release-pipeline transition graph to
+ * StorageWflwEdgeIniSystem.
  *
  * @schedule Initialization - Runs once at boot, after StorageIniSystem
  * @reads    StorageResourceManager* from ctx() (data dir + path resolution)
- * @writes   StorageStaRelmComponent, realm Tags, StorageAcssRuleComponent,
- *           StorageAcssCwrdComponent
+ * @writes   StorageStaRelmComponent, StorageRelmIdnComponent,
+ *           StorageRelmQuotComponent, StorageRelmGlobTag, StorageRelmActvTag,
+ *           StorageRelmEdgeTag
  * @depends  StorageIniSystem (ResourceManager registered in ctx)
  */
 class StorageEdgeIniSystem : public ecs::System {

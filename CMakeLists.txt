@@ -82,6 +82,7 @@ add_library(${PROJECT_NAME} SHARED
     Realm, keycard, ACL, audit, lattice, vote, task state data.
     ]]
     include/ase/storage/components/state/storage_sta_relm_comp.hpp
+    include/ase/storage/components/state/storage_sta_acss_rslv_comp.hpp
     include/ase/storage/components/state/storage_relm_quot_comp.hpp
     include/ase/storage/components/state/storage_relm_idn_comp.hpp
     include/ase/storage/components/state/storage_rule_idn_comp.hpp
@@ -138,6 +139,9 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/tag/storage_kycd_rev_tag.hpp
     include/ase/storage/components/tag/storage_kycd_pend_tag.hpp
     include/ase/storage/components/tag/storage_acss_grnt_tag.hpp
+    include/ase/storage/components/tag/storage_acss_pass_tag.hpp
+    include/ase/storage/components/tag/storage_acss_rslv_tag.hpp
+    include/ase/storage/components/tag/storage_acss_ownr_tag.hpp
     include/ase/storage/components/tag/storage_acss_deny_tag.hpp
     include/ase/storage/components/tag/storage_audt_pend_tag.hpp
     include/ase/storage/components/tag/storage_wflw_pend_tag.hpp
@@ -163,7 +167,11 @@ add_library(${PROJECT_NAME} SHARED
     #[[
     SYSTEMS - KEYCARD
     Init, drain, validate, link, expiry, revocation.
+    storage_kycd_payload.hpp is NOT a system: bounded field extraction out of the
+    authz JSON payload, pure byte scans over primitives, same build form as
+    storage_acss_ladder.hpp.
     ]]
+    include/ase/storage/storage_kycd_payload.hpp
     include/ase/storage/systems/keycard/storage_ini_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_drn_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_ntfy_drn_sys.hpp
@@ -180,11 +188,15 @@ add_library(${PROJECT_NAME} SHARED
     SYSTEMS - ACL + CONCEALMENT
     ]]
     include/ase/storage/systems/acl/storage_acss_chk_sys.hpp
+    include/ase/storage/systems/acl/storage_acss_pol_sys.hpp
+    include/ase/storage/systems/acl/storage_acss_rslv_sys.hpp
+    include/ase/storage/storage_acss_ladder.hpp
     include/ase/storage/systems/acl/storage_acss_idx_sys.hpp
     include/ase/storage/systems/acl/storage_idn_idx_sys.hpp
     include/ase/storage/systems/acl/storage_cncm_flt_sys.hpp
     include/ase/storage/systems/acl/storage_cred_acss_rcv_sys.hpp
     include/ase/storage/systems/acl/storage_cred_acss_rsp_sys.hpp
+    include/ase/storage/systems/acl/storage_acss_edge_ini_sys.hpp
     include/ase/storage/components/state/storage_cred_acss_pnd_comp.hpp
 
     #[[
@@ -195,15 +207,21 @@ add_library(${PROJECT_NAME} SHARED
     #[[
     SYSTEMS - WORKFLOW
     ]]
+    include/ase/storage/storage_wflw_stage.hpp
+    include/ase/storage/systems/workflow/storage_wflw_ini_sys.hpp
     include/ase/storage/systems/workflow/storage_wflw_drn_sys.hpp
     include/ase/storage/systems/workflow/storage_wflw_gate_sys.hpp
     include/ase/storage/systems/workflow/storage_wflw_tran_sys.hpp
+    include/ase/storage/systems/workflow/storage_wflw_perm_sys.hpp
+    include/ase/storage/systems/workflow/storage_wflw_edge_ini_sys.hpp
     include/ase/storage/systems/workflow/storage_wflw_pst_sys.hpp
     include/ase/storage/systems/workflow/storage_wflw_cln_sys.hpp
 
     #[[
     SYSTEMS - EDGE DISTRIBUTION
-    Phase 12 edge_binaries realm seeding (realm, release ACL rule, codeword).
+    Phase 12 edge_binaries realm seeding. The realm ONLY - its directory tree,
+    entity and identity tag. The ACL rules live under acl/ (StorageAcssEdgeIni),
+    the release-pipeline transition graph under workflow/ (StorageWflwEdgeIni).
     ]]
     include/ase/storage/systems/edge/storage_edge_ini_sys.hpp
 
@@ -268,12 +286,15 @@ add_library(${PROJECT_NAME} SHARED
     SYSTEM IMPLEMENTATIONS - ACL + CONCEALMENT
     ]]
     src/acl/storage_acss_chk_sys.cpp
+    src/acl/storage_acss_pol_sys.cpp
+    src/acl/storage_acss_rslv_sys.cpp
     src/acl/storage_acss_idx_sys.cpp
     src/acl/storage_idn_idx_sys.cpp
     src/acl/storage_acss_index_resource_manager.cpp
     src/acl/storage_cncm_flt_sys.cpp
     src/acl/storage_cred_acss_rcv_sys.cpp
     src/acl/storage_cred_acss_rsp_sys.cpp
+    src/acl/storage_acss_edge_ini_sys.cpp
 
     #[[
     SYSTEM IMPLEMENTATIONS - FILESYSTEM
@@ -283,10 +304,13 @@ add_library(${PROJECT_NAME} SHARED
     #[[
     SYSTEM IMPLEMENTATIONS - WORKFLOW
     ]]
+    src/workflow/storage_wflw_ini_sys.cpp
     src/workflow/storage_wflw_drn_sys.cpp
     src/workflow/storage_edge_wflw_fwd_rcv_sys.cpp
     src/workflow/storage_wflw_gate_sys.cpp
     src/workflow/storage_wflw_tran_sys.cpp
+    src/workflow/storage_wflw_perm_sys.cpp
+    src/workflow/storage_wflw_edge_ini_sys.cpp
     src/workflow/storage_wflw_pst_sys.cpp
     src/workflow/storage_wflw_cln_sys.cpp
 

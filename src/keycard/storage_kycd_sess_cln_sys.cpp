@@ -188,20 +188,15 @@ namespace ase::storage {
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 namespace {
 
-/** Retire the SES_* family StorageKycdLnkSystem publishes for one session owner.
- *  Every key written there appears here — the two lists are a pair, and a key added
- *  on one side without the other strands in the hub for the life of the process.
- *  hub::remove on an absent key is a no-op returning false: a session that never
- *  reached a realm simply has nothing to retire, which is not an error condition. */
-void remove_session_family(ecs::Registry& registry, uint32_t owner) {
-    hub::remove(registry, owner, "SES_IS_AUTHENTICATED"_hs);
-    hub::remove(registry, owner, "SES_CLEARANCE"_hs);
-    hub::remove(registry, owner, "SES_EXP_AT"_hs);
-    hub::remove(registry, owner, "SES_REALM_ID"_hs);
-    hub::remove(registry, owner, "SES_USER_ID_HI"_hs);
-    hub::remove(registry, owner, "SES_USER_ID_LO"_hs);
-}
-
+/** INTENTIONALLY EMPTY.
+ *
+ *  `remove_session_family(ecs::Registry&, uint32_t)` stand hier und rief sechsmal
+ *  hub::remove. Eine Funktion, die die Registry nimmt, ist kein Helfer, sondern Hub-I/O
+ *  hinter einem Aufruf — kein Zaehler sieht sie (INST_ASE_LINT.md, "Anonymous Namespace").
+ *  Die sechs Ruecknahmen stehen jetzt offen in tick(), wo die Paarigkeit mit
+ *  StorageKycdLnkSystem am Code ablesbar ist statt nur im Kopf beschrieben.
+ *
+ *  Only pure functions over primitive types belong here — no registry, no view, no query. */
 }  // anonymous namespace
 
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
@@ -236,7 +231,27 @@ void StorageKycdSessClnSystem::tick(ecs::Registry& registry, float /*dt*/) {
     for (auto entity : dead_view) {
         uint32_t owner = static_cast<uint32_t>(entity);
 
-        remove_session_family(registry, owner);
+        /**
+         * DIE SES_*-FAMILIE, DIE StorageKycdLnkSystem VEROEFFENTLICHT, WIRD HIER
+         * VOLLSTAENDIG ZURUECKGENOMMEN.
+         *
+         * DIE BEIDEN LISTEN SIND EIN PAAR: jeder Schluessel, der dort geschrieben wird,
+         * steht hier — und ein Schluessel, der auf EINER Seite hinzukommt, strandet im Hub
+         * fuer die Lebensdauer des Prozesses. Wer drueben einen siebten Wert publiziert,
+         * traegt ihn hier nach; kein Tor prueft diese Paarigkeit, und ausgeschrieben ist
+         * sie wenigstens ablesbar.
+         *
+         * hub::remove auf einen abwesenden Schluessel ist ein No-op und gibt false zurueck:
+         * eine Sitzung, die nie ein Reich erreicht hat, hat schlicht nichts zurueckzunehmen —
+         * das ist kein Fehlerfall und braucht deshalb keine Meldung.
+         */
+        hub::remove(registry, owner, "SES_IS_AUTHENTICATED"_hs);
+        hub::remove(registry, owner, "SES_CLEARANCE"_hs);
+        hub::remove(registry, owner, "SES_EXP_AT"_hs);
+        hub::remove(registry, owner, "SES_REALM_ID"_hs);
+        hub::remove(registry, owner, "SES_USER_ID_HI"_hs);
+        hub::remove(registry, owner, "SES_USER_ID_LO"_hs);
+
         registry.remove<StorageKycdVldTag>(entity);
 
         log::debug("[StorageKycdSessClnSystem] Retired SES_* family for dead session owner={}",

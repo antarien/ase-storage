@@ -179,20 +179,13 @@ namespace {
  *  Each value lives on a separate hub-internal entity, so destroying the request entity does NOT
  *  clear it. Without this the 7 fixed keys plus the GRANT flags orphan and pollute every hub_values
  *  snapshot (immortal ghosts, the same defect class the peer family already fixed via hub::remove). */
-void remove_keycard_ntf_family(ecs::Registry& registry, uint32_t owner) {
-    hub::remove(registry, owner, "SES_KYCD_NTF_USER_ID_HI"_hs);
-    hub::remove(registry, owner, "SES_KYCD_NTF_USER_ID_LO"_hs);
-    hub::remove(registry, owner, "SES_KYCD_NTF_CLRN"_hs);
-    hub::remove(registry, owner, "SES_KYCD_NTF_PERM"_hs);
-    hub::remove(registry, owner, "SES_KYCD_NTF_REALM_ID_HI"_hs);
-    hub::remove(registry, owner, "SES_KYCD_NTF_REALM_ID_LO"_hs);
-    hub::remove(registry, owner, "SES_KYCD_NTF_EXP_AT"_hs);
-    hub::remove(registry, owner, "SES_KYCD_NTF_GRANT_BINARY"_hs);
-    hub::remove(registry, owner, "SES_KYCD_NTF_GRANT_SIG"_hs);
-    hub::remove(registry, owner, "SES_KYCD_NTF_GRANT_SBOM"_hs);
-    hub::remove(registry, owner, "SES_KYCD_NTF_GRANT_METADATA"_hs);
-}
-
+/* Der Rumpf steht jetzt an seiner einen Aufrufstelle in tick(). Eine Funktion, die die
+ * Registry nimmt, ist kein Helfer, sondern Hub-I/O hinter einem Aufruf, und kein Zaehler
+ * sieht sie (INST_ASE_LINT.md, "Anonymous Namespace"). Der Schwesterfall
+ * `remove_session_family` in storage_kycd_sess_cln_sys.cpp ist am 2026-08-30 genauso
+ * aufgeloest worden - beide Familien sind jetzt dort ablesbar, wo sie zurueckgenommen werden.
+ *
+ * Only pure functions over primitive types belong here - no registry, no view, no query. */
 }  // anonymous namespace
 
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
@@ -318,7 +311,33 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // Clear the transient SES_KYCD_NTF_* IPC values BEFORE releasing the request
         // entity: they sit on separate hub-internal entities and would otherwise orphan
         // into every hub_values snapshot (the preloader-flood the user reported).
-        remove_keycard_ntf_family(registry, static_cast<uint32_t>(minted[i]));
+        /**
+         * ELF FLUECHTIGE SES_KYCD_NTF_*-WERTE, EINZELN ZURUECKGENOMMEN.
+         *
+         * Sieben feste Schluessel plus vier GRANT-Marken. Jeder Wert lebt auf einer EIGENEN
+         * hub-internen Entity — `registry.destroy` auf die Anfrage-Entity raeumt sie NICHT
+         * mit ab. Ohne diese elf Ruecknahmen verwaisen sie und stehen in jedem
+         * hub_values-Schnappschuss: unsterbliche Geister, dieselbe Fehlerklasse, die die
+         * Schwesterfamilie (SES_* in storage_kycd_sess_cln_sys.cpp) bereits ueber
+         * hub::remove behoben hat.
+         *
+         * DIE REIHENFOLGE IST WICHTIG: erst raeumen, DANN die Entity freigeben. Wer
+         * `destroy` vorzieht, verliert den `owner`, unter dem die elf Werte stehen — und
+         * damit die Moeglichkeit, sie ueberhaupt noch zu finden.
+         */
+        const uint32_t ntf_owner = static_cast<uint32_t>(minted[i]);
+        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_USER_ID_HI"_hs);
+        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_USER_ID_LO"_hs);
+        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_CLRN"_hs);
+        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_PERM"_hs);
+        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_REALM_ID_HI"_hs);
+        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_REALM_ID_LO"_hs);
+        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_EXP_AT"_hs);
+        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_GRANT_BINARY"_hs);
+        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_GRANT_SIG"_hs);
+        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_GRANT_SBOM"_hs);
+        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_GRANT_METADATA"_hs);
+
         registry.destroy(minted[i]);
     }
 }

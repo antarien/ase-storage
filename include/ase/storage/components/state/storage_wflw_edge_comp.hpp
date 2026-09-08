@@ -7,7 +7,7 @@
  * @brief       StorageWflwEdgeComponent - one allowed workflow-label transition edge
  * @description The release-pipeline graph as DATA (Entity-per-Item): one entity per
  *              allowed edge (draft→review, review→approved, approved→released,
- *              released→retired), seeded by StorageEdgeIniSystem. This "edge" is a
+ *              released→retired), seeded by StorageWflwEdgeIniSystem. This "edge" is a
  *              graph Kante of the label chain — NOT the Edge-Daemon domain prefix.
  *              StorageWflwTranSystem validates a requested transition purely by
  *              matching (from_label == rule.label && to_label == request.target)
@@ -57,7 +57,7 @@ namespace ase::storage {
  * @brief StorageWflwEdgeComponent - one allowed label-transition edge (graph Kante)
  *
  * One entity per allowed edge of the release pipeline. Seeded once by
- * StorageEdgeIniSystem from the EDGE_LABEL_* chain; adding a new allowed
+ * StorageWflwEdgeIniSystem from the EDGE_LABEL_* chain; adding a new allowed
  * transition = seeding one more entity, never touching system code.
  *
  * @hub_reads  none

@@ -84,6 +84,8 @@
 
 // Integration (ACL + Storage)
 #include <ase/storage/systems/acl/storage_acss_chk_sys.hpp>
+#include <ase/storage/systems/acl/storage_acss_pol_sys.hpp>
+#include <ase/storage/systems/acl/storage_acss_rslv_sys.hpp>
 #include <ase/storage/systems/acl/storage_acss_idx_sys.hpp>
 #include <ase/storage/systems/acl/storage_idn_idx_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_cwrd_pub_sys.hpp>
@@ -95,11 +97,16 @@
 #include <ase/storage/systems/workflow/storage_edge_wflw_fwd_rcv_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_gate_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_tran_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_perm_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_ini_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_pst_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_cln_sys.hpp>
 
-// Initialization (Edge Distribution)
+// Initialization (Edge Distribution) - three objects, three systems: the realm,
+// the ACL rules scoped to it, and the release-pipeline transition graph.
 #include <ase/storage/systems/edge/storage_edge_ini_sys.hpp>
+#include <ase/storage/systems/acl/storage_acss_edge_ini_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_edge_ini_sys.hpp>
 
 // Preservation
 #include <ase/storage/systems/keycard/storage_kycd_exp_sys.hpp>
@@ -128,6 +135,18 @@ struct StorageModule {
         // Edge-distribution realm seeding runs after the manager + data dir exist
         app.add_system_with<StorageEdgeIniSystem>(ecs::Schedule::Initialization)
             .run_after("StorageIniSystem");
+        // The edge ACL rules are SCOPED to the realm entity and find it through
+        // StorageRelmEdgeTag, so the realm has to exist first. run_after orders only
+        // WITHIN a schedule and both sit in Initialization, so this constraint is the
+        // whole guarantee: without it Kahn/FIFO may place the rule seeder first, and
+        // it would log SCHEDULE_ORDER and seed nothing.
+        app.add_system_with<StorageAcssEdgeIniSystem>(ecs::Schedule::Initialization)
+            .run_after("StorageEdgeIniSystem");
+        // The transition graph depends on NEITHER of the two: it is seeded from the
+        // EDGE_LABEL_* chain in types.hpp alone and touches no realm and no rule.
+        // It carries no ordering constraint on purpose - an unnecessary run_after
+        // would claim a dependency that does not exist.
+        app.add_system<StorageWflwEdgeIniSystem>(ecs::Schedule::Initialization);
 
         // Ingestion (60Hz): Developer Keycard pipeline (drain → validate → link)
         // The identity index is built FIRST in the frame's ingestion stage: the notify
@@ -181,19 +200,46 @@ struct StorageModule {
         // after StorageAcssChkSystem would leave the ladder reading last tick's relations,
         // which is exactly the stale-grant failure the full rebuild exists to prevent.
         app.add_system<StorageAcssIdxSystem>(ecs::Schedule::Integration);
-        app.add_system_with<StorageAcssChkSystem>(ecs::Schedule::Integration)
+        // TRENNUNG 2026-08-29: die Leiter stellt zwei Arten von Frage. Die Aufloesung schlaegt
+        // nach (welches Revier, wem gehoert es, welche ACL-Regel regiert diesen Pfad), die
+        // Torleiter entscheidet (darf DIESER Anrufer). Der Kanal zwischen beiden ist
+        // StorageStaAcssRslvComponent samt Marken - im selben Tick, also unveraendert schnell.
+        app.add_system_with<StorageAcssRslvSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssIdxSystem");
-        app.add_system_with<StorageFileWritSystem>(ecs::Schedule::Integration)
+        app.add_system_with<StorageAcssChkSystem>(ecs::Schedule::Integration)
+            .run_after("StorageAcssRslvSystem");
+        // TRENNUNG 2026-08-31: die Torleiter wog ZWEI Fragen. Die Schluessel-Tore wiegen den
+        // ANRUFER (Ausweis, Revier, Gitter, Schutzstufe, Codewort, Recht), die Politik-Tore den
+        // GEGENSTAND (Label, laufende Aufgabe, Kontingent). Der Kanal zwischen beiden ist
+        // StorageAcssPassTag - im selben Tick, also unveraendert schnell.
+        //
+        // DIE GEWAEHRUNG FAELLT SEITHER HIER, NICHT IN StorageAcssChkSystem. Jede Kante, die auf
+        // das Ergebnis der Leiter wartet, zeigt deshalb auf DIESES System; eine, die auf der
+        // halben Leiter stehen bliebe, saehe null Gewaehrungen und taete still gar nichts.
+        app.add_system_with<StorageAcssPolSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssChkSystem");
+        app.add_system_with<StorageFileWritSystem>(ecs::Schedule::Integration)
+            .run_after("StorageAcssPolSystem");
         // released-gate artifact precondition runs BEFORE the transition system:
         // requests targeting "released" keep StorageWflwGateTag until the
         // .sig/.sha256/.spdx.json/.smoke companions are verified on disk.
         app.add_system_with<StorageWflwGateSystem>(ecs::Schedule::Integration)
             .run_after("StorageFileWritSystem");
-        app.add_system_with<StorageWflwTranSystem>(ecs::Schedule::Integration)
+        // TRENNUNG 2026-08-29: der Beförderungs-Pfad trug drei Vorgaenge in einer tick().
+        // BERECHTIGEN (A/ACS: haelt der Anrufer PERM_PROMOTE) laeuft zuerst und schliesst seine
+        // Ablehnungen selbst ab; ADOPTIEREN legt fuer ein unverwaltetes, auf der Platte
+        // liegendes Gut die Entwurfs-Regel an; erst dann BEWEGT der Uebergang das Gut entlang
+        // einer Kante des Graphen. Drei Fragen, drei Fehlerbilder, drei Dateien.
+        app.add_system_with<StorageWflwPermSystem>(ecs::Schedule::Integration)
             .run_after("StorageWflwGateSystem");
+        app.add_system_with<StorageWflwIniSystem>(ecs::Schedule::Integration)
+            .run_after("StorageWflwPermSystem");
+        app.add_system_with<StorageWflwTranSystem>(ecs::Schedule::Integration)
+            .run_after("StorageWflwIniSystem");
+        // NACH DER GANZEN LEITER, nicht nach ihrer ersten Haelfte: die Verschleierung filtert auf
+        // das ENTSCHIEDENE Ergebnis (2026-08-31 mit dem Schnitt nachgezogen).
         app.add_system_with<StorageCncmFltSystem>(ecs::Schedule::Integration)
-            .run_after("StorageAcssChkSystem");
+            .run_after("StorageAcssPolSystem");
         // The codeword projection is what the L4 edge gate reads: SES_KYCD_HOLDS_*,
         // SES_CLEARANCE and SES_KYCD_PERM at owner = hashed_string(user_id). It existed,
         // it was referenced as the producer by edge_binary_routes.cpp and by the hub
@@ -204,8 +250,10 @@ struct StorageModule {
             .run_after("StorageAcssIdxSystem");
 
         // Integration (60Hz): Curator request processing (after ACL)
+        // NACH DER GANZEN LEITER: der Kurator arbeitet auf gewaehrten Anfragen, und die
+        // Gewaehrung faellt seit dem 2026-08-31 in StorageAcssPolSystem.
         app.add_system_with<StorageCurPrcSystem>(ecs::Schedule::Integration)
-            .run_after("StorageAcssChkSystem");
+            .run_after("StorageAcssPolSystem");
 
         // Preservation (1Hz): expiry, revocation, audit write, lattice sync
         app.add_system<StorageKycdExpSystem>(ecs::Schedule::Preservation);

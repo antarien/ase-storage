@@ -569,6 +569,24 @@
         ],
         "server_only": [
             {
+                "name": "StorageAcssOwnrTag",
+                "description": "StorageAcssOwnrTag - Der Anrufer besitzt dieses Revier oder einen seiner Vorfahren",
+                "fields": [],
+                "file": "tag/storage_acss_ownr_tag.hpp"
+            },
+            {
+                "name": "StorageAcssPassTag",
+                "description": "StorageAcssPassTag - die Schl\u00fcssel-Tore sind passiert, die Politik-Tore d\u00fcrfen ansetzen",
+                "fields": [],
+                "file": "tag/storage_acss_pass_tag.hpp"
+            },
+            {
+                "name": "StorageAcssRslvTag",
+                "description": "StorageAcssRslvTag - Die Aufl\u00f6sung ist gelaufen, die Torleiter darf ansetzen",
+                "fields": [],
+                "file": "tag/storage_acss_rslv_tag.hpp"
+            },
+            {
                 "name": "StorageAudtOutcComponent",
                 "description": "StorageAudtOutcComponent - What an audited access attempt tried and how it ended",
                 "fields": [
@@ -882,6 +900,31 @@
                 "file": "request/storage_req_wflw_tran_comp.hpp"
             },
             {
+                "name": "StorageStaAcssRslvComponent",
+                "description": "StorageStaAcssRslvComponent - What the ACL resolution found for one request",
+                "fields": [
+                    {
+                        "name": "matched_rule",
+                        "type": "uint32",
+                        "default": "INVALID_ENTITY",
+                        "description": "ACL rule entity governing this path"
+                    },
+                    {
+                        "name": "rule_label_hash",
+                        "type": "uint32",
+                        "default": "0",
+                        "description": "workflow label of that rule (0 = none)"
+                    },
+                    {
+                        "name": "required_protection",
+                        "type": "uint8",
+                        "default": "PROTECTION_PUBLIC",
+                        "description": "clearance the location demands"
+                    }
+                ],
+                "file": "state/storage_sta_acss_rslv_comp.hpp"
+            },
+            {
                 "name": "StorageStaSessComponent",
                 "description": "StorageStaSessComponent - What binds an identity to a live session",
                 "fields": [
@@ -970,8 +1013,20 @@
                 "file": "acl/storage_acss_chk_sys.hpp"
             },
             {
+                "name": "StorageAcssEdgeIniSystem",
+                "file": "acl/storage_acss_edge_ini_sys.hpp"
+            },
+            {
                 "name": "StorageAcssIdxSystem",
                 "file": "acl/storage_acss_idx_sys.hpp"
+            },
+            {
+                "name": "StorageAcssPolSystem",
+                "file": "acl/storage_acss_pol_sys.hpp"
+            },
+            {
+                "name": "StorageAcssRslvSystem",
+                "file": "acl/storage_acss_rslv_sys.hpp"
             },
             {
                 "name": "StorageAudtWritSystem",
@@ -1078,8 +1133,20 @@
                 "file": "workflow/storage_wflw_drn_sys.hpp"
             },
             {
+                "name": "StorageWflwEdgeIniSystem",
+                "file": "workflow/storage_wflw_edge_ini_sys.hpp"
+            },
+            {
                 "name": "StorageWflwGateSystem",
                 "file": "workflow/storage_wflw_gate_sys.hpp"
+            },
+            {
+                "name": "StorageWflwIniSystem",
+                "file": "workflow/storage_wflw_ini_sys.hpp"
+            },
+            {
+                "name": "StorageWflwPermSystem",
+                "file": "workflow/storage_wflw_perm_sys.hpp"
             },
             {
                 "name": "StorageWflwPstSystem",

@@ -2,54 +2,102 @@
  * ASE ECS SYSTEM IMPLEMENTATION
  *
  * @file        storage_acss_chk_sys.cpp
- * @brief       StorageAcssChkSystem - 10-step Mandatory Access Control enforcement
+ * @brief       StorageAcssChkSystem - Run the KEY gates on a resolved request
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Integration
- * @created     2026-04-05
- * @modified    2026-06-24
- * @version     1.0.0
+ * @created     2026-04-04
+ * @modified    2026-08-31
+ * @version     3.0.0
  *
- * CAUSAL CHAIN (A/ACS Enforcement)
+ * TRENNUNG 2026-08-29 — NACHSCHLAGEN UND ENTSCHEIDEN WAREN EINE tick()
  *
- *   [HTTP route creates StorageReqAcssComponent entity]
+ * Die Leiter nach ARCH Section 14.1 stellt zwei Arten von Frage, und sie standen in derselben
+ * Funktion. StorageAcssRslvSystem beantwortet die eine - welches Revier, wem gehoert es, welche
+ * ACL-Regel regiert diesen Pfad -, dieses System die andere: DARF DIESER ANRUFER.
+ *
+ * WAS DIE TRENNUNG WERT IST: eine Aenderung am Regelabgleich - etwa daran, welche von zwei
+ * ueberlappenden Regeln gewinnt - war vorher eine Aenderung an derselben Datei, in der auch die
+ * Freigabestufen-Pruefung steht. Das ist die teuerste Nachbarschaft, die es hier geben kann.
+ *
+ * TRENNUNG 2026-08-31 — DER ANRUFER UND DER GEGENSTAND WAREN EINE tick()
+ *
+ * Dieselbe Bewegung ein zweites Mal, eine Ebene tiefer. Die Torleiter wog beides: WER DARF
+ * (Ausweis, Revier, Gitter, Schutzstufe, Codewort, Recht) und WAS GILT FUER DIESEN GEGENSTAND
+ * (Label, laufende Aufgabe, Kontingent). Die erste Frage haengt am ANRUFER und aendert sich mit
+ * seiner Keycard; die zweite haengt am GUT und aendert sich mit dem Arbeitsstand. DIESES SYSTEM
+ * TRAEGT SEITHER NUR NOCH DIE ERSTE — Sprossen 1 bis 6. Die Sprossen 7 bis 10 stehen in
+ * StorageAcssPolSystem.
+ *
+ * DER ANLASS WAR EIN VERSTECKTER HELFER: `emit_audit(ecs::Registry&, ...)` stellte die
+ * Pruefspur-Zeile aus storage_acss_ladder.hpp heraus - eine freie Funktion mit der Registry im
+ * Argument, also ECS-Arbeit hinter einem Namen. Ausgeschrieben traegt jede Ausgangsstelle sie
+ * selbst; mit allen zehn Stellen fiel dieser Rumpf in das GOD_SYSTEM_UNSPLIT_BAND. Die ZAHL war
+ * der Anlass, die NAHT war schon vorher da.
+ *
+ * DIE LEITER IST STRENG GEORDNET UND ERTEILT AUSSCHLIESSLICH AUF SPROSSE 10 — die liegt jetzt
+ * drueben. Es gibt keine Abkuerzung davor: der oeffentliche Raum und die Eigentuemer-Macht sind
+ * INNERHALB der Leiter modelliert (PUBLIC-Schutzregel, Eigentuemer-Vorgabe als wirksame Keycard)
+ * - sie ueberspringen kein Tor, sie machen die Tore fuer diesen Fall gegenstandslos.
+ *
+ * WER DIE FUENF TORE HAELT, BEKOMMT StorageAcssPassTag UND KEINE PRUEFSPUR. Das ist kein
+ * vergessener Ausgang, sondern die Naht: die Entscheidung faellt drueben, und eine Pruefspur ohne
+ * Entscheidung waere eine Zeile, die etwas behauptet, das noch niemand entschieden hat. DESHALB
+ * WIRD DIE PRUEFSPUR-ZEILE HIER AN JEDER ABLEHNUNG EINZELN GESTELLT und nicht wie drueben einmal
+ * je Anfrage vorgezogen: dort endet JEDER Pfad in einer Entscheidung, hier nicht. Wer das
+ * angleichen will, laesst hier eine halbe Pruefspur-Zeile ohne Ergebnis zurueck.
+ *
+ * WAS AUS DER AUFLOESUNG KOMMT UND WAS NICHT. Die Komponente traegt drei Zahlen - Schutzstufe,
+ * Regel, Etikett -, die Marke StorageAcssOwnrTag die Eigentuemer-Klassifikation. Alles andere
+ * leitet dieses System selbst ab: die wirksame Keycard aus Marke plus Keycard-Komponente, die
+ * Pfad-Hashes aus dem Pfad, die Revier-Kennung aus dem Revier-Datensatz. Ein Wert, der an zwei
+ * Orten steht, ist ein Wert, der an einem davon falsch sein kann - und in einer
+ * Zugriffsentscheidung ist das die teuerste Sorte Fehler.
+ *
+ * DIE TARIFSTUFE DES REVIERS WIRD HIER NICHT MEHR GELESEN: sie trug ausschliesslich das
+ * Kontingent-Tor, und das ist mitgezogen. Ein abgeleiteter Wert ohne Leser ist eine Stelle, an
+ * der er falsch sein kann, ohne dass es je auffaellt.
+ *
+ * A MISSING KEYCARD OR REALM NEVER REACHES HERE. Beide Faelle weist die Aufloesung ab, mit
+ * Pruefspur und ohne Leck: eine verschleierte Zeile faellt als realm_not_found, nie als
+ * access_denied.
+ *
+ * CAUSAL CHAIN (CHAIN_STORAGE_ACSS_CHK: Resolution → Key gates → Pass or Deny)
+ *
+ *   StorageAcssRslvSystem (Revier und Regel aufgeloest)
  *          │
- *          │ Request entity with pre-resolved clearance, permissions, user_id
+ *          │ StorageStaAcssRslvComponent + StorageAcssRslvTag
  *          ▼
- *   ┌─────────────────────────────────────────────┐
- *   │  THIS SYSTEM: StorageAcssChkSystem          │
- *   │                                             │
- *   │  READS:                                     │
- *   │    - StorageReqAcssComponent (requests)     │
- *   │    - StorageStaRelmComponent (realms)       │
- *   │    - StorageAcssRuleComponent (ACL rules)   │
- *   │    - StorageAcssCwrdComponent (codewords)   │
- *   │    - StorageStaKycdComponent (keycards)     │
- *   │    - StorageKycdCwrdComponent (held cwrds)  │
- *   │    - StorageLatLnkComponent (lattice links) │
- *   │    - StorageStaTaskComponent (need-to-know) │
- *   │                                             │
- *   │  WRITES:                                    │
- *   │    - StorageAcssGrntTag or AcssDenyTag     │
- *   │    - StorageBufAudtComponent + AudtPendTag  │
- *   └─────────────────────────────────────────────┘
+ *   ┌─────────────────────────────────────────────────────────────┐
+ *   │  THIS SYSTEM: StorageAcssChkSystem                          │
+ *   │                                                             │
+ *   │  READS:                                                     │
+ *   │    StorageStaAcssRslvComponent (Schutzstufe, Regel, Etikett)│
+ *   │    StorageAcssOwnrTag (Eigentuemer-Vorgabe)                 │
+ *   │    StorageReqAcssComponent + StorageReqCredComponent        │
+ *   │    StorageLatLnkComponent + StorageLnkCnstComponent (Gitter)│
+ *   │                                                             │
+ *   │  WRITES:                                                    │
+ *   │    StorageAcssPassTag oder StorageAcssDenyTag               │
+ *   │    Pruefspur je ABLEHNUNG (StorageBufAudtComponent)         │
+ *   └─────────────────────────────────────────────────────────────┘
  *          │
- *          │ Request entity tagged with grant or deny
+ *          │ StorageAcssPassTag
  *          ▼
- *   StorageFileWritSystem processes granted requests
+ *   StorageAcssPolSystem (Sprossen 7-10) → Grant oder Deny → StorageFileWritSystem
  *
- * HUB Pattern (N/A - No Hub reads/writes)
+ * HUB Pattern (ARCH_ASE_HUB)
  *
- * READS (from Hub):
- *   (none)
+ * READS (from ase-storage internal):
+ *   StorageStaAcssRslvComponent → the resolution: protection level, rule, workflow label
+ *   StorageReqCredComponent     → the caller's keycard, unless the owner preset overrides it
+ *   StorageStaRelmComponent     → realm id, for the lattice key
  *
- * WRITES (to Hub):
- *   (none)
- *
- * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
- *   Wall clock for audit timestamps.
+ * WRITES (to ase-storage internal):
+ *   StorageAcssPassTag / StorageAcssDenyTag → das Zwischenergebnis der fuenf Schluessel-Tore
+ *   StorageBufAudtComponent                 → die Pruefspur-Zeile jeder Ablehnung
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -71,9 +119,6 @@
  * [ ] NO destroy() on other entities during iteration?
  * [ ] Cleanup System in Schedule::Conclusion?
  * [ ] NO local arrays/vectors for collection?
- * [ ] Safe deletion (first collect, then delete)?
- * [ ] Not deleting other entities during iteration?
- * [ ] Not invalidating references during iteration?
  * [ ] 1 File = 1 System?
  * [ ] Folder structure matches convention?
  * [ ] components/, systems/, src/ have IDENTICAL subfolder structure?
@@ -91,7 +136,6 @@
  * [ ] ONLY ase-containers for containers (NO std::vector, std::map, std::unordered_map!)
  * [ ] ONLY ase-types for Result/Option (NO std::optional, std::expected!)
  * [ ] std:: FORBIDDEN except: <cstdint>, <cmath> basics, <cassert>
- * [ ] NO ARRAYS! (use Entity-per-Item + Tags!)
  * [ ] CAUSAL CHAIN documented (Input → Processing → Output)
  * [ ] HUB Pattern documented (READS/WRITES)
  * [ ] hub::get() for reads
@@ -102,7 +146,7 @@
  * [ ] log::warn() if value EXISTS but invalid (e.g., health < 0, temp > 1000)
  * [ ] log::error() for EVERY NOT_FOUND check (see ase-log/log.hpp ERR::CAT::*)
  * [ ] Unused params: (void)dt; or commented parameter name
- * [ ] NO switch/case statements? (use Tag-filtered Views or lookup tables!)
+ * [ ] NO switch/case statements? (use Tag-filtered Views!)
  * [ ] NO if-else chains for type dispatch? (use separate Systems per type!)
  * [ ] NO instanceof/dynamic_cast checks? (use Tags for entity classification!)
  * [ ] NO factory patterns with type enums? (use Component composition!)
@@ -150,105 +194,42 @@
 // Components from same module
 #include <ase/storage/components/state/storage_req_acss_comp.hpp>
 #include <ase/storage/components/state/storage_req_cred_comp.hpp>
-#include <ase/storage/components/state/storage_acss_rule_comp.hpp>
 #include <ase/storage/components/state/storage_acss_cwrd_comp.hpp>
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
-#include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
-#include <ase/storage/components/state/storage_kycd_cwrd_comp.hpp>
+#include <ase/storage/components/state/storage_sta_acss_rslv_comp.hpp>
 #include <ase/storage/components/state/storage_lat_lnk_comp.hpp>
 #include <ase/storage/components/state/storage_lnk_cnst_comp.hpp>
-#include <ase/storage/components/state/storage_sta_task_comp.hpp>
-#include <ase/storage/components/state/storage_relm_idn_comp.hpp>
-#include <ase/storage/components/state/storage_rule_idn_comp.hpp>
-#include <ase/storage/components/state/storage_kycd_idn_comp.hpp>
 #include <ase/storage/components/state/storage_lnk_idn_comp.hpp>
-#include <ase/storage/components/state/storage_task_idn_comp.hpp>
+// Die Pruefspur-Zeile wird seit dem 2026-08-31 in DIESEM Rumpf gestellt, nicht mehr von einem
+// Helfer mit `ecs::Registry&` im Argument. Sie kam bis dahin transitiv ueber storage_acss_ladder;
+// wer einen Typ selbst benutzt, fuehrt seine Kante selbst.
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
 #include <ase/storage/components/state/storage_audt_outc_comp.hpp>
+#include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
 #include <ase/storage/components/tag/storage_acss_grnt_tag.hpp>
 #include <ase/storage/components/tag/storage_acss_deny_tag.hpp>
-#include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
-#include <ase/storage/components/tag/storage_relm_cncm_tag.hpp>
-#include <ase/storage/components/tag/storage_relm_glob_tag.hpp>
+#include <ase/storage/components/tag/storage_acss_rslv_tag.hpp>
+#include <ase/storage/components/tag/storage_acss_pass_tag.hpp>
+#include <ase/storage/components/tag/storage_acss_ownr_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/storage_acss_index_resource_manager.hpp>
+#include <ase/storage/storage_acss_ladder.hpp>
 #include <ase/storage/types.hpp>
 #include <ase/utils/strops.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
-using namespace entt::literals;
+#include <cstdint>
+
+#include <entt/core/hashed_string.hpp>
 
 namespace ase::storage {
 
+using namespace entt::literals;
+
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
-// IMPORTANT: Use anonymous namespace, NOT static keyword!
-//   namespace { void helper() {...} }   // CORRECT
-//   static void helper() {...}          // WRONG!
-// NO STRUCTS HERE! Structs = Data = Components!
 // NO View/Query operations in helpers! Only pure math!
 namespace {
-
-// The rolling fold below must produce the SAME numbers entt produces, because the rule
-// side stores entt hashes. Asserting it at compile time turns a silent divergence - the
-// kind that denies every access and looks like a data problem - into a build failure.
-static_assert(((ACSS_FNV_OFFSET ^ static_cast<uint32_t>('a')) * ACSS_FNV_PRIME)
-                  == entt::hashed_string::value("a", 1),
-              "ACSS_FNV_* no longer match entt::hashed_string");
-
-void emit_audit(ecs::Registry& registry, uint32_t relm_ref, uint32_t proj_ref,
-                const char* user_id, uint8_t action, const char* path,
-                uint64_t timestamp, uint8_t result, const char* reason) {
-    auto aud_ent = registry.create();
-    auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
-    aud.relm_ref = relm_ref;
-    aud.proj_ref = proj_ref;
-    ase::utils::str_copy(aud.user_id, 64, user_id);
-    ase::utils::str_copy(aud.path, 256, path);
-    aud.timestamp = timestamp;
-    auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-    outc.action = action;
-    outc.result = result;
-    ase::utils::str_copy(outc.reason, 64, reason);
-    registry.emplace<StorageAudtPendTag>(aud_ent);
-}
-
-// Hash of EVERY prefix of the path, in one pass: out[L] is the hash of path[0..L).
-//
-// FNV-1a folds left to right - hash = (hash ^ c) * prime - so the running value after L
-// characters IS the hash of the L-character prefix. One walk of the path therefore
-// yields every prefix hash a rule could ask about, and a location rule is then a single
-// 32-bit equality. Before, every rule walked the path again.
-//
-// The semantics are the ones the character comparison had, EXACTLY: a location rule
-// matched when the path began with the pattern, the pattern's own trailing wildcard
-// character included. Nothing here widens or narrows that - a refactor that quietly
-// changed which assets a rule governs would be a change to access control disguised as
-// a performance fix.
-void path_prefix_hashes(const char* path, uint32_t path_len, uint32_t* out) {
-    uint32_t running = ACSS_FNV_OFFSET;
-    out[0] = running;
-    for (uint32_t i = 0; i < path_len; ++i) {
-        running = (running ^ static_cast<uint32_t>(path[i])) * ACSS_FNV_PRIME;
-        out[i + 1u] = running;
-    }
-}
-
-// Hashes of every EXTENSION an asset path ends with: each suffix beginning at a '.'.
-// "build-1.2.3.spdx.json" yields ".json", ".spdx.json", ".3.spdx.json" and so on, so an
-// extension rule finds itself no matter how many dots the version number carries.
-uint32_t path_extension_hashes(const char* path, uint32_t path_len, uint32_t* out_hash,
-                               uint32_t* out_len, uint32_t max_out) {
-    uint32_t count = 0;
-    for (uint32_t at = 0; at < path_len && count < max_out; ++at) {
-        if (path[at] != '.') { continue; }
-        const uint32_t len = path_len - at;
-        out_hash[count] = entt::hashed_string::value(path + at, len);
-        out_len[count] = len;
-        ++count;
-    }
-    return count;
-}
 
 }  // anonymous namespace
 
@@ -276,225 +257,76 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
     }
     auto& idx = **idx_ptr;
 
-    // SINGLE-PASS: evaluate each pending access request through the canonical Section 14.1 ladder.
-    // Request entities carry clearance + permissions pre-resolved from the validated keycard.
-    // The ladder is strictly ordered and every GRANT happens at step 10 ONLY. There are no
-    // pre-ladder shortcut grants: the public realm and the realm-owner power are modelled
-    // INSIDE the ladder (PUBLIC protection rule + owner keycard preset) so they too pass
-    // through clearance/codeword/permission/label/need-to-know/quota.
-    // Tag-filtered classification views, built ONCE. A request names its realm by entity
-    // id, so the classification is a membership test on the filtered view — O(1), and the
-    // tag stays where the ECS rules want it: in the View filter, never in an all_of<Tag>
-    // runtime check. Both were per-request scans over every realm before (WS-K.2c).
-    auto pub_view = registry.view<StorageStaRelmComponent, StorageRelmGlobTag>();
-    auto cnc_view = registry.view<StorageStaRelmComponent, StorageRelmCncmTag>();
+    // Die Eigentuemer-Klassifikation als Tag-gefilterte View, EINMAL gebaut. Die Zugehoerigkeit
+    // ist dann ein O(1)-Test auf der gefilterten Menge - nie ein all_of<Tag> im Rumpf
+    // (WRFL_ASE_TAGGED_VIEWS), und dieselbe Form, die die Aufloesung fuer Revier-Klassen nutzt.
+    auto own_view = registry.view<StorageAcssOwnrTag>();
 
-    // Both halves of the request in ONE view: what is asked (req) and what the
-    // caller brings (cred). A request without credentials never reaches the ladder -
-    // the view drops it, which is the same denial the empty user_id check gives.
-    auto req_view = registry.view<StorageReqAcssComponent, StorageReqCredComponent>(
+    // Nur aufgeloeste, noch unentschiedene Anfragen. Ohne Aufloesung gibt es weder Schutzstufe
+    // noch Regel - die View laesst sie gar nicht erst herein, was dieselbe Wirkung hat wie eine
+    // Abweisung und keine zweite Stelle schafft, an der ueber Zulaessigkeit entschieden wird.
+    auto req_view = registry.view<StorageReqAcssComponent, StorageReqCredComponent,
+                                  StorageStaAcssRslvComponent, StorageAcssRslvTag>(
         entt::exclude<StorageAcssGrntTag, StorageAcssDenyTag>);
     for (auto entity : req_view) {
         auto& req  = req_view.get<StorageReqAcssComponent>(entity);
         auto& cred = req_view.get<StorageReqCredComponent>(entity);
+        auto& rslv = req_view.get<StorageStaAcssRslvComponent>(entity);
 
-        // ── Step 1: KEYCARD VALID ─ authenticated identity present
-        // user_id is set by the HTTP route from the keycard JWT (validated by
-        // StorageKycdVldSystem); an empty user_id means no valid keycard reached here.
-        if (cred.user_id[0] == '\0') {
-            registry.emplace<StorageAcssDenyTag>(entity);
-            emit_audit(registry, req.relm_ref, req.proj_ref, "", req.action, req.path, now, AUD_DENIED, "not_authenticated");
-            continue;
-        }
+        const bool owner_preset = own_view.contains(entity);
 
-        // Action → required permission bitflag (used by step 3 lattice and step 6 permission)
+        // Action → required permission bitflag (used by the lattice and the permission gate)
         uint16_t required_perm = PERM_READ;
         if (req.action == AUD_WRITE)   { required_perm = PERM_WRITE; }
         if (req.action == AUD_DELETE)  { required_perm = PERM_DELETE; }
         if (req.action == AUD_PROMOTE) { required_perm = PERM_PROMOTE; }
         if (req.action == AUD_MANAGE)  { required_perm = PERM_MANAGE; }
 
-        // ── Step 2: REALM MEMBERSHIP + CONCEALMENT ─ resolve the target realm core data
-        char     target_id[MAX_REALM_ID] = {};
-        char     target_owner[MAX_OWNER_ID] = {};
-        uint8_t  target_tier = TIER_INDIE;
-        bool     realm_found = false;
-        bool     public_realm = false;
-        bool     owner_preset = false;
-        // req.relm_ref IS the realm's entity id, so the realm is reached directly. The
-        // former version scanned EVERY realm and compared each entity id against the one
-        // it already held — a linear search for a lookup the registry answers in O(1),
-        // and it ran once per request (WS-K.2c).
+        // Effective keycard attributes. The owner preset is the in-ladder model of former
+        // realm_owner power: clearance 9, all permissions, wildcard codeword. Without the preset,
+        // the auth-header values are used verbatim. The public realm needs no boost — its PUBLIC
+        // protection rule lets the auth-header values pass.
+        const uint8_t  eff_clrn = owner_preset ? ACSS_OWNER_CLEARANCE : cred.clrn;
+        const uint16_t eff_perm = owner_preset ? ACSS_OWNER_PERMS     : cred.perm;
+
+        // Die Revier-Kennung steht auf dem Revier-Datensatz, nicht in der Aufloesungs-Komponente:
+        // ein zweiter Ort waere ein zweiter Ort, an dem sie falsch sein kann. Verschwindet die
+        // Zeile zwischen den beiden Systemen, faellt der Zugriff fail-closed - und sagt dabei
+        // nicht mehr, als er weiss.
         const auto relm_ent = static_cast<ecs::Entity>(req.relm_ref);
-        // The requester's identity, hashed ONCE per request. Every identity test below
-        // is a 32-bit equality against this value: identity is a lookup, and a lookup
-        // compares hashes, never characters (WRFL_ASE_STRING_HANDLING Section 3).
-        const uint32_t user_hash = entt::hashed_string(cred.user_id).value();
-        if (auto* rc = registry.try_get<StorageStaRelmComponent>(relm_ent)) {
-            realm_found = true;
-            ase::utils::str_copy(target_id, MAX_REALM_ID, rc->id);
-            ase::utils::str_copy(target_owner, MAX_OWNER_ID, rc->owner);
-            target_tier = rc->tier;
-            // Identity lives beside the record. A realm without it cannot be classified
-            // at all, so its absence is reported rather than silently treated as private.
-            auto* rc_idn = registry.try_get<StorageRelmIdnComponent>(relm_ent);
-            if (rc_idn == nullptr) {
-                log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageAcssChkSystem",
-                           req.relm_ref, "StorageRelmIdnComponent");
-            } else {
-                // Public 'ase' realm by id is the in-ladder PUBLIC protection source
-                public_realm = rc_idn->id_hash == ACSS_REALM_PUBLIC_HASH;
-                // Direct owner of this realm → owner keycard preset (ARCH :819)
-                owner_preset = rc_idn->owner_hash == user_hash;
-            }
-        }
-        // Public realm classification via the tag on THAT realm (a realm carrying the
-        // StorageRelmGlobTag is public regardless of its id naming).
-        if (realm_found && !public_realm) {
-            public_realm = pub_view.contains(relm_ent);
-        }
-        // Parent-realm ownership: owner of "org/adg" governs "org/adg/projects/x".
-        // The condition the scan tested - rc.id is a prefix of target_id AND the next
-        // character is '/' - is exactly "rc.id is a path ANCESTOR of target_id", and the
-        // ancestors of a path can be read off the path itself. Enumerating them costs
-        // path depth and hits the index once per step, where the scan cost one pass over
-        // every realm per request (WS-K.2c).
-        if (realm_found && !owner_preset) {
-            const uint32_t target_len = ase::utils::str_len(target_id, MAX_REALM_ID);
-            char ancestor[MAX_REALM_ID] = {};
-            for (uint32_t cut = 1u; cut < target_len && !owner_preset; ++cut) {
-                if (target_id[cut] != '/') { continue; }
-                for (uint32_t i = 0; i < cut; ++i) { ancestor[i] = target_id[i]; }
-                ancestor[cut] = '\0';
-                const uint32_t ancestor_hash = entt::hashed_string(ancestor).value();
-                const uint32_t cand = idx.get_realm(static_cast<uint64_t>(ancestor_hash));
-                if (cand == INVALID_ENTITY) { continue; }
-                auto* rc_idn =
-                    registry.try_get<StorageRelmIdnComponent>(static_cast<ecs::Entity>(cand));
-                if (rc_idn == nullptr) { continue; }
-                // Identity is the hash. The bucket key and the stored id_hash are the
-                // same number, so agreeing on it IS the confirmation - there is nothing
-                // a character comparison would add beyond the cost of walking the string.
-                if (rc_idn->id_hash != ancestor_hash) { continue; }
-                if (rc_idn->owner_hash == user_hash) {
-                    owner_preset = true;
-                }
-            }
-        }
-        // Concealment via Tag-filtered View: a concealed realm is invisible to non-owners.
-        // Public realms are never concealed; the owner-preset always sees its own realm.
-        bool concealed = false;
-        if (realm_found && !public_realm && !owner_preset) {
-            concealed = cnc_view.contains(relm_ent);
-        }
-        if (!realm_found || concealed) {
-            // Concealment leaks nothing: deny as realm_not_found, never access_denied.
+        auto* relm_ptr = registry.try_get<StorageStaRelmComponent>(relm_ent);
+        if (relm_ptr == nullptr) {
+            log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageAcssChkSystem",
+                       req.relm_ref, "StorageStaRelmComponent");
             registry.emplace<StorageAcssDenyTag>(entity);
-            emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "realm_not_found");
+            auto aud_ent = registry.create();
+            auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
+            aud.relm_ref = req.relm_ref;
+            aud.proj_ref = req.proj_ref;
+            ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, cred.user_id);
+            ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
+            aud.timestamp = now;
+            auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+            outc.action = req.action;
+            outc.result = AUD_DENIED;
+            ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "realm_not_found");
+            registry.emplace<StorageAudtPendTag>(aud_ent);
             continue;
         }
+        char target_id[MAX_REALM_ID] = {};
+        ase::utils::str_copy(target_id, MAX_REALM_ID, relm_ptr->id);
 
-        // Effective keycard attributes for the rest of the ladder. The owner preset is the
-        // in-ladder model of former realm_owner power: clearance 9, all permissions, wildcard
-        // codeword. Without the preset, the auth-header values are used verbatim. The public
-        // realm needs no boost — its PUBLIC protection rule lets the auth-header values pass.
-        (void)target_owner;
-        uint8_t  eff_clrn = owner_preset ? ACSS_OWNER_CLEARANCE : cred.clrn;
-        uint16_t eff_perm = owner_preset ? ACSS_OWNER_PERMS     : cred.perm;
+        // Identity is a lookup, and a lookup compares hashes, never characters
+        // (WRFL_ASE_STRING_HANDLING Section 3). Hashed ONCE per request, like in the resolution.
+        const uint32_t user_hash = entt::hashed_string(cred.user_id).value();
 
-        // ── Step 2 (cont.): match the ACL rule for this path ─ clearance/label/codeword src.
-        // The public realm contributes an implicit PUBLIC protection rule (level 0, no
-        // codewords) so engine defaults stay readable by every authenticated user — this is
-        // the in-ladder replacement of the old pre-ladder "ase_shared" grant.
-        uint8_t  required_protection = PROTECTION_PUBLIC;
-        uint32_t matched_rule = INVALID_ENTITY;
-        uint32_t rule_label_hash = 0;
-        // The request's own prefixes and extensions, hashed ONCE. Three separate gates
-        // below ask "does this path lie under X" - the ACL rules, the lattice share and
-        // the need-to-know scope - and all three read these same numbers.
+        // Die Praefix-Hashes des Pfades, einmal je Anfrage: zwei Tore fragen "liegt dieser Pfad
+        // unter X" - der Gitter-Anteil hier, die ACL-Regel drueben - und beide lesen dieselben
+        // Zahlen (storage_acss_ladder.hpp). Der Kenntnisnahme-Bereich, der sie frueher ebenfalls
+        // las, steht seit dem 2026-08-31 in StorageAcssPolSystem und leitet sie dort neu ab.
         uint32_t pfx_hash[MAX_PATH_LEN + 1] = {};
-        uint32_t ext_hash[ACSS_MAX_PATH_PARTS] = {};
-        uint32_t ext_len[ACSS_MAX_PATH_PARTS] = {};
         const uint32_t path_len = ase::utils::str_len(req.path, MAX_PATH_LEN);
         path_prefix_hashes(req.path, path_len, pfx_hash);
-        const uint32_t ext_n = path_extension_hashes(req.path, path_len, ext_hash,
-                                                     ext_len, ACSS_MAX_PATH_PARTS);
-        {
-            // Pattern semantics (types.hpp ACSS_MATCH_SUFFIX_BONUS): an extension rule
-            // ("*.sig" governs companion artifacts that sit BESIDE binaries, where no
-            // location can reach them) carries StorageAcssRuleSufxTag; every other rule
-            // is a location rule. The MOST SPECIFIC rule wins (extension over location,
-            // longer literal over shorter) — never first-iteration order, which is
-            // storage-order dependent and would let a broad location rule swallow the
-            // "*.sig" codeword requirement.
-            //
-            // The request's own locations and extensions are hashed ONCE, above; each
-            // rule is then one 32-bit equality against them. The two kinds are matched by
-            // two different computations, so they are two loops over two Tag-separated
-            // buckets - never one loop that reads a discriminator and branches.
-            uint32_t best_score = 0;
-            const uint32_t loc_rule_count = idx.get_location_rule_count(req.relm_ref);
-            for (uint32_t rule_index = 0; rule_index < loc_rule_count; ++rule_index) {
-                const uint32_t acl_id = idx.get_location_rule(req.relm_ref, rule_index);
-                if (acl_id == INVALID_ENTITY) { continue; }
-                const auto acl_ent = static_cast<ecs::Entity>(acl_id);
-                auto* rule_ptr = registry.try_get<StorageAcssRuleComponent>(acl_ent);
-                if (rule_ptr == nullptr) { continue; }
-                auto& rule = *rule_ptr;
-                // rule.relm_ref == req.relm_ref holds by construction of the bucket.
-                if (rule.proj_ref != req.proj_ref && rule.proj_ref != 0) { continue; }
-                auto* rule_idn = registry.try_get<StorageRuleIdnComponent>(acl_ent);
-                if (rule_idn == nullptr) {
-                    log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageAcssChkSystem",
-                               acl_id, "StorageRuleIdnComponent");
-                    continue;
-                }
-                // The path must be at least as long as the pattern and must begin with
-                // it - the same condition the character comparison enforced, now one
-                // 32-bit equality against the prefix hash of exactly that length.
-                if (rule_idn->match_len < 1u) { continue; }
-                if (rule_idn->match_len > path_len) { continue; }
-                if (pfx_hash[rule_idn->match_len] != rule_idn->match_hash) { continue; }
-                const uint32_t score = 1u + rule_idn->match_len;
-                if (score <= best_score) { continue; }
-                best_score = score;
-                required_protection = rule.protection_level;
-                matched_rule = acl_id;
-                rule_label_hash = rule_idn->label_hash;
-            }
-
-            const uint32_t ext_rule_count = idx.get_extension_rule_count(req.relm_ref);
-            for (uint32_t rule_index = 0; rule_index < ext_rule_count; ++rule_index) {
-                const uint32_t acl_id = idx.get_extension_rule(req.relm_ref, rule_index);
-                if (acl_id == INVALID_ENTITY) { continue; }
-                const auto acl_ent = static_cast<ecs::Entity>(acl_id);
-                auto* rule_ptr = registry.try_get<StorageAcssRuleComponent>(acl_ent);
-                if (rule_ptr == nullptr) { continue; }
-                auto& rule = *rule_ptr;
-                if (rule.proj_ref != req.proj_ref && rule.proj_ref != 0) { continue; }
-                auto* rule_idn = registry.try_get<StorageRuleIdnComponent>(acl_ent);
-                if (rule_idn == nullptr) {
-                    log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageAcssChkSystem",
-                               acl_id, "StorageRuleIdnComponent");
-                    continue;
-                }
-                if (rule_idn->match_len < 1u) { continue; }
-                bool match = false;
-                for (uint32_t i = 0; i < ext_n; ++i) {
-                    if (ext_hash[i] == rule_idn->match_hash &&
-                        ext_len[i] == rule_idn->match_len) { match = true; break; }
-                }
-                if (!match) { continue; }
-                // Score parity with the character version: it scored on the FULL pattern
-                // length, wildcard included, which is one more than the literal.
-                const uint32_t score = ACSS_MATCH_SUFFIX_BONUS + rule_idn->match_len + 1u;
-                if (score <= best_score) { continue; }
-                best_score = score;
-                required_protection = rule.protection_level;
-                matched_rule = acl_id;
-                rule_label_hash = rule_idn->label_hash;
-            }
-        }
 
         // ── Step 3: LATTICE ─ cross-realm access requires a valid, bilateral link.
         // A request whose path lies in another realm's shared prefix is only admissible
@@ -539,7 +371,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
                 bool approved = link_cnst->approved_by_source != 0 && link_cnst->approved_by_target != 0;
                 bool live     = link.expires_at == 0 || link.expires_at > now;
                 bool perm_ok  = (link.permissions & required_perm) != 0;
-                bool clrn_ok  = required_protection <= link.max_clearance;
+                bool clrn_ok  = rslv.required_protection <= link.max_clearance;
                 if (approved && live && perm_ok && clrn_ok) {
                     lattice_ok = true;
                     break;
@@ -547,31 +379,53 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
             if (lattice_required && !lattice_ok) {
                 registry.emplace<StorageAcssDenyTag>(entity);
-                emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "no_lattice_link");
+                auto aud_ent = registry.create();
+                auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
+                aud.relm_ref = req.relm_ref;
+                aud.proj_ref = req.proj_ref;
+                ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, cred.user_id);
+                ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
+                aud.timestamp = now;
+                auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+                outc.action = req.action;
+                outc.result = AUD_DENIED;
+                ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "no_lattice_link");
+                registry.emplace<StorageAudtPendTag>(aud_ent);
                 continue;
             }
         }
 
         // ── Step 4: CLEARANCE ─ vertical Schutzstufe gate (public realm rule keeps PUBLIC)
-        if (eff_clrn < required_protection) {
+        if (eff_clrn < rslv.required_protection) {
             registry.emplace<StorageAcssDenyTag>(entity);
-            emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "insufficient_clearance");
+            auto aud_ent = registry.create();
+            auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
+            aud.relm_ref = req.relm_ref;
+            aud.proj_ref = req.proj_ref;
+            ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, cred.user_id);
+            ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
+            aud.timestamp = now;
+            auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+            outc.action = req.action;
+            outc.result = AUD_DENIED;
+            ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "insufficient_clearance");
+            registry.emplace<StorageAudtPendTag>(aud_ent);
             continue;
         }
 
         // ── Step 5: CODEWORD ─ horizontal gate; keycard must hold EVERY required codeword.
         // The owner-preset wildcard satisfies any requirement; a held "ALL" codeword too.
         // The public realm carries no required codewords, so public reads pass unaffected.
-        if (matched_rule != INVALID_ENTITY && !owner_preset) {
+        if (rslv.matched_rule != INVALID_ENTITY && !owner_preset) {
             // Three nested walks - required codewords, the user's keycards, and the
             // codewords each keycard carries - collapse into one walk over the rule's
             // own requirements plus four membership questions. The four cases are the
             // same the nested version tested: the keycard may be scoped to this realm or
             // global (scope 0), and a held wildcard satisfies any requirement.
             bool missing_codeword = false;
-            const uint32_t required_count = idx.get_required_count(matched_rule);
+            const uint32_t required_count = idx.get_required_count(rslv.matched_rule);
             for (uint32_t required_index = 0; required_index < required_count; ++required_index) {
-                const uint32_t cwrd_id = idx.get_required(matched_rule, required_index);
+                const uint32_t cwrd_id = idx.get_required(rslv.matched_rule, required_index);
                 if (cwrd_id == INVALID_ENTITY) { continue; }
                 auto* required =
                     registry.try_get<StorageAcssCwrdComponent>(static_cast<ecs::Entity>(cwrd_id));
@@ -590,7 +444,18 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
             if (missing_codeword) {
                 registry.emplace<StorageAcssDenyTag>(entity);
-                emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "missing_codeword");
+                auto aud_ent = registry.create();
+                auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
+                aud.relm_ref = req.relm_ref;
+                aud.proj_ref = req.proj_ref;
+                ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, cred.user_id);
+                ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
+                aud.timestamp = now;
+                auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+                outc.action = req.action;
+                outc.result = AUD_DENIED;
+                ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "missing_codeword");
+                registry.emplace<StorageAudtPendTag>(aud_ent);
                 continue;
             }
         }
@@ -598,84 +463,26 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // ── Step 6: PERMISSION ─ action bitflag gate (owner preset holds all flags)
         if (!(eff_perm & required_perm)) {
             registry.emplace<StorageAcssDenyTag>(entity);
-            emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "permission_denied");
+            auto aud_ent = registry.create();
+            auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
+            aud.relm_ref = req.relm_ref;
+            aud.proj_ref = req.proj_ref;
+            ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, cred.user_id);
+            ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
+            aud.timestamp = now;
+            auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+            outc.action = req.action;
+            outc.result = AUD_DENIED;
+            ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "permission_denied");
+            registry.emplace<StorageAudtPendTag>(aud_ent);
             continue;
         }
 
-        // ── Step 7: LABEL ─ workflow-status gate.
-        // retired = withdrawn build (no access); draft/review = team-only (clearance >= TEAM).
-        if (rule_label_hash == EDGE_LABEL_RETIRED_HASH) {
-            registry.emplace<StorageAcssDenyTag>(entity);
-            emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "retired_asset");
-            continue;
-        }
-        if ((rule_label_hash == EDGE_LABEL_DRAFT_HASH ||
-             rule_label_hash == EDGE_LABEL_REVIEW_HASH) &&
-            eff_clrn < PROTECTION_TEAM) {
-            registry.emplace<StorageAcssDenyTag>(entity);
-            emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "label_restricted");
-            continue;
-        }
-
-        // ── Step 8: NEED-TO-KNOW ─ active task scoping (Enterprise).
-        // When the assignee has any active need-to-know task in this project, access is
-        // restricted to that task's path scope. Owner-preset governs all and is exempt.
-        if (!owner_preset && req.proj_ref != 0) {
-            bool has_active_task = false;
-            bool path_in_scope   = false;
-            // Tasks are indexed under their project, so the project filter is the bucket
-            // itself and only the assignee still has to be compared.
-            const uint32_t task_count = idx.get_task_count(req.proj_ref);
-            for (uint32_t task_index = 0; task_index < task_count; ++task_index) {
-                const uint32_t task_id = idx.get_task(req.proj_ref, task_index);
-                if (task_id == INVALID_ENTITY) { continue; }
-                auto* task_ptr =
-                    registry.try_get<StorageStaTaskComponent>(static_cast<ecs::Entity>(task_id));
-                if (task_ptr == nullptr) { continue; }
-                auto& task = *task_ptr;
-                auto* task_idn =
-                    registry.try_get<StorageTaskIdnComponent>(static_cast<ecs::Entity>(task_id));
-                if (task_idn == nullptr) {
-                    log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageAcssChkSystem",
-                               task_id, "StorageTaskIdnComponent");
-                    continue;
-                }
-                if (task_idn->assignee_hash != user_hash) { continue; }
-                bool live = (task.starts_at == 0 || task.starts_at <= now) &&
-                            (task.expires_at == 0 || task.expires_at > now);
-                if (!live) { continue; }
-                has_active_task = true;
-                if (task_idn->scope_len < 1u) { continue; }
-                if (task_idn->scope_len > path_len) { continue; }
-                if (pfx_hash[task_idn->scope_len] == task_idn->scope_hash) {
-                    path_in_scope = true;
-                    break;
-                }
-            }
-            if (has_active_task && !path_in_scope) {
-                registry.emplace<StorageAcssDenyTag>(entity);
-                emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "need_to_know");
-                continue;
-            }
-        }
-
-        // ── Step 9: QUOTA ─ realm storage budget gate (WRITE only).
-        // A write is refused when the realm's measured usage already meets its tier limit.
-        if (req.action == AUD_WRITE) {
-            uint64_t tier_limit = QUOTA_INDIE_STORAGE;
-            if (target_tier == TIER_PRO)        { tier_limit = QUOTA_PRO_STORAGE; }
-            if (target_tier == TIER_ENTERPRISE) { tier_limit = QUOTA_ENT_STORAGE; }
-            uint64_t used = mgr.get_realm_usage(target_id);
-            if (used >= tier_limit) {
-                registry.emplace<StorageAcssDenyTag>(entity);
-                emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_DENIED, "quota_exceeded");
-                continue;
-            }
-        }
-
-        // ── Step 10: GRANT + AUDIT(GRANTED) ─ reached only after every applicable step passed
-        registry.emplace<StorageAcssGrntTag>(entity);
-        emit_audit(registry, req.relm_ref, req.proj_ref, cred.user_id, req.action, req.path, now, AUD_GRANTED, "");
+        // ── DIE FUENF SCHLUESSEL-TORE HABEN GEHALTEN ─ die Anfrage geht an die Politik-Tore.
+        // KEINE PRUEFSPUR HIER, und das ist die Naht: entschieden ist noch nichts. Eine Zeile,
+        // die "gewaehrt" oder "abgelehnt" behauptet, gehoert an den Ausgang, der es entscheidet,
+        // und der liegt in StorageAcssPolSystem auf Sprosse 10.
+        registry.emplace<StorageAcssPassTag>(entity);
     }
 }
 

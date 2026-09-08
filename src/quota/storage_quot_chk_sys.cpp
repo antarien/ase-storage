@@ -164,17 +164,16 @@ namespace ase::storage {
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 namespace {
 
-// Change-based publish of one Hub value: read-validate-compare-set, so the
-// 1Hz Observation scan never floods the Hub broadcast with unchanged values.
-void publish_changed(ecs::Registry& registry, uint32_t owner, uint32_t value_id, float value) {
-    float current = hub::get(registry, owner, value_id);
-    if (ase::types::is_not_found(current)) {
-        current = -1.0f;  // unpublished — force the first publish
-    }
-    if (current == value) return;
-    hub::set(registry, owner, value_id, value);
-}
-
+/* INTENTIONALLY EMPTY.
+ *
+ * `publish_changed(ecs::Registry&, ...)` stand hier: lesen, pruefen, vergleichen, setzen -
+ * vier Hub-Zugriffe hinter einem Aufruf. Eine Funktion, die die Registry nimmt, ist kein
+ * Helfer, sondern Hub-I/O in Funktionsgestalt, und kein Zaehler sieht sie
+ * (INST_ASE_LINT.md, "Anonymous Namespace"). Die vier Veroeffentlichungen stehen jetzt
+ * offen in tick(), jede mit ihrer eigenen is_not_found()-Pruefung am Lesepunkt - die
+ * Form, die der Validator als einzige akzeptiert.
+ *
+ * Only pure functions over primitive types belong here - no registry, no view, no query. */
 }  // anonymous namespace
 
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
@@ -226,10 +225,56 @@ void StorageQuotChkSystem::tick(ecs::Registry& registry, float dt) {
         // float32 and a single cast corrupts anything above 2^24; the client
         // widget reconstructs HI*2^24 + LO to the exact byte.
         const uint32_t owner = entt::hashed_string(relm.id).value();
-        publish_changed(registry, owner, "STG_RELM_USED_HI"_hs, static_cast<float>(used >> 24));
-        publish_changed(registry, owner, "STG_RELM_USED_LO"_hs, static_cast<float>(used & 0xFFFFFFu));
-        publish_changed(registry, owner, "STG_RELM_QUOTA_HI"_hs, static_cast<float>(quot.quota_bytes >> 24));
-        publish_changed(registry, owner, "STG_RELM_QUOTA_LO"_hs, static_cast<float>(quot.quota_bytes & 0xFFFFFFu));
+        /**
+         * VIER VEROEFFENTLICHUNGEN, JEDE AENDERUNGSBASIERT.
+         *
+         * Gelesen wird VOR dem Schreiben und nur bei Abweichung gesetzt, damit der
+         * 1-Hz-Observation-Gang die Hub-Verteilung nicht mit unveraenderten Werten flutet.
+         * `hub::set` ist selbst aenderungsbasiert; der Vergleich hier spart zusaetzlich den
+         * Schreibaufruf. Ein abwesender Schluessel wird auf -1.0f abgebildet - ein Wert, den
+         * keine der vier Groessen annehmen kann - und erzwingt damit die ERSTE
+         * Veroeffentlichung, statt sie als "unveraendert" zu verschlucken.
+         *
+         * DIE HI/LO-ZERLEGUNG IST EIN PAAR UND KEIN ZUFALL: HI traegt `>> 24`, LO traegt
+         * `& 0xFFFFFFu`, und das Widget setzt daraus HI*2^24 + LO auf das exakte Byte
+         * zusammen. Wer eine der vier Zeilen auf die andere Haelfte umstellt, liefert eine
+         * Zahl, die plausibel aussieht und um Groessenordnungen falsch ist.
+         */
+        float cur_used_hi = hub::get(registry, owner, "STG_RELM_USED_HI"_hs);
+        if (ase::types::is_not_found(cur_used_hi)) {
+            cur_used_hi = -1.0f;  // unpublished — force the first publish
+        }
+        const float val_used_hi = static_cast<float>(used >> 24);
+        if (cur_used_hi != val_used_hi) {
+            hub::set(registry, owner, "STG_RELM_USED_HI"_hs, val_used_hi);
+        }
+
+        float cur_used_lo = hub::get(registry, owner, "STG_RELM_USED_LO"_hs);
+        if (ase::types::is_not_found(cur_used_lo)) {
+            cur_used_lo = -1.0f;  // unpublished — force the first publish
+        }
+        const float val_used_lo = static_cast<float>(used & 0xFFFFFFu);
+        if (cur_used_lo != val_used_lo) {
+            hub::set(registry, owner, "STG_RELM_USED_LO"_hs, val_used_lo);
+        }
+
+        float cur_quota_hi = hub::get(registry, owner, "STG_RELM_QUOTA_HI"_hs);
+        if (ase::types::is_not_found(cur_quota_hi)) {
+            cur_quota_hi = -1.0f;  // unpublished — force the first publish
+        }
+        const float val_quota_hi = static_cast<float>(quot.quota_bytes >> 24);
+        if (cur_quota_hi != val_quota_hi) {
+            hub::set(registry, owner, "STG_RELM_QUOTA_HI"_hs, val_quota_hi);
+        }
+
+        float cur_quota_lo = hub::get(registry, owner, "STG_RELM_QUOTA_LO"_hs);
+        if (ase::types::is_not_found(cur_quota_lo)) {
+            cur_quota_lo = -1.0f;  // unpublished — force the first publish
+        }
+        const float val_quota_lo = static_cast<float>(quot.quota_bytes & 0xFFFFFFu);
+        if (cur_quota_lo != val_quota_lo) {
+            hub::set(registry, owner, "STG_RELM_QUOTA_LO"_hs, val_quota_lo);
+        }
 
         if (used > quot.quota_bytes) {
             // MIGRIERT. Hier stand ein Vermerk, dessen Praemisse falsch war: er behauptete,

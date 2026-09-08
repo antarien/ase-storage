@@ -195,22 +195,18 @@ void remove_if_present(StorageResourceManager& mgr, const char* asset_abs, const
     }
 }
 
-// Audit record for a retention removal (mirror storage_acss_chk_sys emit_audit).
-void emit_cln_audit(ecs::Registry& registry, uint32_t relm_ref, const char* path,
-                    uint64_t timestamp) {
-    auto aud_ent = registry.create();
-    auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
-    aud.relm_ref = relm_ref;
-    aud.proj_ref = 0;
-    ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, "system:wflw_cln");
-    ase::utils::str_copy(aud.path, MAX_PATH_LEN, path);
-    aud.timestamp = timestamp;
-    auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-    outc.action = AUD_DELETE;
-    outc.result = AUD_GRANTED;
-    ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "wflw_retention(90d)");
-    registry.emplace<StorageAudtPendTag>(aud_ent);
-}
+// Audit record for a retention removal. Dieselbe FORM wie in der Zugriffsleiter — dort steht sie
+// seit dem 2026-08-31 ebenfalls offen im Rumpf jeder entscheidenden Stelle. Der frueher hier
+// genannte Bezugspunkt `emit_audit` existiert nicht mehr; er war selbst ein Helfer mit
+// `ecs::Registry&` im Argument.
+/* HIER STAND `emit_cln_audit(ecs::Registry&, ...)`.
+ *
+ * Sie erzeugte eine Entity, legte zwei Components an und setzte eine Marke - also
+ * Entity-Lebenszeit hinter einem Aufruf. Eine Funktion, die die Registry nimmt, ist kein
+ * Helfer, und kein Zaehler sieht sie (INST_ASE_LINT.md, "Anonymous Namespace"). Die
+ * Pruefspur wird jetzt an ihrer einen Aufrufstelle in tick() geschrieben.
+ *
+ * Only pure functions over primitive types belong here - no registry, no view, no query. */
 
 }  // anonymous namespace
 
@@ -285,7 +281,34 @@ void StorageWflwClnSystem::tick(ecs::Registry& registry, float dt) {
         remove_if_present(mgr, asset_abs, WFLW_ART_SBOM);
         remove_if_present(mgr, asset_abs, WFLW_ART_SMOKE);
 
-        emit_cln_audit(registry, relm_ref, retr.path, now);
+        /**
+         * PRUEFSPUR FUER DIE AUFBEWAHRUNGSLOESCHUNG.
+         *
+         * `user_id` traegt "system:wflw_cln" und keinen Menschen: diese Loeschung hat keinen
+         * Antragsteller, sie faellt aus der Frist. Wer das Feld leer laesst, macht aus einer
+         * belegten Systemhandlung eine anonyme.
+         *
+         * `result` ist AUD_GRANTED und nicht etwa "ausgefuehrt": die Frist IST die Erlaubnis,
+         * und die Spur haelt fest, dass sie vorlag - nicht bloss, dass geloescht wurde.
+         *
+         * DER GRUND NENNT DIE FRIST IM KLARTEXT ("wflw_retention(90d)"), weil die Zahl sonst
+         * nur in der Bedingung darueber steht. Aendert jemand die Frist, muss dieser Text
+         * mitwandern; er ist die einzige Stelle, an der ein Pruefer sie in der Spur sieht.
+         */
+        auto aud_ent = registry.create();
+        auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
+        aud.relm_ref = relm_ref;
+        aud.proj_ref = 0;
+        ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, "system:wflw_cln");
+        ase::utils::str_copy(aud.path, MAX_PATH_LEN, retr.path);
+        aud.timestamp = now;
+
+        auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+        outc.action = AUD_DELETE;
+        outc.result = AUD_GRANTED;
+        ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "wflw_retention(90d)");
+
+        registry.emplace<StorageAudtPendTag>(aud_ent);
         log::info("[StorageWflwCln] retired build {} removed after {}s retention", retr.path, age);
 
         // The retiring ACL rule dies with its files (collected, destroyed below).

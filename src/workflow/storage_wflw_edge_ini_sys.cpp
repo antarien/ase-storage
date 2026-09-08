@@ -1,42 +1,37 @@
 /**
  * ASE ECS SYSTEM IMPLEMENTATION
  *
- * @file        storage_edge_ini_sys.cpp
- * @brief       StorageEdgeIniSystem - Seeds the edge_binaries distribution realm
+ * @file        storage_wflw_edge_ini_sys.cpp
+ * @brief       StorageWflwEdgeIniSystem - Seeds the release-pipeline transition graph
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Initialization
- * @created     2026-06-24
+ * @created     2026-08-31
  * @modified    2026-08-31
  * @version     1.0.0
  *
- * CAUSAL CHAIN (Edge-Distribution Realm Seeding)
+ * CAUSAL CHAIN (Workflow Transition Graph Seeding)
  *
- *   [Server startup, after StorageIniSystem]
+ *   [Server startup]
  *          │
  *          │ App runs Initialization schedule
  *          ▼
  *   ┌─────────────────────────────────────────────┐
- *   │  THIS SYSTEM: StorageEdgeIniSystem          │
+ *   │  THIS SYSTEM: StorageWflwEdgeIniSystem      │
  *   │                                             │
  *   │  READS:                                     │
- *   │    - StorageResourceManager* from ctx()      │
+ *   │    - (nothing - EDGE_LABEL_* from types.hpp)│
  *   │                                             │
  *   │  WRITES:                                    │
- *   │    - edge_binaries realm directory tree     │
- *   │    - StorageStaRelmComponent (edge realm)   │
- *   │    - StorageRelmIdnComponent (id hash)      │
- *   │    - StorageRelmQuotComponent (quota)       │
- *   │    - StorageRelmGlobTag + RelmActiveTag    │
- *   │    - StorageRelmEdgeTag (realm identity)    │
+ *   │    - StorageWflwEdgeComponent (4 entities)  │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Realm entity + its identity tag ready
+ *          │ Allowed transitions available as entities
  *          ▼
- *   StorageAcssEdgeIniSystem scopes the edge ACL rules to it
- *   StorageWflwTranSystem, WflwGateSystem, WflwClnSystem read the tag as identity
+ *   StorageWflwTranSystem validates every promote request against them
+ *   StorageAcssIdxSystem indexes them for the per-tick lookup
  *
  * HUB Pattern (N/A - No Hub reads/writes)
  *
@@ -46,16 +41,16 @@
  * WRITES (to Hub):
  *   (none)
  *
- * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
- *   Realm path resolution + directory creation via the manager.
+ * FLYWEIGHT PATTERN (Inactive - no external resource is touched)
+ *   The transition graph is Component data in the registry, not a file, socket or
+ *   arena. Nothing is resolved through StorageResourceManager, so the system needs
+ *   no ctx() lookup and has no failure mode when the manager is not up yet.
  *
  * DEDICATION
- *   The REALM and nothing else: its directory tree, its entity, its identity tag.
- *   This file used to carry three objects and said so itself, in three log lines -
- *   they are now three systems. The ACL rules moved to StorageAcssEdgeIniSystem
- *   (src/acl/), the release-pipeline transition graph to StorageWflwEdgeIniSystem
- *   (src/workflow/). Nothing was dropped in the move: six rules, six codewords, four
- *   transition edges and both Hub publishes exist unchanged in their new homes.
+ *   The TRANSITION GRAPH and nothing else. The realm the pipeline governs belongs to
+ *   StorageEdgeIniSystem, the ACL rules that carry the labels to
+ *   StorageAcssEdgeIniSystem. Three objects that used to share one file; the file
+ *   said so itself, in three separate log lines.
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -152,15 +147,9 @@
 // ALLOWED:   <cstdint>, <cmath>, <cassert>, ase-* headers
 
 // Own header FIRST
-#include <ase/storage/systems/edge/storage_edge_ini_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_edge_ini_sys.hpp>
 // Components from same module
-#include <ase/storage/components/state/storage_sta_relm_comp.hpp>
-#include <ase/storage/components/state/storage_relm_quot_comp.hpp>
-#include <ase/storage/components/state/storage_relm_idn_comp.hpp>
-#include <ase/storage/components/tag/storage_relm_glob_tag.hpp>
-#include <ase/storage/components/tag/storage_relm_actv_tag.hpp>
-#include <ase/storage/components/tag/storage_relm_edge_tag.hpp>
-#include <ase/storage/storage_resource_manager.hpp>
+#include <ase/storage/components/state/storage_wflw_edge_comp.hpp>
 #include <ase/storage/types.hpp>
 #include <ase/utils/strops.hpp>
 // Logging
@@ -183,60 +172,63 @@ namespace {
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
-void StorageEdgeIniSystem::on_start(ecs::Registry& registry) {
-    log::debug("[StorageEdgeIni] Started");
+void StorageWflwEdgeIniSystem::on_start(ecs::Registry& registry) {
+    log::debug("[StorageWflwEdgeIni] Started");
 
-    auto* mgr_ptr = registry.ctx().find<StorageResourceManager*>();
-    if (!mgr_ptr || !(*mgr_ptr)) {
-        // SCHEDULE_ORDER: "System runs before its dependency". Der Erzeuger steht
-        // im freien String, die Kategorie macht daraus etwas Zaehlbares. Das `return` darunter ist
-        // unbedenklich — ERR-Hilfetexte sind Checklisten und sagen keine Wertkorrektur zu.
-        log::error(log::ERR::CAT::SCHEDULE_ORDER, "StorageEdgeIniSystem", "StorageResourceManager");
-        return;
-    }
-    auto& mgr = **mgr_ptr;
+    // The release pipeline as ALLOWED transitions, one entity each. The chain is
+    // written out instead of looped, because the four steps are not four values of
+    // one thing: each is a named stage change with its own meaning, and the SHAPE of
+    // the pipeline has to be readable here without following a table elsewhere.
+    //
+    //     draft ────▶ review ────▶ approved ────▶ released ────▶ retired
+    //
+    // What must hold in EVERY block below, and what no compiler and no gate checks:
+    // the label copied into the field and the label handed to hashed_string are the
+    // SAME constant. A mismatched pair is not a loud failure - the transition simply
+    // never matches, and the release pipeline stalls with no error anywhere.
 
-    // Realm directory tree: edge_binaries with release + keys subdirectories
-    char dir[512];
-    mgr.resolve_path(EDGE_REALM_ID, nullptr, "", dir, 512);
-    mgr.ensure_dir(dir);
-    mgr.resolve_path(EDGE_REALM_ID, nullptr, "release", dir, 512);
-    mgr.ensure_dir(dir);
-    mgr.resolve_path(EDGE_REALM_ID, nullptr, "keys", dir, 512);
-    mgr.ensure_dir(dir);
-    log::info("[StorageEdgeIni] edge_binaries realm directory ready");
+    // draft → review: an uploaded build enters release-manager review.
+    auto edge_draft_review = registry.create();
+    auto& draft_review = registry.emplace<StorageWflwEdgeComponent>(edge_draft_review);
+    ase::utils::str_copy(draft_review.from_label, MAX_LABEL_LEN, EDGE_LABEL_DRAFT);
+    draft_review.from_label_hash = entt::hashed_string(EDGE_LABEL_DRAFT).value();
+    ase::utils::str_copy(draft_review.to_label, MAX_LABEL_LEN, EDGE_LABEL_REVIEW);
+    draft_review.to_label_hash = entt::hashed_string(EDGE_LABEL_REVIEW).value();
 
-    // Realm entity: public platform realm, Enterprise tier, no concealment.
-    // quota_bytes = the MEASURED 10 GB ceiling (types.hpp EDGE_REALM_QUOTA_BYTES,
-    // R14 sizing) — the retired-cleanup keeps the realm small, not the ceiling.
-    auto realm_ent = registry.create();
-    auto& relm = registry.emplace<StorageStaRelmComponent>(realm_ent);
-    ase::utils::str_copy(relm.id, MAX_REALM_ID, EDGE_REALM_ID);
-    ase::utils::str_copy(relm.name, MAX_REALM_NAME, "Edge Binary Distribution");
-    // The realm has no owner user: it belongs to the platform, so owner_hash stays 0
-    // and no requester can ever match it - which is exactly the intended outcome.
-    auto& relm_idn = registry.emplace<StorageRelmIdnComponent>(realm_ent);
-    relm_idn.id_hash = EDGE_REALM_HASH;
-    relm.default_protection = PROTECTION_PUBLIC;
-    relm.tier = TIER_ENTERPRISE;
-    auto& relm_quot = registry.emplace<StorageRelmQuotComponent>(realm_ent);
-    relm_quot.quota_bytes = EDGE_REALM_QUOTA_BYTES;
-    registry.emplace<StorageRelmGlobTag>(realm_ent);
-    registry.emplace<StorageRelmActvTag>(realm_ent);
-    // Identity marker: this system is the ONLY producer of the edge realm, so the
-    // tag is the SSOT for "which entity is EDGE_REALM_ID". The workflow systems
-    // read it instead of scanning every realm and comparing the id string.
-    registry.emplace<StorageRelmEdgeTag>(realm_ent);
-    log::info("[StorageEdgeIni] edge_binaries realm entity registered (tier=Enterprise, public, quota={} bytes)",
-              relm_quot.quota_bytes);
+    // review → approved: the review passed, the build awaits publication.
+    auto edge_review_approved = registry.create();
+    auto& review_approved = registry.emplace<StorageWflwEdgeComponent>(edge_review_approved);
+    ase::utils::str_copy(review_approved.from_label, MAX_LABEL_LEN, EDGE_LABEL_REVIEW);
+    review_approved.from_label_hash = entt::hashed_string(EDGE_LABEL_REVIEW).value();
+    ase::utils::str_copy(review_approved.to_label, MAX_LABEL_LEN, EDGE_LABEL_APPROVED);
+    review_approved.to_label_hash = entt::hashed_string(EDGE_LABEL_APPROVED).value();
+
+    // approved → released: the ONLY transition that makes an asset customer-public.
+    auto edge_approved_released = registry.create();
+    auto& approved_released = registry.emplace<StorageWflwEdgeComponent>(edge_approved_released);
+    ase::utils::str_copy(approved_released.from_label, MAX_LABEL_LEN, EDGE_LABEL_APPROVED);
+    approved_released.from_label_hash = entt::hashed_string(EDGE_LABEL_APPROVED).value();
+    ase::utils::str_copy(approved_released.to_label, MAX_LABEL_LEN, EDGE_LABEL_RELEASED);
+    approved_released.to_label_hash = entt::hashed_string(EDGE_LABEL_RELEASED).value();
+
+    // released → retired: withdrawal. There is deliberately NO edge back out of
+    // retired and none that skips a stage - the graph IS the policy.
+    auto edge_released_retired = registry.create();
+    auto& released_retired = registry.emplace<StorageWflwEdgeComponent>(edge_released_retired);
+    ase::utils::str_copy(released_retired.from_label, MAX_LABEL_LEN, EDGE_LABEL_RELEASED);
+    released_retired.from_label_hash = entt::hashed_string(EDGE_LABEL_RELEASED).value();
+    ase::utils::str_copy(released_retired.to_label, MAX_LABEL_LEN, EDGE_LABEL_RETIRED);
+    released_retired.to_label_hash = entt::hashed_string(EDGE_LABEL_RETIRED).value();
+
+    log::info("[StorageEdgeIni] workflow transition graph seeded (4 edges: draft->review->approved->released->retired)");
 }
 
-void StorageEdgeIniSystem::tick(ecs::Registry& /*registry*/, float /*dt*/) {
+void StorageWflwEdgeIniSystem::tick(ecs::Registry& /*registry*/, float /*dt*/) {
     // Initialization system has no per-tick logic
 }
 
-void StorageEdgeIniSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::debug("[StorageEdgeIni] Stopped");
+void StorageWflwEdgeIniSystem::on_stop(ecs::Registry& /*registry*/) {
+    log::debug("[StorageWflwEdgeIni] Stopped");
 }
 
 }  // namespace ase::storage

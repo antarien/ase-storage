@@ -45,7 +45,7 @@ namespace ase::storage {
  * @writes   StorageAcssRuleComponent.label, STG_WFLW_RES/STG_WFLW_STAGE (owner-scoped),
  *           StorageBufAudtComponent + StorageAudtPendTag (attributed audit),
  *           StorageBufWflwComponent + StorageWflwPstPendTag (frame-112 persist)
- * @depends  StorageWflwDrnSystem staged requests; StorageEdgeIniSystem seeded edges
+ * @depends  StorageWflwDrnSystem staged requests; StorageWflwEdgeIniSystem seeded edges
  */
 class StorageWflwTranSystem : public ecs::System {
 public:

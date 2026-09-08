@@ -165,6 +165,9 @@
 #include <ase/storage/components/tag/storage_wflw_pst_pend_tag.hpp>
 #include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
+// Workflow stage vocabulary (audit record, reason composer, stage ordinal) - shared with
+// StorageWflwPermSystem and StorageWflwIniSystem since the split of 2026-08-29
+#include <ase/storage/storage_wflw_stage.hpp>
 #include <ase/storage/types.hpp>
 // Hub API (perm read + verdict/stage publish)
 #include <ase/hub/api.hpp>
@@ -183,49 +186,6 @@ namespace ase::storage {
 
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 namespace {
-
-// Audit record for a transition decision (mirror storage_acss_chk_sys emit_audit):
-// one entity per decision, marked pending for the Preservation batch-writer. The
-// requester identity IS the keycard attribution the DoD requires.
-void emit_tran_audit(ecs::Registry& registry, uint32_t relm_ref, const char* user_id,
-                     const char* path, uint64_t timestamp, uint8_t result,
-                     const char* reason) {
-    auto aud_ent = registry.create();
-    auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
-    aud.relm_ref = relm_ref;
-    aud.proj_ref = 0;
-    ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, user_id);
-    ase::utils::str_copy(aud.path, MAX_PATH_LEN, path);
-    aud.timestamp = timestamp;
-    auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-    outc.action = AUD_PROMOTE;
-    outc.result = result;
-    ase::utils::str_copy(outc.reason, MAX_REASON_LEN, reason);
-    registry.emplace<StorageAudtPendTag>(aud_ent);
-}
-
-// Bounded "wflw...(from->to)" reason composition. Pure string math, no views.
-void compose_edge_reason(char* out, uint32_t out_size, const char* prefix,
-                         const char* from_label, const char* to_label) {
-    ase::utils::str_copy(out, out_size, prefix);
-    ase::utils::str_append(out, out_size, "(");
-    ase::utils::str_append(out, out_size, from_label);
-    ase::utils::str_append(out, out_size, "->");
-    ase::utils::str_append(out, out_size, to_label);
-    ase::utils::str_append(out, out_size, ")");
-}
-
-// Label hash → display stage ordinal (WFLW_STAGE_*). Sequential value mapping over
-// the fixed label chain. The labels arrive as hashes because identity is a lookup and
-// a lookup compares hashes, never characters (WRFL_ASE_STRING_HANDLING Section 3) —
-// four 32-bit tests where the former ladder ran up to four string walks per request.
-float stage_ordinal(uint32_t label_hash) {
-    if (label_hash == EDGE_LABEL_REVIEW_HASH)   return static_cast<float>(WFLW_STAGE_REVIEW);
-    if (label_hash == EDGE_LABEL_APPROVED_HASH) return static_cast<float>(WFLW_STAGE_APPROVED);
-    if (label_hash == EDGE_LABEL_RELEASED_HASH) return static_cast<float>(WFLW_STAGE_RELEASED);
-    if (label_hash == EDGE_LABEL_RETIRED_HASH)  return static_cast<float>(WFLW_STAGE_RETIRED);
-    return static_cast<float>(WFLW_STAGE_DRAFT);
-}
 
 }  // anonymous namespace
 
@@ -281,82 +241,17 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
         const uint32_t owner = entt::hashed_string(req.path).value();
         const uint64_t now = mgr.get_wall_time_seconds();
 
-        // A/ACS permission axis: the requester keycard session must hold
-        // PERM_PROMOTE (published owner-scoped by the keycard pipeline). Clearance
-        // was gated at the route (operator mint-gate); permission is enforced HERE.
-        // A missing key (no live session on this dist) means NO permissions —
-        // fail-closed, never a silent grant.
-        const uint32_t requester = entt::hashed_string(req.requested_by).value();
-        float perm_f = hub::get(registry, requester, "SES_KYCD_PERM"_hs);
-        if (ase::types::is_not_found(perm_f)) {
-            perm_f = 0.0f;
-        }
-        if (ase::types::is_neg_float(perm_f)) {
-            log::warn(log::WRN::CAT::VALUE_NEGATIVE, "StorageWflwTranSystem", requester,
-                      "SES_KYCD_PERM", perm_f);
-            perm_f = 0.0f;
-        }
-        const uint16_t perm = static_cast<uint16_t>(perm_f);
-        if ((perm & PERM_PROMOTE) == 0u) {
-            hub::set(registry, owner, "STG_WFLW_RES"_hs, static_cast<float>(WFLW_RES_DENIED_PERM));
-            emit_tran_audit(registry, relm_ref, req.requested_by, req.path, now,
-                            AUD_DENIED, "missing_perm(PROMOTE)");
-            // DIE BEIDEN DENIED-ZEILEN DIESER DATEI BLEIBEN FREIE STRINGS — hier und bei der
-            // Kantenpruefung weiter unten. Zwei Gruende, jeder allein ausreichend:
-            //
-            // 1. ES IST EIN AUTORISIERUNGSENTSCHEID. Auf diesem Pfad ist die EBENE wichtiger
-            //    als die Kategorie: eine kategorisierte Zeile waere filterbar und faende sich
-            //    trotzdem nicht mehr dort, wo jemand nach abgelehnten Zugriffen sucht.
-            //    (Betreiber-Entscheid 2026-08-22, gleiche Klasse wie die drei Dokumentfelder
-            //    in storage_edge_kycd_res_drn_sys.cpp.)
-            // 2. KEINE KATEGORISIERTE FORM TRAEGT DIESE ZEILE. Sie nennt drei Bezeichner —
-            //    Quellpfad, Ziel-Label, Antragsteller. Die Ueberladungen tragen EINEN String
-            //    plus eine uint32-Stelle; zwei der drei muessten also verschwinden, und welche
-            //    davon man opfert, entscheidet nachher, welche Ablehnung noch auffindbar ist.
-            //
-            // NACHTRAG 2026-08-23: DIE HAELFTE DIESER BEGRUENDUNG IST WEGGEFALLEN, DIE ANDERE
-            // TRAEGT — und wer nur die alte Fassung gelesen haette, haette hier falsch migriert.
-            //
-            // Weggefallen: bis heute schieden die WRN-Kategorien zusaetzlich am Hilfetext aus,
-            // weil alle drei eine Korrektur des Wertes zusagten und diese Stelle nichts
-            // korrigiert. Inzwischen gibt es ACCESS_DENIED in ERR::CAT — eine FEHLER-Kategorie,
-            // die semantisch genau diesen Fall meint und im Hilfetext nichts zusagt. Das Argument
-            // "Kategorie hiesse Abstieg auf WRN" gilt nicht mehr.
-            //
-            // Was TRAEGT, ist der Formgrund oben, und er ist durch ACCESS_DENIED unveraendert:
-            // error(cat, system, owner, value_id) fuehrt EINE uint32-Stelle und EINEN String.
-            // Diese Zeile fuehrt drei Bezeichner (path, target_label, requested_by), die
-            // zweite DENIED-Zeile weiter unten sogar vier. Zwei beziehungsweise drei davon
-            // muessten verschwinden, und welche man opfert, entscheidet nachher, welche
-            // Ablehnung noch auffindbar ist. Eine Ablehnung, die man nicht mehr einer Anfrage
-            // zuordnen kann, ist als Sicherheitsspur wertlos.
-            //
-            // Der Auditsatz daneben (emit_tran_audit) haelt die Spur vollstaendig; diese
-            // Logzeile ist ihr lesbares Echo und verliert nichts, solange sie freier Text ist.
-            // MIGRIERT. Der Formgrund, der hier stand, nannte nur die Ueberladung
-            // error(cat, system, owner, value_id) — EINE uint32-Stelle und EINEN String — und
-            // schloss daraus, zwei der drei Bezeichner muessten verschwinden. Es gibt eine
-            // Ueberladung mit owner, value_id UND detail. `owner` traegt den Pfad-Hash (weiter
-            // oben berechnet), value_id den lesbaren Pfad, der detail den Rest. Alle drei
-            // bleiben, die Ablehnung bleibt einer Anfrage zuordenbar.
-            //
-            // ACCESS_DENIED auf ERR-Ebene: hier geht es um eine BERECHTIGUNG — der Anfragende
-            // hat PERM_PROMOTE nicht. Die Kategorie liegt laut ihrer Abgrenzung bewusst im
-            // Fehlerstrom, damit eine Ablehnung aus keinem ERR-Filter faellt; davon lebt eine
-            // Sicherheitsspur. Der Vorgang endet hier auch wirklich: die Anfrage wird
-            // abgeschlossen, kein spaeterer Durchlauf holt sie nach.
-            char perm_detail[256] = {};
-            ase::utils::str_copy(perm_detail, 256, "target=");
-            ase::utils::str_append(perm_detail, 256, req.target_label);
-            ase::utils::str_append(perm_detail, 256, " requester=");
-            ase::utils::str_append(perm_detail, 256, req.requested_by);
-            ase::utils::str_append(perm_detail, 256, " missing_perm=PERM_PROMOTE");
-            log::error(log::ERR::CAT::ACCESS_DENIED, "StorageWflwTran", owner, req.path,
-                       perm_detail);
-            done[done_n] = req_ent;
-            ++done_n;
-            continue;
-        }
+        // DIE BERECHTIGUNG IST SEIT 2026-08-29 EIN EIGENES SYSTEM (StorageWflwPermSystem).
+        //
+        // "Darf dieser Anrufer befoerdern" ist eine A/ACS-Frage - dieselbe Familie wie die
+        // Zugriffsleiter -, "ist dieser Uebergang im Graphen vorgesehen" eine Frage an den
+        // Arbeitsablauf. Die erste hat eine eigene Quelle (die Keycard-Sitzung im Hub), eine
+        // eigene Fehlerkategorie (ACCESS_DENIED) und einen eigenen Ausgang; sie lief hier als
+        // Vorspann der zweiten, und damit war jede Aenderung am Graphen eine Aenderung an der
+        // Datei, in der eine Sicherheitsentscheidung steht.
+        //
+        // Was hier ankommt, ist bereits berechtigt: das Berechtigungssystem schliesst seine
+        // Ablehnungen im selben Tick ab, fail-closed, mit Pruefspur.
 
         // Locate the per-asset ACL rule (EXACT pattern match, realm-scoped). The
         // rule's label field IS the asset's current workflow stage.
@@ -377,44 +272,21 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
             break;
         }
 
-        // No rule yet: an on-disk build without one IS the draft stage — publish
-        // deposits builds straight into the realm; the first promote adopts them
-        // (data-driven bootstrap, mirror of EDGE_LABEL_DRAFT semantics).
+        // DIE ADOPTION IST SEIT 2026-08-29 EIN EIGENES SYSTEM (StorageWflwIniSystem).
+        //
+        // Ein Gut OHNE Regel ist der Entwurf: publish legt Builds direkt ins Revier, die erste
+        // Beförderung nimmt sie auf. Das ist ein eigener Vorgang mit eigener Bedingung (liegt
+        // die Datei ueberhaupt da?) und eigenem Ausgang (wflw_no_asset) - kein Sonderzweig des
+        // Uebergangs. Er laeuft im selben Tick VOR diesem System.
+        //
+        // Fehlt die Regel hier dennoch, gab es nichts zu adoptieren: fail-closed, kein stiller
+        // Uebergang auf ein Gut, das niemand kennt.
         if (rule_ent_found == entt::null) {
-            char asset_abs[512] = {};
-            mgr.resolve_path(EDGE_REALM_ID, nullptr, req.path, asset_abs, 512);
-            if (!mgr.file_exists(asset_abs)) {
-                hub::set(registry, owner, "STG_WFLW_RES"_hs, static_cast<float>(WFLW_RES_NOT_FOUND));
-                emit_tran_audit(registry, relm_ref, req.requested_by, req.path, now,
-                                AUD_DENIED, "wflw_no_asset");
-                // Diese Zeile ging schon vor der Migration der beiden DENIED-Zeilen glatt
-                // durch: sie fuehrt genau EINEN Bezeichner (req.path), und der ist bei
-                // RESOURCE_UNAVAIL die Kennung der Ressource selbst — Punkt 1 des Hilfetexts
-                // fragt woertlich, ob sie existiert und erreichbar ist. owner steht in
-                // Reichweite und bleibt erhalten, es geht nichts verloren.
-                log::error(log::ERR::CAT::RESOURCE_UNAVAIL, "StorageWflwTran", owner, req.path);
-                done[done_n] = req_ent;
-                ++done_n;
-                continue;
-            }
-            auto new_rule_ent = registry.create();
-            auto& r = registry.emplace<StorageAcssRuleComponent>(new_rule_ent);
-            r.relm_ref = relm_ref;
-            r.proj_ref = 0;
-            ase::utils::str_copy(r.path_pattern, MAX_PATH_LEN, req.path);
-            r.protection_level = PROTECTION_PUBLIC;
-            ase::utils::str_copy(r.label, MAX_LABEL_LEN, EDGE_LABEL_DRAFT);
-            // Identity beside the record, in the same breath as the strings.
-            // A bootstrapped rule governs exactly one asset, so its pattern carries no
-            // wildcard: pattern and literal match are the same string, and it is a
-            // location rule (no StorageAcssRuleSufxTag).
-            auto& r_idn = registry.emplace<StorageRuleIdnComponent>(new_rule_ent);
-            r_idn.pattern_hash = req_path_hash;
-            r_idn.label_hash = EDGE_LABEL_DRAFT_HASH;
-            r_idn.match_hash = req_path_hash;
-            r_idn.match_len = ase::utils::str_len(req.path, MAX_PATH_LEN);
-            rule_ent_found = new_rule_ent;
-            log::info("[StorageWflwTran] Draft rule bootstrapped for on-disk asset {}", req.path);
+            hub::set(registry, owner, "STG_WFLW_RES"_hs, static_cast<float>(WFLW_RES_NOT_FOUND));
+            log::error(log::ERR::CAT::RESOURCE_UNAVAIL, "StorageWflwTran", owner, req.path);
+            done[done_n] = req_ent;
+            ++done_n;
+            continue;
         }
 
         auto& rule = registry.get<StorageAcssRuleComponent>(rule_ent_found);
@@ -456,8 +328,22 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
         if (!allowed) {
             hub::set(registry, owner, "STG_WFLW_RES"_hs, static_cast<float>(WFLW_RES_DENIED_EDGE));
             compose_edge_reason(reason, MAX_REASON_LEN, "wflw_edge", rule.label, req.target_label);
-            emit_tran_audit(registry, relm_ref, req.requested_by, req.path, now,
-                            AUD_DENIED, reason);
+            // EINE Audit-Entity je Entscheidung, mit StorageAudtPendTag fuer den
+            // Preservation-Stapelschreiber. Die Identitaet des Anfragenden IST die
+            // Keycard-Zuschreibung, die der Vertrag verlangt. proj_ref bleibt 0 (ein Uebergang
+            // gehoert einem Realm, keinem Projekt), action bleibt AUD_PROMOTE.
+            auto aud_ent = registry.create();
+            auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
+            aud.relm_ref = relm_ref;
+            aud.proj_ref = 0;
+            ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, req.requested_by);
+            ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
+            aud.timestamp = now;
+            auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+            outc.action = AUD_PROMOTE;
+            outc.result = AUD_DENIED;
+            ase::utils::str_copy(outc.reason, MAX_REASON_LEN, reason);
+            registry.emplace<StorageAudtPendTag>(aud_ent);
             // MIGRIERT, zusammen mit der PERM_PROMOTE-Zeile oben — beide in EINEM Schrieb, weil
             // das Tor das Dateiergebnis prueft und ein Teilschritt geblockt haette.
             //
@@ -503,8 +389,22 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
         hub::set(registry, owner, "STG_WFLW_PUB"_hs,
                  rule_idn.label_hash == EDGE_LABEL_RELEASED_HASH ? 1.0f : 0.0f);
 
-        emit_tran_audit(registry, relm_ref, req.requested_by, req.path, now,
-                        AUD_GRANTED, reason);
+        // EINE Audit-Entity je Entscheidung, mit StorageAudtPendTag fuer den
+        // Preservation-Stapelschreiber — hier der GEWAEHRUNGSpfad, dieselbe Form wie die
+        // Ablehnung oben und aus demselben Grund: eine Entscheidung ohne Spur ist von einer
+        // ausgebliebenen nicht zu unterscheiden. proj_ref bleibt 0, action bleibt AUD_PROMOTE.
+        auto aud_ent = registry.create();
+        auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
+        aud.relm_ref = relm_ref;
+        aud.proj_ref = 0;
+        ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, req.requested_by);
+        ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
+        aud.timestamp = now;
+        auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+        outc.action = AUD_PROMOTE;
+        outc.result = AUD_GRANTED;
+        ase::utils::str_copy(outc.reason, MAX_REASON_LEN, reason);
+        registry.emplace<StorageAudtPendTag>(aud_ent);
 
         auto buf_ent = registry.create();
         auto& buf = registry.emplace<StorageBufWflwComponent>(buf_ent);

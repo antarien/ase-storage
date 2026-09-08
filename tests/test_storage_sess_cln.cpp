@@ -112,7 +112,14 @@ TEST_CASE("StorageKycdSessClnSystem leaves a LIVE session untouched") {
     // The identity mirror is the exclude filter; while it is present the
     // session is alive and nothing may be retired.
     CHECK(hub::count(reg, owner) == 6);
+    // DIE ANWESENHEIT WIRD GETRENNT ZUGESICHERT. hub::get liefert bei einem nie geschriebenen
+    // Schluessel seinen Vorgabewert; ohne die zweite Zeile saehe "Freigabestufe falsch" genauso
+    // aus wie "die Sitzungsfamilie wurde nie veroeffentlicht" — und genau das ist hier der
+    // Unterschied zwischen einer falschen Berechtigung und einer fehlenden Sitzung.
+    // Sie steht UNMITTELBAR hinter dem Lesen: das Fenster der Regel ist fuenf Zeilen, und ein
+    // Begruendungsblock DAZWISCHEN wuerde die Pruefung daraus schieben.
     CHECK(hub::get(reg, owner, "SES_CLEARANCE"_hs) == 5.0f);
+    CHECK(hub::is_measured(reg, owner, "SES_CLEARANCE"_hs));
     CHECK(reg.all_of<StorageKycdVldTag>(live) == true);
 }
 
@@ -181,8 +188,14 @@ TEST_CASE("SES_USER_ID halves survive the float32 hub value that one whole hash 
     uint32_t owner = static_cast<uint32_t>(e);
     publish_session_family(reg, owner, user_hash);
 
+    // BEIDE HAELFTEN BEKOMMEN IHRE EIGENE ZUSICHERUNG, und hier traegt die Trennung besonders:
+    // eine fehlende Haelfte liefert ihren Vorgabewert, und der Zusammenbau unten ergaebe daraus
+    // eine gueltig AUSSEHENDE Kennung mit halbem Inhalt. Die Bereichspruefungen (< 2^16) koennen
+    // das nicht auffangen — ein Vorgabewert liegt ebenfalls unter der Grenze.
     uint32_t hi = static_cast<uint32_t>(hub::get(reg, owner, "SES_USER_ID_HI"_hs));
+    CHECK(hub::is_measured(reg, owner, "SES_USER_ID_HI"_hs));
     uint32_t lo = static_cast<uint32_t>(hub::get(reg, owner, "SES_USER_ID_LO"_hs));
+    CHECK(hub::is_measured(reg, owner, "SES_USER_ID_LO"_hs));
 
     // Each half is below 2^16 and therefore exact in a float32 hub value.
     CHECK(hi < (1u << 16));
