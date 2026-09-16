@@ -362,7 +362,7 @@ constexpr const char* WFLW_ART_SMOKE = ".smoke";      // Operator smoke-test mar
 
 // Durable persist — every APPLIED transition ships as a workflow-label document to
 // the Replica (REPLACE-upsert into storage_workflow_labels keyed {realm,path}). The
-// BIN_MSG id + frame layout are mirrored from modules/ase-replication/replica_types.hpp
+// BIN_MSG id + frame layout are mirrored from modules/ase-replication/include/ase/replication/replica_types.hpp
 // (SSOT registration: ase-network types.hpp); changing either side requires changing
 // both (single contract, same envelope as the keycard persist frame 35).
 constexpr uint8_t  EDGE_WFLW_BIN_MSG_PERSIST = 112;   // dist → Replica: [112][req_id:u64][doc_len:u32][doc]
@@ -380,7 +380,7 @@ constexpr uint32_t WFLW_REQ_BATCH            = 16;    // max workflow entities d
 // which makes it the single owner of that lifetime: it runs in Preservation
 // (71), so anything that wants to READ a decision must run BEFORE it, never
 // after (Observation is 72 — this is why StorageSrvlLogSystem was moved).
-// Envelope and id mirror modules/ase-replication/replica_types.hpp; SSOT
+// Envelope and id mirror modules/ase-replication/include/ase/replication/replica_types.hpp; SSOT
 // registration is ase-network types.hpp. Changing one side requires the other.
 constexpr uint8_t  EDGE_AUDT_BIN_MSG_PERSIST = 132;   // dist → Replica: [132][req_id:u64][doc_len:u32][doc] (relocated from 122 on 2026-08-16 - 122 is BIN_MSG_GIS_CELL_ZONE, region_wire.hpp)
 constexpr uint32_t AUDT_PST_HDR              = 13;    // frame envelope: 1 id + 8 req_id + 4 doc_len (mirror EDGE_AUDT_PERSIST_HDR)
@@ -434,7 +434,7 @@ constexpr uint32_t PST_KEY_BUF_LEN = 64;    // SES_KYCD_PERSIST_CWRD_<owner>_<i>
 // SES_KYCD_HOLDS_* session the gate reads. The dist host links NO data client — the
 // SAME split as the edge-daemon connection-token check (ReplicaEdgeRegSystem). The
 // RES BIN_MSG id + frame layout are mirrored from
-// modules/ase-replication/replica_types.hpp; changing either side requires
+// modules/ase-replication/include/ase/replication/replica_types.hpp; changing either side requires
 // changing both (single contract).
 
 constexpr uint8_t EDGE_KYCD_BIN_MSG_RES = 34;  // Replica → dist: [34][req_id:u64][status:u8][payload_len:u32][payload]
