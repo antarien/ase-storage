@@ -6,6 +6,7 @@
  *
  * @module      ase-storage
  * @layer       3 (Modules)
+ * @design      DSGN_021
  * @category    process
  * @schedule    Reception
  * @created     2026-07-04

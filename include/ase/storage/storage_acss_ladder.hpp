@@ -4,6 +4,7 @@
  * ASE STORAGE ACCESS-LADDER SHARED PARTS (module-internal)
  *
  * @file        storage_acss_ladder.hpp
+ * @design      DSGN_021
  * @brief       The path hashes and the audit record the access ladder is written on
  * @description Die Zugriffsleiter nach ARCH Section 14.1 ist seit 2026-08-29 zwei Systeme:
  *              StorageAcssRslvSystem loest AUF (welches Revier, welche Regel, welche wirksame

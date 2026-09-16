@@ -119,6 +119,17 @@ constexpr uint8_t KCD_GUEST      = 2;    // Limited access for publishers or fre
 constexpr uint8_t KCD_DELEGATE   = 3;    // Transferred keycard from an existing member
 constexpr uint8_t KCD_SERVICE    = 4;    // Automated access for CI/CD build servers
 
+// ── SERVICE-KEYCARD DER TIER-DIENSTE (KCD_SERVICE, beim Start gepraegt) ─
+//
+// WARUM ES DIESE KARTEN GIBT. Die A/ACS-Leiter kennt nur TEILNEHMER (DSGN_109, 83/PSHARE).
+// Ein Tier-Dienst, der ueber den Replica ein Kunden-Geheimnis anfassen will, ist ein
+// Teilnehmer wie jeder andere und braucht dieselbe Karte — sonst bleibt seine user_id leer
+// und StorageCredAcssRcvSystem verweigert bei Schritt 1 (fail-closed).
+
+constexpr uint8_t  KYCD_TIER_CLEARANCE = PROTECTION_PROTECTED;  // Stufe der Klasse, die geoeffnet werden soll ("API keys and service credentials"); im eigenen Realm hebt der Owner-Preset ohnehin auf ACSS_OWNER_CLEARANCE, diese Zahl traegt nur die Faelle ausserhalb — hoeher setzen hiesse alles darueber gleich mit oeffnen
+constexpr uint16_t KYCD_TIER_PERMS = PERM_READ | PERM_WRITE | PERM_DELETE;  // genau die drei Aktionen der Anmeldedaten-Verwaltung (CRED_ACSS_ACTION_READ/WRITE/DELETE: list, put/rotate, delete); kein PERM_MANAGE/PERM_INVITE, denn ein Dienst, der Geheimnisse dreht, stellt keine Keycards aus
+constexpr uint64_t KYCD_TIER_EXP_AT = 0u;  // Unix-Sekunden, 0 = keine eigene Frist: ARCH_ASE_STORAGE 5.2 gibt der Service-Keycard "per Deployment-Zyklus", und die Praegung liegt in einer Lifecycle-Schedule — ein Prozessstart IST der Zyklus, die Karte kann nicht aelter werden als ihr Halter. Eine zweite Uhr daneben laesst eine Flotte an einem abgelaufenen Geheimnis sterben, waehrend alles laeuft
+
 // ── AUDIT ACTIONS (recorded platform operations) ────────────────────────
 
 constexpr uint8_t AUD_READ       = 0;    // Asset was read or downloaded by user

@@ -71,6 +71,7 @@
 #include <ase/storage/systems/keycard/storage_kycd_drn_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_ntfy_drn_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_req_drn_sys.hpp>
+#include <ase/storage/systems/keycard/storage_kycd_tier_seed_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_vld_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_sess_cln_sys.hpp>
@@ -147,6 +148,20 @@ struct StorageModule {
         // It carries no ordering constraint on purpose - an unnecessary run_after
         // would claim a dependency that does not exist.
         app.add_system<StorageWflwEdgeIniSystem>(ecs::Schedule::Initialization);
+
+        // Configuration: die Service-Keycards der Tier-Dienste (KCD_SERVICE).
+        //
+        // WARUM NICHT Initialization, obwohl es ein Start-Vorgang ist: dort wird der
+        // Verwalter erst ANGELEGT (StorageIniSystem), und dieses System liest seine Wanduhr.
+        // Configuration ist die nachfolgende Lifecycle-Schedule — "Cross-module
+        // initialization" (schedule.hpp) — und laeuft ebenfalls genau einmal je Prozess.
+        // Ein run_after waere hier wirkungslos: es ordnet nur INNERHALB einer Schedule;
+        // zwischen zwei Schedules entscheidet die Nummer, und Configuration ist die 1.
+        //
+        // KEIN run_after AUF StorageKycdReqDrnSystem, obwohl der die Antraege abholt: der
+        // Drain sitzt in Ingestion und laeuft in jedem Frame. Die Antragszeilen liegen, bis
+        // er sie nimmt — eine Schedule frueher zu praegen ist die Ordnung selbst.
+        app.add_system<StorageKycdTierSeedSystem>(ecs::Schedule::Configuration);
 
         // Ingestion (60Hz): Developer Keycard pipeline (drain → validate → link)
         // The identity index is built FIRST in the frame's ingestion stage: the notify
