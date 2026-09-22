@@ -153,7 +153,9 @@
 #include <ase/storage/components/state/storage_kycd_idn_comp.hpp>
 #include <ase/storage/components/request/storage_req_kycd_tkn_comp.hpp>
 #include <ase/storage/components/state/storage_kycd_cwrd_comp.hpp>
+#include <ase/storage/components/state/storage_sta_kycd_stat_comp.hpp>
 #include <ase/storage/components/tag/storage_kycd_pend_tag.hpp>
+#include <ase/storage/components/tag/storage_mgr_tag.hpp>
 #include <ase/storage/components/tag/storage_kycd_pst_pend_tag.hpp>
 // Hub API (discovery tag + counter)
 #include <ase/hub/api.hpp>
@@ -196,6 +198,20 @@ void StorageKycdReqDrnSystem::on_start(ecs::Registry& /*registry*/) {
 }
 
 void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
+    /**
+     * DIE AUSGESTELLTEN DIESES TAKTS, GEZAEHLT IN EINER ORTSVARIABLEN.
+     *
+     * Bis 2026-09-21 stand am Ende der Schleife je Karte ein Hub-Dreischritt: lesen, eins
+     * addieren, zurueckschreiben. Zwei Dinge daran waren falsch. Er mischte Hub-I/O mit
+     * Rechnung in einem System (HUB_IO_MIXED_WITH_MATH), und er schrieb zehnmal auf denselben
+     * STEHENDEN Platz, wenn zehn Karten in einem Takt entstanden - von zehn Schreibvorgaengen
+     * bedeutete nur der letzte etwas.
+     *
+     * Die Zahl gehoert jetzt dem Modul (StorageStaKycdStatComponent auf der Verwalterentity);
+     * der Stern bekommt sie von StorageKycdStatPubSystem angesagt, einmal je Takt.
+     */
+    uint32_t issued_now = 0u;
+
     // Collect-then-destroy: iterate view, remember request entities, destroy after.
     auto view = registry.view<StorageReqKycdComponent, hub::HubStgKycdPendTag>();
     for (auto req_entity : view) {
@@ -257,10 +273,22 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
                    static_cast<uint32_t>(req.clearance),
                    kycd.relm_ref, static_cast<uint32_t>(grnt.perm), req.expires_at);
 
-        float issued_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_ISSUED_COUNT"_hs);
-        if (ase::types::is_not_found(issued_count)) issued_count = 0.0f;
-        hub::set(registry, hub::GLOBAL, "STG_KYCD_ISSUED_COUNT"_hs, issued_count + 1.0f);
+        issued_now += 1u;
+    }
 
+    /**
+     * DIE ZAEHLZEILE DES MODULS, EINMAL JE TAKT NACHGEFUEHRT.
+     *
+     * Kein Stern, keine Bedingung auf einen Vorgaengerwert: die Zeile IST der Bestand, und sie
+     * liegt auf der Verwalterentity, weil eine Ausstellungszahl keinem einzelnen Ausweis
+     * gehoert. Ein Takt ohne Ausstellung laeuft leer durch.
+     */
+    if (issued_now > 0u) {
+        for (auto [mgr, stat] :
+             registry.view<StorageStaKycdStatComponent, StorageMgrTag>().each()) {
+            (void)mgr;
+            stat.issued += issued_now;
+        }
     }
 
     // PASS 2 - the codeword grants, walked ONCE over the children instead of once per

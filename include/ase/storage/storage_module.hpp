@@ -70,7 +70,9 @@
 // Ingestion (Keycard Pipeline)
 #include <ase/storage/systems/keycard/storage_kycd_drn_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_ntfy_drn_sys.hpp>
+#include <ase/storage/systems/keycard/storage_kycd_ntfy_syn_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_req_drn_sys.hpp>
+#include <ase/storage/systems/keycard/storage_kycd_stat_pub_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_tier_seed_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_vld_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp>
@@ -192,11 +194,30 @@ struct StorageModule {
         //
         // The edges BELOW that name Storage* systems are a different case and MUST STAY: both
         // ends run in Ingestion, same schedule, so the sorter resolves them.
-        app.add_system<StorageKycdNtfyDrnSystem>(ecs::Schedule::Ingestion);
+        /**
+         * SYN-SCHNITT AN DER KEYCARD-ANFRAGE (2026-09-21): erst der Stern, dann die Rechnung.
+         *
+         * Der Spiegel liest die sechs SES_KYCD_NTF_*-Zeilen in zwei Bruecken-Components, der
+         * Drain setzt daraus die beiden Hashes zusammen. Beide in Ingestion, der Drain
+         * `run_after` dem Spiegel — sonst laese er im selben Takt eine Bruecke, die es noch
+         * nicht gibt, und die Anfrage wartete einen Takt laenger als noetig.
+         */
+        app.add_system<StorageKycdNtfySynSystem>(ecs::Schedule::Ingestion);
+        app.add_system_with<StorageKycdNtfyDrnSystem>(ecs::Schedule::Ingestion)
+            .run_after("StorageKycdNtfySynSystem");
         // HTTP-posted keycard issuance drain runs after the notify bridge so it
         // sees StorageReqKycdComponent + HubStgKycdPendTag together.
         app.add_system_with<StorageKycdReqDrnSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageKycdNtfyDrnSystem");
+        /**
+         * DIE AUSSTELLUNGSZAHL WIRD ANGESAGT, NICHT MITGEZAEHLT.
+         *
+         * Dissemination (70) liegt hinter Ingestion (11), also traegt die Ansage jedes Takts
+         * schon die Karten DIESES Takts. Der Zaehler selbst entsteht im Drain, auf der
+         * Verwalterzeile — bis 2026-09-21 fuehrte der Drain ihn im Stern und mischte damit
+         * Hub-I/O mit Rechnung.
+         */
+        app.add_system<StorageKycdStatPubSystem>(ecs::Schedule::Dissemination);
         app.add_system_with<StorageKycdVldSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageKycdDrnSystem");
         app.add_system_with<StorageKycdLnkSystem>(ecs::Schedule::Ingestion)

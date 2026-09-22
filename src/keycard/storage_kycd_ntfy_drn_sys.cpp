@@ -154,6 +154,9 @@
 #include <ase/storage/types.hpp>
 // Hub API (discovery tag + notify Hub keys)
 #include <ase/hub/api.hpp>
+// Die Bruecke des SYN-Schnitts: was frueher sechs hub::get in diesem tick() waren.
+#include <ase/storage/components/state/storage_inp_kycd_ntfy_idn_comp.hpp>
+#include <ase/storage/components/state/storage_inp_kycd_ntfy_grnt_comp.hpp>
 // Types (L0 — is_not_found sentinel check)
 #include <ase/types/types.hpp>
 // String ops (L0 — codeword copy)
@@ -198,56 +201,38 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
     }
     auto& idx = **idx_ptr;
 
-    // Tag-filtered view: request entities that carry the Hub-owned pend tag
-    // but do NOT yet have a StorageReqKycdComponent (this system emplaces
-    // it on first sight, so a re-iteration next tick is a no-op).
-    auto view = registry.view<hub::HubStgKycdPendTag>(
+    /**
+     * DIE STERNSEITE STEHT NICHT MEHR HIER — SYN-SCHNITT VOM 2026-09-21.
+     *
+     * Bis dahin las dieses System sechs Hub-Zeilen und setzte im selben tick() die beiden
+     * uint32-Hashes aus je zwei 16-Bit-Haelften zusammen; der Validator meldete das als
+     * HUB_IO_MIXED_WITH_MATH. Den Stern befragt jetzt StorageKycdNtfySynSystem und legt das
+     * Gelesene roh in zwei Bruecken-Zeilen ab - dieses System rechnet nur noch.
+     *
+     * DIE BRUECKE IM SICHTKOPF IST ZUGLEICH DER FILTER: eine Anfrage, deren Pflichtzeilen im
+     * Stern fehlten, bekommt keine Bruecke und erreicht diesen Durchlauf gar nicht erst. Das
+     * ist dasselbe Verhalten wie das fruehere `continue`, nur eine Stufe frueher - und die
+     * HUB_NOT_FOUND-Meldung steht jetzt bei dem, der den Stern befragt.
+     */
+    auto view = registry.view<hub::HubStgKycdPendTag, StorageInpKycdNtfyIdnComponent,
+                              StorageInpKycdNtfyGrntComponent>(
         entt::exclude<StorageReqKycdComponent>);
-    for (auto req_entity : view) {
+    for (auto [req_entity, idn_inp, grnt_inp] : view.each()) {
         uint32_t owner = static_cast<uint32_t>(req_entity);
 
         // The SDK carries the exact uint32 FNV user_hash as two 16-bit float
         // halves (a single float cast would truncate the gate owner via the
         // 24-bit mantissa). Both halves are <= 65535 → exactly representable, so
         // the reconstruction below is bit-exact and lands at the gate's owner.
-        float user_hash_hi_f = hub::get(registry, owner, "SES_KYCD_NTF_USER_ID_HI"_hs);
-        if (ase::types::is_not_found(user_hash_hi_f)) {
-            // HUB_NOT_FOUND ist hier die exakte Kategorie und die Ebene bleibt error: der
-            // Wert FEHLT, er ist nicht ungueltig. is_not_found auf ein hub::get-Ergebnis ist
-            // genau dieser Fall — owner plus value_id, mehr braucht
-            // die Meldung nicht, und die 4-Argument-Form traegt genau das.
-            log::error(log::ERR::CAT::HUB_NOT_FOUND, "StorageKycdNtfyDrnSystem", owner,
-                       "SES_KYCD_NTF_USER_ID_HI");
-            continue;
-        }
-        float user_hash_lo_f = hub::get(registry, owner, "SES_KYCD_NTF_USER_ID_LO"_hs);
-        if (ase::types::is_not_found(user_hash_lo_f)) {
-            log::error(log::ERR::CAT::HUB_NOT_FOUND, "StorageKycdNtfyDrnSystem", owner,
-                       "SES_KYCD_NTF_USER_ID_LO");
-            continue;
-        }
-        float exp_at_f = hub::get(registry, owner, "SES_KYCD_NTF_EXP_AT"_hs);
-        if (ase::types::is_not_found(exp_at_f)) {
-            log::error(log::ERR::CAT::HUB_NOT_FOUND, "StorageKycdNtfyDrnSystem", owner,
-                       "SES_KYCD_NTF_EXP_AT");
-            continue;
-        }
-        float clearance_f = hub::get(registry, owner, "SES_KYCD_NTF_CLRN"_hs);
-        if (ase::types::is_not_found(clearance_f)) clearance_f = 0.0f;
+        uint32_t user_hash  = (static_cast<uint32_t>(idn_inp.user_hash_hi) << 16)
+                              | static_cast<uint32_t>(idn_inp.user_hash_lo);
+        uint32_t clearance  = static_cast<uint32_t>(grnt_inp.clearance);
         // realm_hash is an FNV uint32 carried as two exact 16-bit halves (the SDK
-        // producer splits it); reconstruct bit-exact so the realm match at line ~246
+        // producer splits it); reconstruct bit-exact so the realm match below
         // succeeds and the realm+permission binding is applied (single-float truncated).
-        float realm_hash_hi_f = hub::get(registry, owner, "SES_KYCD_NTF_REALM_ID_HI"_hs);
-        if (ase::types::is_not_found(realm_hash_hi_f)) realm_hash_hi_f = 0.0f;
-        float realm_hash_lo_f = hub::get(registry, owner, "SES_KYCD_NTF_REALM_ID_LO"_hs);
-        if (ase::types::is_not_found(realm_hash_lo_f)) realm_hash_lo_f = 0.0f;
-
-        uint32_t user_hash  = (static_cast<uint32_t>(user_hash_hi_f) << 16)
-                              | static_cast<uint32_t>(user_hash_lo_f);
-        uint32_t clearance  = static_cast<uint32_t>(clearance_f);
-        uint32_t realm_hash = (static_cast<uint32_t>(realm_hash_hi_f) << 16)
-                              | static_cast<uint32_t>(realm_hash_lo_f);
-        uint64_t exp_at     = static_cast<uint64_t>(exp_at_f);
+        uint32_t realm_hash = (static_cast<uint32_t>(idn_inp.realm_hash_hi) << 16)
+                              | static_cast<uint32_t>(idn_inp.realm_hash_lo);
+        uint64_t exp_at     = static_cast<uint64_t>(grnt_inp.expires_at);
 
         // Resolve the user_id STRING the SDK carried on THIS request entity (1:1) via a DIRECT
         // try_get - NOT get_name(), a debug-only channel that is never a production data source.

@@ -144,6 +144,7 @@
 // Own header FIRST
 #include <ase/storage/systems/keycard/storage_ini_sys.hpp>
 // Components from same module
+#include <ase/storage/components/state/storage_sta_kycd_stat_comp.hpp>
 #include <ase/storage/components/tag/storage_mgr_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
@@ -177,6 +178,15 @@ void StorageIniSystem::on_start(ecs::Registry& registry) {
     // Create manager entity with tag
     auto entity = registry.create();
     registry.emplace<StorageMgrTag>(entity);
+
+    /**
+     * DIE ZAEHLZEILE ENTSTEHT MIT DEM VERWALTER, nicht bei der ersten Ausstellung.
+     *
+     * Sonst haette StorageKycdStatPubSystem in jedem Takt vor der ersten Karte eine leere
+     * Sicht und meldete gar nichts - eine Null, die fehlt, ist von einer Null, die stimmt,
+     * nicht zu unterscheiden.
+     */
+    registry.emplace<StorageStaKycdStatComponent>(entity);
 
     // Create and register StorageResourceManager in ctx()
     auto& mgr = registry.ctx().emplace<StorageResourceManager>();

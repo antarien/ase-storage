@@ -93,6 +93,9 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/state/storage_lnk_idn_comp.hpp
     include/ase/storage/components/state/storage_task_idn_comp.hpp
     include/ase/storage/components/state/storage_sta_kycd_comp.hpp
+    include/ase/storage/components/state/storage_sta_kycd_stat_comp.hpp
+    include/ase/storage/components/state/storage_inp_kycd_ntfy_idn_comp.hpp
+    include/ase/storage/components/state/storage_inp_kycd_ntfy_grnt_comp.hpp
     include/ase/storage/components/state/storage_kycd_grnt_comp.hpp
     include/ase/storage/components/state/storage_sta_idn_comp.hpp
     include/ase/storage/components/state/storage_sta_sess_comp.hpp
@@ -178,7 +181,9 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/systems/keycard/storage_ini_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_drn_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_ntfy_drn_sys.hpp
+    include/ase/storage/systems/keycard/storage_kycd_ntfy_syn_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_req_drn_sys.hpp
+    include/ase/storage/systems/keycard/storage_kycd_stat_pub_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_tier_seed_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_vld_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp
@@ -277,7 +282,9 @@ add_library(${PROJECT_NAME} SHARED
     src/keycard/storage_ini_sys.cpp
     src/keycard/storage_kycd_drn_sys.cpp
     src/keycard/storage_kycd_ntfy_drn_sys.cpp
+    src/keycard/storage_kycd_ntfy_syn_sys.cpp
     src/keycard/storage_kycd_req_drn_sys.cpp
+    src/keycard/storage_kycd_stat_pub_sys.cpp
     src/keycard/storage_kycd_tier_seed_sys.cpp
     src/keycard/storage_kycd_vld_sys.cpp
     src/keycard/storage_kycd_lnk_sys.cpp
