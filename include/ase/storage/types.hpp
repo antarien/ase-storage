@@ -458,8 +458,8 @@ constexpr uint32_t KYCD_DECODE_CWRD_MAX   = 64;  // max codewords parsed out of 
 // The operator drives promote/status from `ase edge` over the ase-cli WS console to
 // the Replica; the Replica verifies the operator YK-JWT and forwards the command here
 // as BIN_MSG_EDGE_WFLW_FWD(113). StorageEdgeWflwFwdRcvSystem pops LANE_WFLW, and for a
-// promote deposits the SAME hub workflow-bridge request the /admin/workflow/promote
-// route uses (StorageWflwDrn/Gate/Tran/Pst then drive it), or for a status reads the
+// promote deposits the hub workflow-bridge request (StorageWflwDrn/Gate/Tran/Pst then drive
+// it; the /admin/workflow/promote route that used the same bridge no longer exists), or for a status reads the
 // live STG_WFLW_STAGE/RES, then replies BIN_MSG_EDGE_WFLW_RES(114) to the Replica which
 // relays it to the CLI. Mirror of ase-network / ase-replication types.hpp (SSOT there);
 // changing either side requires changing both (single wire contract).

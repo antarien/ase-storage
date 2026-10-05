@@ -9,12 +9,12 @@
  * @category    process
  * @schedule    Ingestion
  * @created     2026-07-11
- * @modified    2026-07-11
- * @version     1.0.0
+ * @modified    2026-10-03
+ * @version     1.0.1
  *
  * CAUSAL CHAIN (Workflow Promote Drain)
  *
- *   [POST /admin/workflow/promote → sdk::emplace_workflow_promote_request]
+ *   [`ase edge promote` → Replica frame 113 → StorageEdgeWflwFwdRcvSystem deposits the bridge]
  *          │
  *          │ Ingestion schedule drains the Hub bridge
  *          ▼

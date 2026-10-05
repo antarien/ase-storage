@@ -8,8 +8,9 @@
  * @description Dist-tier receiver for the operator release-workflow WS console lane.
  *              Pops BIN_MSG_EDGE_WFLW_FWD(113) off the transport workflow lane (the
  *              Replica already verified the operator YK-JWT), and for a promote deposits
- *              the SAME hub workflow-bridge request the /admin/workflow/promote route
- *              uses (StorageWflwDrn/Gate/Tran/Pst then drive it), or for a status reads
+ *              the hub workflow-bridge request (StorageWflwDrn/Gate/Tran/Pst then drive
+ *              it; the /admin/workflow/promote route that used the same bridge no longer
+ *              exists, this is the only depositor), or for a status reads
  *              the live STG_WFLW_STAGE/RES the workflow systems published. It replies
  *              BIN_MSG_EDGE_WFLW_RES(114) on the transport outbound queue, which the
  *              Replica relays to the originating ase-cli connection. Mirror of
@@ -20,8 +21,8 @@
  * @category    process
  * @schedule    Reception
  * @created     2026-07-12
- * @modified    2026-07-12
- * @version     1.0.0
+ * @modified    2026-10-03
+ * @version     1.0.1
  *
  * ECS SYSTEM HEADER COMPLIANCE
  *
@@ -48,8 +49,8 @@ namespace ase::storage {
  * Registers BIN_MSG_EDGE_WFLW_FWD(113) onto the transport workflow lane (LANE_WFLW) at
  * on_start so the L2 KernelWbskDspcSystem routes it here. Each tick it pops every queued
  * forward frame [113][cli_conn:u32][op:u8][path][label][by]; for EDGE_WFLW_OP_PROMOTE it
- * emplaces the hub workflow-bridge request (HubStgWflwReqComponent + HubStgWflwPendTag,
- * identical to sdk::emplace_workflow_promote_request) so the existing storage workflow
+ * emplaces the hub workflow-bridge request (HubStgWflwReqComponent + HubStgWflwPendTag; the
+ * only live depositor since the dist admin promote route is gone) so the existing storage workflow
  * systems drive the transition, and for EDGE_WFLW_OP_STATUS it reads the owner-scoped
  * STG_WFLW_STAGE/RES the workflow published. It then ships BIN_MSG_EDGE_WFLW_RES(114)
  * (cli_conn echoed) onto the transport outbound queue for the Replica to relay to the CLI.

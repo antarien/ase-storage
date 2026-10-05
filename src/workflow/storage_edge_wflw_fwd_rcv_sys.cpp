@@ -9,8 +9,8 @@
  * @category    process
  * @schedule    Reception
  * @created     2026-07-12
- * @modified    2026-07-12
- * @version     1.0.0
+ * @modified    2026-10-03
+ * @version     1.0.1
  *
  * CAUSAL CHAIN (EDGE_WFLW_FWD: Replica operator command → workflow drive / status read)
  *
@@ -23,7 +23,7 @@
  *   │                                                               │
  *   │  POP:     drain LANE_WFLW frames                              │
  *   │  PROMOTE: emplace HubStgWflwReqComponent + HubStgWflwPendTag  │
- *   │           (the SAME bridge /admin/workflow/promote deposits)  │
+ *   │           (the bridge StorageWflwDrnSystem drains)            │
  *   │  STATUS:  read owner-scoped STG_WFLW_STAGE / STG_WFLW_RES     │
  *   │  REPLY:   BIN_MSG_EDGE_WFLW_RES(114) onto the outbound queue  │
  *   └───────────────────────────────────────────────────────────────┘
@@ -206,8 +206,9 @@ bool read_lp_str(const char* buf, uint32_t len, uint32_t& off, char* out, uint32
     return true;
 }
 
-// WFLW_RES_* / WFLW_STAGE_* names (bounded lookup tables, mirror the /admin/workflow/status
-// route (SSOT in ase-storage types.hpp). Index range-checked via the types SSOT; out-of-range
+// WFLW_RES_* / WFLW_STAGE_* names (bounded lookup tables; the ordinals' SSOT is ase-storage
+// types.hpp). The /admin/workflow/status route these once mirrored no longer exists — this reply
+// is the only place the names are spoken. Index range-checked via the types SSOT; out-of-range
 // collapses to the safe floor. Data-driven lookup, not an if-chain of hardcoded ordinals.
 const char* wflw_res_name(int32_t i) {
     const char* names[6] = {"pending", "applied", "denied_edge",
@@ -319,9 +320,11 @@ void StorageEdgeWflwFwdRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
                           op_owner, by, static_cast<uint32_t>(granted_perm),
                           static_cast<uint32_t>(EDGE_CLEARANCE_OPERATOR));
 
-                // Deposit the SAME hub workflow-bridge request the /admin/workflow/promote route
-                // deposits (StorageWflwDrnSystem drains it, StorageWflwTranSystem applies the
-                // transition + audit). Identical field copies to sdk::emplace_workflow_promote_request.
+                // Deposit the hub workflow-bridge request (StorageWflwDrnSystem drains it,
+                // StorageWflwTranSystem applies the transition + audit). This is the ONLY live
+                // depositor: the /admin/workflow/promote route that used to deposit it through
+                // sdk::emplace_workflow_promote_request no longer exists (measured 2026-10-03), so
+                // the field copies here are the form, not a mirror of it.
                 auto bridge = registry.create();
                 auto& breq = registry.emplace<hub::HubStgWflwReqComponent>(bridge);
                 ase::utils::str_copy(breq.path, static_cast<uint32_t>(sizeof(breq.path)), path);

@@ -223,8 +223,8 @@ struct StorageModule {
         app.add_system_with<StorageKycdLnkSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageKycdVldSystem");
         // Workflow-promote Hub-bridge drain: converts HubStgWflwReqComponent bridge
-        // entities (sdk::emplace_workflow_promote_request) into module-local
-        // StorageReqWflwTranComponent requests (+ released-gate tag).
+        // entities (deposited by StorageEdgeWflwFwdRcvSystem from frame 113, `ase edge
+        // promote`) into module-local StorageReqWflwTranComponent requests (+ released-gate tag).
         //
         // NO run_after ON HubRcvDrnSystem — same case as StorageKycdNtfyDrnSystem above, and
         // the reasoning is written out there once: Reception and Ingestion share the Frame tier

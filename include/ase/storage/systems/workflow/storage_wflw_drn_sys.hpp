@@ -6,16 +6,19 @@
  * @file        storage_wflw_drn_sys.hpp
  * @brief       StorageWflwDrnSystem - Drains Hub-bridge workflow-promote requests
  * @description Converts HubStgWflwReqComponent bridge entities (deposited by
- *              sdk::emplace_workflow_promote_request from the dist admin route)
- *              into module-local StorageReqWflwTranComponent request entities.
+ *              StorageEdgeWflwFwdRcvSystem from the Replica-forwarded operator
+ *              command, frame 113 — `ase edge promote`) into module-local
+ *              StorageReqWflwTranComponent request entities. The dist admin route
+ *              POST /admin/workflow/promote that deposited them through
+ *              sdk::emplace_workflow_promote_request no longer exists (2026-10-03).
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Ingestion
  * @created     2026-07-11
- * @modified    2026-07-11
- * @version     1.0.0
+ * @modified    2026-10-03
+ * @version     1.0.1
  *
  * ECS SYSTEM HEADER COMPLIANCE
  *
@@ -43,7 +46,7 @@ namespace ase::storage {
  * @reads    hub::HubStgWflwReqComponent + hub::HubStgWflwPendTag (bridge entities)
  * @writes   StorageReqWflwTranComponent + StorageWflwPendTag (+ StorageWflwGateTag
  *           when the target label is EDGE_LABEL_RELEASED); STG_WFLW_RES = PENDING
- * @depends  sdk::emplace_workflow_promote_request deposits the bridge entities
+ * @depends  StorageEdgeWflwFwdRcvSystem deposits the bridge entities
  */
 class StorageWflwDrnSystem : public ecs::System {
 public:
