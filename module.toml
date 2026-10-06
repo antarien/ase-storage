@@ -7,7 +7,7 @@ name = "ase-storage"
 version = "00.00.39.00039"
 type = "module"
 layer = 3
-api_version = 1
+api_version = 4
 plane = "kern"
 
 [dependencies]
