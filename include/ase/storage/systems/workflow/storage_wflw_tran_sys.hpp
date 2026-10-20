@@ -12,9 +12,10 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Integration
+ * @usecase     usecase:100405 - apply workflow transition
  * @created     2026-04-05
- * @modified    2026-04-05
- * @version     1.0.0
+ * @modified    2026-10-12
+ * @version     1.0.1
  *
  * ECS SYSTEM HEADER COMPLIANCE
  *
@@ -45,7 +46,7 @@ namespace ase::storage {
  * @writes   StorageAcssRuleComponent.label, STG_WFLW_RES/STG_WFLW_STAGE (owner-scoped),
  *           StorageBufAudtComponent + StorageAudtPendTag (attributed audit),
  *           StorageBufWflwComponent + StorageWflwPstPendTag (frame-112 persist)
- * @depends  StorageWflwDrnSystem staged requests; StorageWflwEdgeIniSystem seeded edges
+ * @depends  StorageWflwStgeSystem staged requests; StorageWflwEdgeIniSystem seeded edges
  */
 class StorageWflwTranSystem : public ecs::System {
 public:

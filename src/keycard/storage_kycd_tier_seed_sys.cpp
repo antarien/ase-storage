@@ -9,9 +9,10 @@
  * @design      DSGN_021
  * @category    process
  * @schedule    Configuration
+ * @usecase     usecase:100403 - seed tier keycards
  * @created     2026-09-14
- * @modified    2026-09-14
- * @version     1.0.0
+ * @modified    2026-10-12
+ * @version     1.1.0
  *
  * CAUSAL CHAIN (Tier Service-Keycard Seed)
  *
@@ -28,7 +29,6 @@
  *   │  WRITES:                                                    │
  *   │    - StorageReqKycdComponent (je Teilnehmer eine Zeile)     │
  *   │    - StorageReqKycdRelmComponent (relm_ref 0 = eigener)     │
- *   │    - hub::HubStgKycdPendTag (Entdeckungsmarke des Drains)   │
  *   └─────────────────────────────────────────────────────────────┘
  *          │
  *          │ Die Anfrage betritt die BESTEHENDE Keycard-Strecke unveraendert
@@ -43,9 +43,8 @@
  *   ein Hub-Wert dazwischen waere ein dritter Ort fuer dieselbe Aussage.
  *
  * WRITES (to Hub):
- *   hub::HubStgKycdPendTag - die Entdeckungsmarke, ueber die StorageKycdReqDrnSystem die
- *   Anfrage findet, ohne L3 zu importieren. Sie traegt keinen Wert; die Kartendaten stehen
- *   in den Komponenten daneben und reisen nie durch den Float-Kanal.
+ *   keine - StorageKycdReqDrnSystem findet die Anfrage an ihrer StorageReqKycdComponent; die
+ *   Kartendaten stehen in den Komponenten und reisen nie durch den Float-Kanal.
  *
  * DAS PROBLEM, DAS DIESES SYSTEM LOEST - und es ist ein Ring, kein Loch.
  *   Seit die Knoten-Token-Praegung durch die A/ACS-Leiter laeuft, ist der anfragende Dienst
@@ -187,9 +186,6 @@
 // Kartenwerte (KYCD_TIER_*)
 #include <ase/storage/types.hpp>
 
-// Hub-Entdeckungsmarke: der Drain findet die Anfrage ueber sie, ohne L3 zu importieren
-#include <ase/hub/api.hpp>
-
 // str_copy - begrenzte Zeichenkettenkopie (Layer 0)
 #include <ase/utils/strops.hpp>
 
@@ -240,7 +236,7 @@ void StorageKycdTierSeedSystem::tick(ecs::Registry& registry, float dt) {
     }
     const uint64_t issued_at = (*mgr_slot)->get_wall_time_seconds();
 
-    // ── svc:world ── Compute-Knoten der Flotte (CONN_ROLE_PUBLISHER auf der Replica-Seite)
+    // svc:world: Compute-Knoten der Flotte (CONN_ROLE_PUBLISHER auf der Replica-Seite)
     {
         auto ent = registry.create();
         auto& req = registry.emplace<StorageReqKycdComponent>(ent);
@@ -251,10 +247,9 @@ void StorageKycdTierSeedSystem::tick(ecs::Registry& registry, float dt) {
         req.clearance = KYCD_TIER_CLEARANCE;
         auto& relm = registry.emplace<StorageReqKycdRelmComponent>(ent);
         relm.perm = KYCD_TIER_PERMS;
-        registry.emplace<hub::HubStgKycdPendTag>(ent);
     }
 
-    // ── svc:engine ── Kapazitaets-Orchestrator; er stellt den Knoten-Token-Antrag
+    // svc:engine: Kapazitaets-Orchestrator; er stellt den Knoten-Token-Antrag
     {
         auto ent = registry.create();
         auto& req = registry.emplace<StorageReqKycdComponent>(ent);
@@ -265,10 +260,9 @@ void StorageKycdTierSeedSystem::tick(ecs::Registry& registry, float dt) {
         req.clearance = KYCD_TIER_CLEARANCE;
         auto& relm = registry.emplace<StorageReqKycdRelmComponent>(ent);
         relm.perm = KYCD_TIER_PERMS;
-        registry.emplace<hub::HubStgKycdPendTag>(ent);
     }
 
-    // ── svc:reasoning ── Reasoning-Tier
+    // svc:reasoning: Reasoning-Tier
     {
         auto ent = registry.create();
         auto& req = registry.emplace<StorageReqKycdComponent>(ent);
@@ -279,10 +273,9 @@ void StorageKycdTierSeedSystem::tick(ecs::Registry& registry, float dt) {
         req.clearance = KYCD_TIER_CLEARANCE;
         auto& relm = registry.emplace<StorageReqKycdRelmComponent>(ent);
         relm.perm = KYCD_TIER_PERMS;
-        registry.emplace<hub::HubStgKycdPendTag>(ent);
     }
 
-    // ── svc:dist ── Auslieferungsserver der Edge-Binaries
+    // svc:dist: Auslieferungsserver der Edge-Binaries
     {
         auto ent = registry.create();
         auto& req = registry.emplace<StorageReqKycdComponent>(ent);
@@ -293,7 +286,6 @@ void StorageKycdTierSeedSystem::tick(ecs::Registry& registry, float dt) {
         req.clearance = KYCD_TIER_CLEARANCE;
         auto& relm = registry.emplace<StorageReqKycdRelmComponent>(ent);
         relm.perm = KYCD_TIER_PERMS;
-        registry.emplace<hub::HubStgKycdPendTag>(ent);
     }
 
     log::info("[StorageKycdTierSeed] service keycards requested for the tier participants "

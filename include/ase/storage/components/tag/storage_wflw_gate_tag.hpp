@@ -11,9 +11,11 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    tag
+ * @parity      server_only
+ * @usecase     usecase:100406 - gate release artifacts
  * @created     2026-04-06
- * @modified    2026-08-20
- * @version     1.0.1
+ * @modified    2026-10-12
+ * @version     1.0.2
  *
  * ECS TAG COMPLIANCE
  *
@@ -53,7 +55,7 @@ namespace ase::storage {
  *        presence beside the asset is not yet verified
  * Filter: Used by StorageWflwGateSystem (Tag-filtered artifact check);
  *         StorageWflwTranSystem EXCLUDES entities still carrying it
- * Added: StorageWflwDrnSystem when the drained target label is "released"
+ * Added: StorageWflwStgeSystem when the staged target label is "released"
  * Removed: StorageWflwGateSystem — removed on pass; entity destroyed on fail
  */
 struct StorageWflwGateTag {};

@@ -11,6 +11,8 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    tag
+ * @parity      server_only
+ * @usecase     usecase:100329 - stage workflow promotion
  * @created     2026-04-06
  * @modified    2026-08-20
  * @version     1.0.1

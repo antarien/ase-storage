@@ -5,7 +5,7 @@
  *
  * @file        storage_kycd_req_drn_sys.hpp
  * @brief       StorageKycdReqDrnSystem - Drains keycard issuance requests from HTTP notify into token entities
- * @description Consumes request entities that carry StorageReqKycdComponent + hub::HubStgKycdPendTag,
+ * @description Consumes request entities that carry StorageReqKycdComponent,
  *              creates token entities with StorageStaIdnComponent + StorageStaKycdComponent +
  *              StorageKycdPendTag and destroys the request entities (collect-then-destroy).
  *              Hands off to the existing Pend → Vld → Lnk keycard pipeline.
@@ -14,9 +14,10 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Ingestion
+ * @usecase     usecase:100264 - issue customer keycard
  * @created     2026-04-16
- * @modified    2026-04-16
- * @version     1.0.0
+ * @modified    2026-10-12
+ * @version     1.1.0
  *
  * ECS SYSTEM HEADER COMPLIANCE
  *
@@ -40,8 +41,8 @@ namespace ase::storage {
 /**
  * @brief StorageKycdReqDrnSystem - Drains HTTP-posted keycard issuance requests
  *
- * @schedule Ingestion - run_after HubRcvDrnSystem so Hub-side discovery tag is visible
- * @reads    StorageReqKycdComponent + hub::HubStgKycdPendTag (request entities)
+ * @schedule Ingestion - run_after HubRcvDrnSystem
+ * @reads    StorageReqKycdComponent on request entities that have not minted yet
  * @writes   StorageStaIdnComponent + StorageStaKycdComponent + StorageKycdPendTag (new token entities)
  * @destroys request entities after successful drain
  * @depends  plugins/ase-pl-webserver auth_routes emplaces request components

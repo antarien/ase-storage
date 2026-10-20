@@ -5,20 +5,20 @@
  *
  * @file        storage_wflw_drn_sys.hpp
  * @brief       StorageWflwDrnSystem - Drains Hub-bridge workflow-promote requests
- * @description Converts HubStgWflwReqComponent bridge entities (deposited by
- *              StorageEdgeWflwFwdRcvSystem from the Replica-forwarded operator
- *              command, frame 113 — `ase edge promote`) into module-local
- *              StorageReqWflwTranComponent request entities. The dist admin route
- *              POST /admin/workflow/promote that deposited them through
- *              sdk::emplace_workflow_promote_request no longer exists (2026-10-03).
+ * @description Converts the hub rows of the kind HUB_STG_WFLW_REQ (a plugin files them
+ *              with sdk::row_create and sdk::set_bytes) into module-local
+ *              StorageReqWflwTranComponent request entities marked StorageWflwRcvTag,
+ *              the same form the frame-113 door StorageEdgeWflwFwdRcvSystem fills;
+ *              StorageWflwStgeSystem stages both.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Ingestion
+ * @usecase     usecase:100329 - stage workflow promotion
  * @created     2026-07-11
- * @modified    2026-10-03
- * @version     1.0.1
+ * @modified    2026-10-12
+ * @version     1.2.0
  *
  * ECS SYSTEM HEADER COMPLIANCE
  *
@@ -43,10 +43,9 @@ namespace ase::storage {
  * @brief StorageWflwDrnSystem - Hub-bridge drain for workflow-promote requests
  *
  * @schedule Ingestion - run_after HubRcvDrnSystem (mirror StorageKycdNtfyDrnSystem)
- * @reads    hub::HubStgWflwReqComponent + hub::HubStgWflwPendTag (bridge entities)
- * @writes   StorageReqWflwTranComponent + StorageWflwPendTag (+ StorageWflwGateTag
- *           when the target label is EDGE_LABEL_RELEASED); STG_WFLW_RES = PENDING
- * @depends  StorageEdgeWflwFwdRcvSystem deposits the bridge entities
+ * @reads    the hub rows HUB_STG_WFLW_REQ (path, target label, requester), released after
+ * @writes   StorageReqWflwTranComponent + StorageWflwRcvTag on a new request entity
+ * @depends  the writer of HUB_STG_WFLW_REQ in modules/ase-hub/data/hub_rows.json files the rows
  */
 class StorageWflwDrnSystem : public ecs::System {
 public:

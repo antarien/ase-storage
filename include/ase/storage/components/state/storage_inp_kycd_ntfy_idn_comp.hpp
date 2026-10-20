@@ -5,37 +5,32 @@
  *
  * @file        storage_inp_kycd_ntfy_idn_comp.hpp
  * @brief       StorageInpKycdNtfyIdnComponent - wem die angefragte Keycard gilt, aus dem Stern
- * @description Die Identitaetshaelfte der Bruecke einer Ausstellungsanfrage: StorageKycdNtfSynSystem
- *              spiegelt die vier Sternzeilen HIERHER, und der Drain liest nur noch diese Zeile.
- *              Sie liegt auf der ANFRAGE-Entity, ihr Besitzer ist also die Entity selbst - ein
- *              eigenes Besitzerfeld waere ein zweiter Ort fuer dieselbe Auskunft.
+ * @description Die Identitaetshaelfte der Bruecke einer Ausstellungsanfrage: StorageKycdNtfySynSystem
+ *              spiegelt die Felder der Hub-Zeile HUB_STG_KYCD_REQ HIERHER, und der Drain liest nur
+ *              noch diese Zeile. Sie liegt auf der ANFRAGE-Entity, ihr Besitzer ist also die Entity
+ *              selbst - ein eigenes Besitzerfeld waere ein zweiter Ort fuer dieselbe Auskunft.
  *
- *              WARUM DIE HAELFTEN ROH STEHEN BLEIBEN. Der Stern fuehrt jede Groesse als float,
- *              und ein uint32-Hash passt nicht in eine 24-Bit-Mantisse; die SDK-Seite zerlegt ihn
- *              deshalb in zwei exakte 16-Bit-Haelften. Diese Zeile SPIEGELT, sie rechnet nicht -
- *              das Zusammensetzen ist Sache des lesenden Systems. Wer hier zusammensetzte, holte
- *              die Rechnung zurueck an die Hub-Seite und hoebe den Schnitt auf, fuer den es die
- *              Zeile gibt.
+ *              DIE HASHES STEHEN GANZ. Die Zeile fuehrt Benutzer- und Realm-Hash als u32-Felder,
+ *              also bitgenau; diese Zeile spiegelt sie, sie rechnet nicht.
  *
- *              WARUM ES DEN SCHNITT GIBT. Gemessen 2026-09-21 meldete der Validator an
- *              storage_kycd_ntfy_drn_sys.cpp HUB_IO_MIXED_WITH_MATH: sechs hub::get und die
- *              Rekonstruktion standen in EINEM tick(). Die Regel nennt ihren Weg selbst - eine
- *              server-only Seite liest den Stern in eine *_inp_*-Zeile, die rechnende Seite nimmt
- *              sie von dort (WRFL_ASE_SYN_PATTERN).
+ *              WARUM ES DEN SCHNITT GIBT. Die Regel HUB_IO_MIXED_WITH_MATH trennt das Lesen des
+ *              Sterns von der Rechnung: eine server-only Seite liest den Stern in eine
+ *              *_inp_*-Zeile, die rechnende Seite nimmt sie von dort (WRFL_ASE_SYN_PATTERN).
  *
  *              WARUM ZWEI ZEILEN UND NICHT EINE. Sechs Felder in einem Component sind eine
  *              God-Component; das Modul trennt dieselbe Sache schon einmal so -
  *              StorageStaKycdComponent traegt, WEM die Karte gilt, StorageKycdGrntComponent, WAS
  *              sie oeffnet. Die Bruecke folgt derselben Fuge: hier die Identitaet, in
- *              storage_inp_kycd_ntfy_trm_comp.hpp die Bedingungen.
+ *              storage_inp_kycd_ntfy_grnt_comp.hpp die Bedingungen.
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
  * @parity      server_only
+ * @usecase     usecase:100264 - issue customer keycard
  * @created     2026-09-21
- * @modified    2026-09-21
- * @version     00.00.00.00000 [seed]
+ * @modified    2026-10-12
+ * @version     00.00.00.00001 [seed]
  *
  * ECS COMPONENT COMPLIANCE
  *
@@ -66,22 +61,23 @@
  * [ ] Component stores ONLY primitive ID (uint32_t) referencing external resource
  */
 
+#include <cstdint>
+
 namespace ase::storage {
 
 /**
  * @brief StorageInpKycdNtfyIdnComponent - the star side of WHO a requested keycard is for
  *
- * Written by StorageKycdNtfSynSystem, read by StorageKycdNtfyDrnSystem. Every field is a
- * MIRROR of a hub line under this request entity; nothing here is computed.
+ * Written by StorageKycdNtfySynSystem, read by StorageKycdNtfyDrnSystem. Every field is a
+ * MIRROR of a field of the hub row on this request entity; nothing here is computed.
  *
- * @hub_reads  SES_KYCD_NTF_USER_ID_HI/_LO, SES_KYCD_NTF_REALM_ID_HI/_LO (by the sync system)
+ * @hub_reads  HUB_STG_KYCD_REQ_USER_HASH, _REALM_HASH, _USER_ID (by the sync system)
  * @hub_writes none
  */
 struct StorageInpKycdNtfyIdnComponent {
-    float user_hash_hi = 0.0f;                // upper 16 bits of the FNV user hash, exact
-    float user_hash_lo = 0.0f;                // lower 16 bits of the FNV user hash, exact
-    float realm_hash_hi = 0.0f;               // upper 16 bits of the FNV realm hash, exact
-    float realm_hash_lo = 0.0f;               // lower 16 bits of the FNV realm hash, exact
+    uint32_t user_hash = 0;                   // FNV-1a32 of the user id, exact
+    uint32_t realm_hash = 0;                  // FNV-1a32 of the realm id, 0 when the request names none
+    char user_id[64] = {};                    // requester user id string, NUL-terminated
 };
 
 }  // namespace ase::storage

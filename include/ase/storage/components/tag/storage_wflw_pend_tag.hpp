@@ -10,9 +10,11 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    tag
+ * @parity      server_only
+ * @usecase     usecase:100329 - stage workflow promotion
  * @created     2026-04-06
- * @modified    2026-08-20
- * @version     1.0.1
+ * @modified    2026-10-12
+ * @version     1.0.2
  *
  * ECS TAG COMPLIANCE
  *
@@ -48,9 +50,9 @@ namespace ase::storage {
 /**
  * @brief StorageWflwPendTag - Workflow transition request awaiting processing
  *
- * State: Promote request drained from the Hub bridge, transition not yet applied
+ * State: Promote request staged, transition not yet applied
  * Filter: Used by StorageWflwTranSystem (with entt::exclude<StorageWflwGateTag>)
- * Added: StorageWflwDrnSystem when draining the Hub bridge entity
+ * Added: StorageWflwStgeSystem when it stages a received request (StorageWflwRcvTag)
  * Removed: Entity destroyed by StorageWflwTranSystem after the verdict
  */
 struct StorageWflwPendTag {};

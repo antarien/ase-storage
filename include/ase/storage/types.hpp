@@ -10,8 +10,9 @@
  *
  * @module      ase-storage
  * @layer       3 (Modules)
+ * @usecase     usecase:100265 - check access clearance
  * @created     2026-04-04
- * @modified    2026-04-04
+ * @modified    2026-10-07
  * @version     1.0.0
  *
  * ECS TYPES COMPLIANCE
@@ -30,7 +31,7 @@
 
 namespace ase::storage {
 
-// ── SERIAL TYPE IDs (Layer 3: 380-399 — network serialization) ──────────
+// SERIAL TYPE IDs (Layer 3: 380-399 — network serialization)
 
 constexpr uint32_t SERIAL_TYP_STG_RLM  = 380;  // Realm state serialization identifier
 constexpr uint32_t SERIAL_TYP_STG_KCD  = 381;  // Keycard state serialization identifier
@@ -42,7 +43,7 @@ constexpr uint32_t SERIAL_TYP_STG_TSK  = 386;  // Need-to-Know task serializatio
 constexpr uint32_t SERIAL_TYP_STG_IDN  = 387;  // Identity data serialization identifier
 constexpr uint32_t SERIAL_TYP_STG_TKN  = 388;  // Token reference serialization identifier
 
-// ── BUFFER SIZES (char[N] array lengths) ────────────────────────────────
+// BUFFER SIZES (char[N] array lengths)
 
 constexpr uint32_t MAX_REALM_ID       = 64;    // Realm path identifier max chars
 constexpr uint32_t MAX_REALM_NAME     = 128;   // Realm display name max chars
@@ -58,31 +59,31 @@ constexpr uint32_t MAX_KEYCARD_HASH   = 64;    // SHA-256 hex digest max chars
 constexpr uint32_t MAX_EMAIL_LEN      = 64;    // Email address max chars
 constexpr uint32_t MAX_DISPLAY_NAME   = 64;    // User display name max chars
 
-// ── JWT / KEYCARD LIMITS (developer platform tokens) ────────────────────
+// JWT / KEYCARD LIMITS (developer platform tokens)
 
 constexpr uint32_t JWT_MAX_LENGTH           = 2048;  // Max JWT string length in base64url encoding
 constexpr uint32_t AUTH_CHECK_INTERVAL_MS   = 1000;  // Expiry check runs every 1000ms at 1Hz
 constexpr uint16_t USER_ID_MAX_LENGTH       = 64;    // Max user_id field size in bytes
 
-// ── REALM TYPES ─────────────────────────────────────────────────────────
+// REALM TYPES
 
 constexpr uint8_t REALM_PERSONAL      = 0;    // Auto-created workspace per registered user
 constexpr uint8_t REALM_ORGANIZATION  = 1;    // Studio or team workspace created by owner
 constexpr uint8_t REALM_PUBLIC        = 2;    // Platform-wide engine defaults and shared templates
 
-// ── REALM STATUS ────────────────────────────────────────────────────────
+// REALM STATUS
 
 constexpr uint8_t REALM_ACTIVE        = 0;    // Normal read-write operation mode
 constexpr uint8_t REALM_SUSPENDED     = 1;    // Disabled by admin (no read or write)
 constexpr uint8_t REALM_ARCHIVED      = 2;    // Read-only before deletion
 
-// ── TIER LEVELS (license tiers control quotas and max protection) ───────
+// TIER LEVELS (license tiers control quotas and max protection)
 
 constexpr uint8_t TIER_INDIE          = 0;    // Small team with limited features and storage
 constexpr uint8_t TIER_PRO            = 1;    // Professional studio with expanded limits
 constexpr uint8_t TIER_ENTERPRISE     = 2;    // Full control with unlimited resources
 
-// ── PROTECTION LEVELS — Schutzstufen (vertical content classification) ─
+// PROTECTION LEVELS — Schutzstufen (vertical content classification)
 
 constexpr uint8_t PROTECTION_PUBLIC       = 0;  // Showcase and marketing material visible to all
 constexpr uint8_t PROTECTION_VISIBLE      = 1;  // Released assets and docs for realm members
@@ -95,13 +96,13 @@ constexpr uint8_t PROTECTION_SECRET       = 7;  // Pre-announcement roadmap and 
 constexpr uint8_t PROTECTION_TOP_SECRET   = 8;  // Signing keys and master encryption credentials
 constexpr uint8_t PROTECTION_SOVEREIGN    = 9;  // Realm config and billing for owner access
 
-// ── MAX PROTECTION PER TIER ─────────────────────────────────────────────
+// MAX PROTECTION PER TIER
 
 constexpr uint8_t TIER_INDIE_MAX_PROTECTION      = 3;  // Indie teams use levels 0 through 3
 constexpr uint8_t TIER_PRO_MAX_PROTECTION        = 6;  // Pro studios use levels 0 through 6
 constexpr uint8_t TIER_ENTERPRISE_MAX_PROTECTION  = 9;  // Enterprise has access to all 10 levels
 
-// ── PERMISSION BITFLAGS (developer action authorization) ────────────────
+// PERMISSION BITFLAGS (developer action authorization)
 
 constexpr uint16_t PERM_READ     = 0x0001;   // Read and download assets from storage
 constexpr uint16_t PERM_WRITE    = 0x0002;   // Upload and modify assets in storage
@@ -111,7 +112,7 @@ constexpr uint16_t PERM_MANAGE   = 0x0010;   // Manage ACL rules and workflow la
 constexpr uint16_t PERM_INVITE   = 0x0020;   // Issue keycards to invite new members
 constexpr uint16_t PERM_ALL      = 0xFFFF;   // Full access wildcard for realm owners
 
-// ── KEYCARD TYPES (developer access grant method) ──────────────────────
+// KEYCARD TYPES (developer access grant method)
 
 constexpr uint8_t KCD_LOGIN      = 0;    // Auto-issued session token at user login
 constexpr uint8_t KCD_INVITE     = 1;    // Realm owner invites a team member
@@ -119,7 +120,7 @@ constexpr uint8_t KCD_GUEST      = 2;    // Limited access for publishers or fre
 constexpr uint8_t KCD_DELEGATE   = 3;    // Transferred keycard from an existing member
 constexpr uint8_t KCD_SERVICE    = 4;    // Automated access for CI/CD build servers
 
-// ── SERVICE-KEYCARD DER TIER-DIENSTE (KCD_SERVICE, beim Start gepraegt) ─
+// SERVICE-KEYCARD DER TIER-DIENSTE (KCD_SERVICE, beim Start gepraegt)
 //
 // WARUM ES DIESE KARTEN GIBT. Die A/ACS-Leiter kennt nur TEILNEHMER (DSGN_109, 83/PSHARE).
 // Ein Tier-Dienst, der ueber den Replica ein Kunden-Geheimnis anfassen will, ist ein
@@ -130,7 +131,7 @@ constexpr uint8_t  KYCD_TIER_CLEARANCE = PROTECTION_PROTECTED;  // Stufe der Kla
 constexpr uint16_t KYCD_TIER_PERMS = PERM_READ | PERM_WRITE | PERM_DELETE;  // genau die drei Aktionen der Anmeldedaten-Verwaltung (CRED_ACSS_ACTION_READ/WRITE/DELETE: list, put/rotate, delete); kein PERM_MANAGE/PERM_INVITE, denn ein Dienst, der Geheimnisse dreht, stellt keine Keycards aus
 constexpr uint64_t KYCD_TIER_EXP_AT = 0u;  // Unix-Sekunden, 0 = keine eigene Frist: ARCH_ASE_STORAGE 5.2 gibt der Service-Keycard "per Deployment-Zyklus", und die Praegung liegt in einer Lifecycle-Schedule — ein Prozessstart IST der Zyklus, die Karte kann nicht aelter werden als ihr Halter. Eine zweite Uhr daneben laesst eine Flotte an einem abgelaufenen Geheimnis sterben, waehrend alles laeuft
 
-// ── AUDIT ACTIONS (recorded platform operations) ────────────────────────
+// AUDIT ACTIONS (recorded platform operations)
 
 constexpr uint8_t AUD_READ       = 0;    // Asset was read or downloaded by user
 constexpr uint8_t AUD_WRITE      = 1;    // Asset was uploaded or modified by user
@@ -141,7 +142,7 @@ constexpr uint8_t AUD_INVITE     = 5;    // New keycard was issued to a member
 constexpr uint8_t AUD_LOGIN      = 6;    // User authenticated via keycard validation
 constexpr uint8_t AUD_REVOKE     = 7;    // Keycard was revoked by issuer or admin
 
-// ── AUDIT RESULTS ───────────────────────────────────────────────────────
+// AUDIT RESULTS
 
 constexpr uint8_t AUD_GRANTED    = 0;    // Access was allowed after A/ACS check passed
 constexpr uint8_t AUD_DENIED     = 1;    // Access was refused with logged reason string
@@ -163,7 +164,7 @@ constexpr uint8_t  SRVL_DENY_THRESHOLD = 5;         // denials inside the window
 constexpr uint64_t SRVL_WINDOW_S       = 300;       // 5 minutes: denials further apart start a fresh streak
 constexpr uint64_t SRVL_STAMP_MASK     = 0xFFFFFF;  // low 24 bits - the largest integer range a float32 holds exactly
 
-// ── ASSET CATEGORIES (engine content classification) ────────────────────
+// ASSET CATEGORIES (engine content classification)
 
 constexpr uint8_t AST_ART        = 0;    // Images, prompts, 3D models and textures
 constexpr uint8_t AST_AUDIO      = 1;    // Music, sound effects and voice recordings
@@ -174,14 +175,14 @@ constexpr uint8_t AST_BUILD      = 5;    // Compiled artifacts and distribution 
 constexpr uint8_t AST_SIGNING    = 6;    // Cryptographic keys and signing certificates
 constexpr uint8_t AST_DOC        = 7;    // Documentation, guides and README files
 
-// ── VOTE STATUS (content review approval outcome) ───────────────────────
+// VOTE STATUS (content review approval outcome)
 
 constexpr uint8_t VOT_OPEN       = 0;    // Active vote collecting ballots from members
 constexpr uint8_t VOT_ACCEPTED   = 1;    // Majority voted in favor of the motion
 constexpr uint8_t VOT_REJECTED   = 2;    // Majority voted against the motion
 constexpr uint8_t VOT_EXPIRED    = 3;    // Deadline passed without reaching quorum
 
-// ── BALLOT DECISIONS ────────────────────────────────────────────────────
+// BALLOT DECISIONS
 
 constexpr uint8_t BALLOT_FOR     = 0;    // Cast vote in favor of the motion
 constexpr uint8_t BALLOT_AGAINST = 1;    // Cast vote against the motion
@@ -196,13 +197,13 @@ constexpr uint8_t BALLOT_ABSTAIN = 2;    // Abstain but count toward quorum thre
 constexpr uint32_t VOTE_PRC_BATCH   = 16;       // max votes concluded per tick (deferred tag-removal bound)
 constexpr uint64_t VOTE_KYCD_TTL_S  = 2592000;  // 30 days: lifetime of a keycard issued by a passed vote
 
-// ── TASK STATUS (Need-to-Know scoping, Enterprise tier) ────────────────
+// TASK STATUS (Need-to-Know scoping, Enterprise tier)
 
 constexpr uint8_t TASK_ACTIVE    = 0;    // Developer has scoped access within this task
 constexpr uint8_t TASK_DONE      = 1;    // Task finished, scoped access revoked
 constexpr uint8_t TASK_LAPSED    = 2;    // Deadline passed, scoped access revoked
 
-// ── QUOTA LIMITS — INDIE TIER ───────────────────────────────────────────
+// QUOTA LIMITS — INDIE TIER
 
 constexpr uint32_t QUOTA_INDIE_PROJECTS    = 3;              // Max projects in one realm
 constexpr uint64_t QUOTA_INDIE_STORAGE     = 1073741824;     // Max bytes per project (1 GB)
@@ -212,7 +213,7 @@ constexpr uint32_t QUOTA_INDIE_CODEWORDS   = 20;             // Max codewords pe
 constexpr uint32_t QUOTA_INDIE_LATTICE     = 1;              // Max lattice links (public only)
 constexpr uint32_t QUOTA_INDIE_AUDIT_DAYS  = 30;             // Audit log retention in days
 
-// ── QUOTA LIMITS — PRO TIER ─────────────────────────────────────────────
+// QUOTA LIMITS — PRO TIER
 
 constexpr uint32_t QUOTA_PRO_PROJECTS      = 20;             // Max projects in one realm
 constexpr uint64_t QUOTA_PRO_STORAGE       = 53687091200;    // Max bytes per project (50 GB)
@@ -222,7 +223,7 @@ constexpr uint32_t QUOTA_PRO_CODEWORDS     = 200;            // Max codewords pe
 constexpr uint32_t QUOTA_PRO_LATTICE       = 5;              // Max lattice links to other realms
 constexpr uint32_t QUOTA_PRO_AUDIT_DAYS    = 365;            // Audit log retention in days
 
-// ── QUOTA LIMITS — ENTERPRISE TIER ──────────────────────────────────────
+// QUOTA LIMITS — ENTERPRISE TIER
 
 constexpr uint32_t QUOTA_ENT_PROJECTS      = 0xFFFFFFFF;     // Unlimited projects per realm
 constexpr uint64_t QUOTA_ENT_STORAGE       = 536870912000;   // Max bytes per project (500 GB)
@@ -232,7 +233,7 @@ constexpr uint32_t QUOTA_ENT_CODEWORDS     = 0xFFFFFFFF;     // Unlimited codewo
 constexpr uint32_t QUOTA_ENT_LATTICE       = 0xFFFFFFFF;     // Unlimited lattice links
 constexpr uint32_t QUOTA_ENT_AUDIT_DAYS    = 0xFFFFFFFF;     // Unlimited audit log retention
 
-// ── A/ACS LADDER PRESETS (Section 14.1 in-ladder rules, no pre-ladder shortcuts) ─
+// A/ACS LADDER PRESETS (Section 14.1 in-ladder rules, no pre-ladder shortcuts)
 // The public realm and the realm-owner power are modelled as proper ladder
 // inputs so every GRANT happens only at step 10, never before step 2.
 
@@ -241,18 +242,18 @@ constexpr const char* ACSS_CWRD_WILDCARD   = "ALL";   // Wildcard codeword: owne
 constexpr uint8_t  ACSS_OWNER_CLEARANCE = 9;          // Realm-owner keycard preset clearance (SOVEREIGN, ARCH :819 "Owner = Clearance 9")
 constexpr uint16_t ACSS_OWNER_PERMS     = 0xFFFF;     // Realm-owner keycard preset permissions (all bitflags, ARCH :819 "alle Codewörter")
 
-// ── ENTITY REFERENCE ────────────────────────────────────────────────────
+// ENTITY REFERENCE
 
 constexpr uint32_t INVALID_ENTITY = 0xFFFFFFFF;  // No entity reference (UINT32_MAX sentinel)
 
-// ── ACL RULE MATCHING (path_pattern semantics) ──────────────────────────
+// ACL RULE MATCHING (path_pattern semantics)
 // A LEADING '*' makes a rule a SUFFIX rule ("*.sig" governs companion artifacts
 // that sit BESIDE binaries — prefix patterns cannot express them); any other
 // pattern is the established prefix rule. Specificity ranking: suffix rules
 // outrank every prefix rule; among equals the LONGER pattern wins.
 constexpr uint32_t ACSS_MATCH_SUFFIX_BONUS = 1000;  // score bonus lifting suffix rules above all prefix rules
 
-// ── FAHNE FLAGS (SharedHeader UI zone identifiers) ──────────────────────
+// FAHNE FLAGS (SharedHeader UI zone identifiers)
 
 constexpr uint8_t FLAG_ORG  = 0;    // Organization and realm context zone
 constexpr uint8_t FLAG_PRJ  = 1;    // Active project context zone
@@ -261,7 +262,7 @@ constexpr uint8_t FLAG_SHR  = 3;    // Shared resources and lattice links zone
 
 constexpr uint8_t MAX_FLAG_ITEMS = 4;  // Maximum key-value items per Fahne zone
 
-// ── CURATOR — Curation metadata for game art assets ────────────────────
+// CURATOR — Curation metadata for game art assets
 
 constexpr uint32_t CUR_MAX_KEY    = 160;   // Curation key max chars ("IMG_ID" or "IMG_ID::v3")
 constexpr uint32_t CUR_MAX_NOTES  = 256;   // Free-text curation notes max chars
@@ -276,7 +277,7 @@ constexpr uint8_t CUR_ACT_RATE    = 0;   // Set rating on an image or version
 constexpr uint8_t CUR_ACT_STATUS  = 1;   // Set approval status on image or version
 constexpr uint8_t CUR_ACT_NOTES   = 2;   // Set free-text notes on image or version
 
-// ── EDGE-BINARY DISTRIBUTION (Phase 12 — A/ACS edge-daemon distribution) ─
+// EDGE-BINARY DISTRIBUTION (Phase 12 — A/ACS edge-daemon distribution)
 
 constexpr const char* EDGE_REALM_ID = "edge_binaries";  // Dedicated realm for edge-daemon binary distribution
 
@@ -302,14 +303,9 @@ constexpr uint32_t ACSS_MAX_PATH_PARTS = 16;         // Max dot-suffixes hashed 
 constexpr uint32_t ACSS_FNV_OFFSET = 2166136261u;    // FNV-1a32 offset basis - MUST equal entt::internal::fnv1a_traits
 constexpr uint32_t ACSS_FNV_PRIME  = 16777619u;      // FNV-1a32 prime - MUST equal entt::internal::fnv1a_traits
 
-// The hash is FOLDED BY THE COMPILER, and written as the call that folds it.
-//
-// These constants briefly stood here as bare literals with a static_assert, because the
-// types.ts generator used to copy the initializer verbatim and the C++ call arrived in
-// TypeScript unchanged (measured 2026-08-16: 46 tsc errors from this block alone). That
-// was the wrong side to fix - a module rewriting valid C++ to accommodate a generator is
-// tech debt paid by every future module author. The fold now happens in the generator
-// (types_generator.hpp translate_hashed_strings), so the SSOT says what it means again.
+// The hash is FOLDED BY THE COMPILER, and written as the call that folds it. The types.ts
+// generator folds the same call (types_generator.hpp translate_hashed_strings), so the SSOT
+// says what it means on both sides and no module rewrites valid C++ for a generator.
 constexpr uint32_t ACSS_REALM_PUBLIC_HASH  = entt::hashed_string::value("ase");            // Hash of ACSS_REALM_PUBLIC_ID
 constexpr uint32_t ACSS_CWRD_WILDCARD_HASH = entt::hashed_string::value("ALL");            // Hash of ACSS_CWRD_WILDCARD
 constexpr uint32_t EDGE_REALM_HASH         = entt::hashed_string::value("edge_binaries");  // Hash of EDGE_REALM_ID
@@ -328,7 +324,7 @@ constexpr uint32_t EDGE_CWRD_METADATA_HASH = entt::hashed_string::value("METADAT
 constexpr uint8_t EDGE_CLEARANCE_CUSTOMER = 0;   // Customer download-only clearance for released binaries
 constexpr uint8_t EDGE_CLEARANCE_OPERATOR = 5;   // Release-manager full release-workflow clearance
 
-// ── WORKFLOW TRANSITION ENGINE (Phase 12 Task 12.3) ─────────────────────
+// WORKFLOW TRANSITION ENGINE (Phase 12 Task 12.3)
 // The label chain draft→review→approved→released→retired is DATA: each allowed
 // edge is a seeded StorageWflwEdgeComponent entity (StorageWflwEdgeIniSystem), and
 // StorageWflwTranSystem validates a requested transition purely by matching the
@@ -362,14 +358,14 @@ constexpr const char* WFLW_ART_SMOKE = ".smoke";      // Operator smoke-test mar
 
 // Durable persist — every APPLIED transition ships as a workflow-label document to
 // the Replica (REPLACE-upsert into storage_workflow_labels keyed {realm,path}). The
-// BIN_MSG id + frame layout are mirrored from modules/ase-replication/include/ase/replication/replica_types.hpp
+// BIN_MSG id + frame layout are mirrored from modules/ase-replication/include/ase/replication/types/workflow/types.hpp
 // (SSOT registration: ase-network types.hpp); changing either side requires changing
 // both (single contract, same envelope as the keycard persist frame 35).
 constexpr uint8_t  EDGE_WFLW_BIN_MSG_PERSIST = 112;   // dist → Replica: [112][req_id:u64][doc_len:u32][doc]
 constexpr uint32_t WFLW_PST_DOC_BUF          = 1024;  // workflow-label persist document scratch bytes (mirror EDGE_WFLW_PERSIST_DOC_MAX)
 constexpr uint32_t WFLW_REQ_BATCH            = 16;    // max workflow entities drained/denied/persisted per tick (deferred-destroy batch bound)
 
-// ── A/ACS ACCESS-DECISION DURABLE PERSIST (frame 122) ───────────────────────
+// A/ACS ACCESS-DECISION DURABLE PERSIST (frame 122)
 // Every GRANT and every DENY of the ladder (StorageAcssChkSystem,
 // StorageWflwTranSystem, StorageWflwGateSystem, StorageWflwClnSystem,
 // StorageEdgeAudtDrnSystem) produces one StorageBufAudtComponent. Measured
@@ -380,7 +376,7 @@ constexpr uint32_t WFLW_REQ_BATCH            = 16;    // max workflow entities d
 // which makes it the single owner of that lifetime: it runs in Preservation
 // (71), so anything that wants to READ a decision must run BEFORE it, never
 // after (Observation is 72 — this is why StorageSrvlLogSystem was moved).
-// Envelope and id mirror modules/ase-replication/include/ase/replication/replica_types.hpp; SSOT
+// Envelope and id mirror modules/ase-replication/include/ase/replication/types/workflow/types.hpp; SSOT
 // registration is ase-network types.hpp. Changing one side requires the other.
 constexpr uint8_t  EDGE_AUDT_BIN_MSG_PERSIST = 132;   // dist → Replica: [132][req_id:u64][doc_len:u32][doc] (relocated from 122 on 2026-08-16 - 122 is BIN_MSG_GIS_CELL_ZONE, region_wire.hpp)
 constexpr uint32_t AUDT_PST_HDR              = 13;    // frame envelope: 1 id + 8 req_id + 4 doc_len (mirror EDGE_AUDT_PERSIST_HDR)
@@ -392,7 +388,7 @@ constexpr uint32_t AUDT_PST_DOC_BUF          = 1024;  // access-decision documen
 // waits one more tick rather than pushing another writer's document out.
 constexpr uint32_t AUDT_WRIT_BATCH           = 16;    // max audit entities persisted+retired per tick (deferred-destroy batch bound)
 
-// ── EDGE-REALM QUOTA + RETIRED RETENTION (Phase 12 Task 12.14 / R14) ────────
+// EDGE-REALM QUOTA + RETIRED RETENTION (Phase 12 Task 12.14 / R14)
 // SIZING (R14 verification, MEASURED 2026-07-11 against the LIVE realm): one
 // linux-x86_64 release = daemon binary 2,028,760 B (~1.9 MB) + bundled
 // libdatachannel 3,916,432 B (~3.7 MB) + .sig (72 B) + SPDX SBOM (~1.6 KB)
@@ -407,7 +403,7 @@ constexpr uint64_t EDGE_REALM_QUOTA_BYTES   = 10737418240ULL;  // 10 GB edge_bin
 constexpr uint64_t QUOTA_SCAN_INTERVAL_S    = 60;              // seconds between realm-usage FS scans (Observation pacing)
 constexpr uint64_t WFLW_RETIRED_RETENTION_S = 7776000;         // 90 days: retired builds older than this are deleted
 
-// ── KEYCARD DURABLE-PERSIST ROUND-TRIP (Phase 12 H-3 — Replica MongoDB) ────
+// KEYCARD DURABLE-PERSIST ROUND-TRIP (Phase 12 H-3 — Replica MongoDB)
 // A minted keycard is shipped owner-keyed over the Hub WS lane to the Replica,
 // which drains the SES_KYCD_PERSIST_* signals and upserts the keycard document.
 // op distinguishes a fresh/updated keycard from a revocation so issuance and
@@ -422,7 +418,7 @@ constexpr uint8_t KYCD_PST_OP_REVOKE = 1;   // Mark the durable keycard document
 // across users (mirrors the SES_KYCD_CWRD_ owner-scoped key scheme).
 constexpr uint32_t PST_KEY_BUF_LEN = 64;    // SES_KYCD_PERSIST_CWRD_<owner>_<i> key scratch chars
 
-// ── EDGE KEYCARD-AUTHZ FETCH LANE (Phase 12 — customer-auth edge download) ──
+// EDGE KEYCARD-AUTHZ FETCH LANE (Phase 12 — customer-auth edge download)
 // The dist tier (ase-server-dist) validates NOTHING itself: when a customer
 // download arrives with no live local gate session, the dist edge ROUTES
 // (edge_keycard_routes/edge_binary_routes trigger_keycard_fetch) build the
@@ -434,16 +430,16 @@ constexpr uint32_t PST_KEY_BUF_LEN = 64;    // SES_KYCD_PERSIST_CWRD_<owner>_<i>
 // SES_KYCD_HOLDS_* session the gate reads. The dist host links NO data client — the
 // SAME split as the edge-daemon connection-token check (ReplicaEdgeRegSystem). The
 // RES BIN_MSG id + frame layout are mirrored from
-// modules/ase-replication/include/ase/replication/replica_types.hpp; changing either side requires
-// changing both (single contract).
+// modules/ase-replication/include/ase/replication/types/keycard/types.hpp; changing either side
+// requires changing both (single contract).
 
 constexpr uint8_t EDGE_KYCD_BIN_MSG_RES = 34;  // Replica → dist: [34][req_id:u64][status:u8][payload_len:u32][payload]
 
-// RES frame layout (mirrors replica_types.hpp RSN_MEM_READ_RES_HDR/PAYLOAD_MAX).
+// RES frame layout (mirrors ase-replication types/memory RSN_MEM_READ_RES_HDR/PAYLOAD_MAX).
 constexpr uint32_t EDGE_KYCD_RES_HDR     = 14;    // 1 id + 8 req_id + 1 status + 4 payload_len
 constexpr uint32_t EDGE_KYCD_PAYLOAD_MAX = 8192;  // Max keycard-document payload returned per fetch
 
-// RES status enum (mirrors replica_types.hpp RSN_MEM_STATUS_*).
+// RES status enum (mirrors ase-replication types/memory RSN_MEM_STATUS_*).
 constexpr uint8_t EDGE_KYCD_STATUS_OK        = 0;  // Keycard found, document payload follows
 constexpr uint8_t EDGE_KYCD_STATUS_NOT_FOUND = 1;  // No matching keycard, payload empty
 constexpr uint8_t EDGE_KYCD_STATUS_ERROR     = 2;  // Backend/serialization error
@@ -454,12 +450,12 @@ constexpr uint8_t EDGE_KYCD_STATUS_ERROR     = 2;  // Backend/serialization erro
 // or per-index key over the Hub.
 constexpr uint32_t KYCD_DECODE_CWRD_MAX   = 64;  // max codewords parsed out of a recovered keycard document
 
-// ── Operator release-workflow WS console forward (Phase 12) ──────────────────
+// Operator release-workflow WS console forward (Phase 12)
 // The operator drives promote/status from `ase edge` over the ase-cli WS console to
 // the Replica; the Replica verifies the operator YK-JWT and forwards the command here
 // as BIN_MSG_EDGE_WFLW_FWD(113). StorageEdgeWflwFwdRcvSystem pops LANE_WFLW, and for a
-// promote deposits the hub workflow-bridge request (StorageWflwDrn/Gate/Tran/Pst then drive
-// it; the /admin/workflow/promote route that used the same bridge no longer exists), or for a status reads the
+// promote files the promote request (StorageWflwStge/Gate/Tran/Pst then drive it), or for a
+// status reads the
 // live STG_WFLW_STAGE/RES, then replies BIN_MSG_EDGE_WFLW_RES(114) to the Replica which
 // relays it to the CLI. Mirror of ase-network / ase-replication types.hpp (SSOT there);
 // changing either side requires changing both (single wire contract).

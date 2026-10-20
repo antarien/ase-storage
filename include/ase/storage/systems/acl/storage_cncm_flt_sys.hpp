@@ -11,6 +11,13 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Integration
+ * @parity      shared
+ * @usecase     usecase:100265 - check access clearance
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   Reine Tag-Rechnung auf StorageStaRelmComponent und den Realm-Tags, die alle shared sind;
+ *   kein Hub, kein Kontext, keine gespeicherte Kennung. Die Sichtbarkeit eines Realms in einer
+ *   Liste ohne Keycard ist betrachterunabhaengig, also darf der Client sie selbst ableiten.
  * @created     2026-04-05
  * @modified    2026-04-05
  * @version     1.0.0

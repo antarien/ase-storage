@@ -52,7 +52,6 @@
  * [ ] Each state = separate Tag + separate View in System
  * [ ] N-item support via Entity-per-Item + Tags
  *
- * =============================================================================
  */
 
 namespace ase::storage {

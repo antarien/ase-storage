@@ -8,9 +8,10 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Ingestion
+ * @usecase     usecase:100265 - check access clearance
  * @created     2026-04-05
- * @modified    2026-04-16
- * @version     1.1.0
+ * @modified    2026-10-13
+ * @version     1.2.0
  *
  * CAUSAL CHAIN (Keycard Drain)
  *
@@ -27,11 +28,13 @@
  *   │  WRITES:                                    │
  *   │    - StorageStaTknComponent (creates)       │
  *   │    - StorageKycdPendTag (creates)           │
+ *   │    - StorageStaTknStatComponent.drained     │
  *   └─────────────────────────────────────────────┘
  *          │
  *          │ Token entities with PendTag ready
  *          ▼
  *   StorageKycdVldSystem validates JWT signature
+ *   StorageKycdStatPubSystem announces the drain count as STG_KYCD_DRN_COUNT
  *
  * HUB Pattern (N/A - No Hub reads/writes)
  *
@@ -39,7 +42,8 @@
  *   (none)
  *
  * WRITES (to Hub):
- *   (none)
+ *   (none) - the drain count is the module's own row StorageStaTknStatComponent on the
+ *   manager entity; StorageKycdStatPubSystem announces it.
  *
  * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
  *   Token strings stored in StorageResourceManager.
@@ -143,14 +147,14 @@
 #include <ase/storage/systems/keycard/storage_kycd_drn_sys.hpp>
 // Components from same module
 #include <ase/storage/components/state/storage_sta_tkn_comp.hpp>
+#include <ase/storage/components/state/storage_sta_tkn_stat_comp.hpp>
 #include <ase/storage/components/tag/storage_kycd_pend_tag.hpp>
+#include <ase/storage/components/tag/storage_mgr_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
-// Hub API (counter)
-#include <ase/hub/api.hpp>
-// Types (L0 — is_not_found sentinel check)
-#include <ase/types/types.hpp>
 // Logging
 #include <ase/log/log.hpp>
+
+#include <entt/core/hashed_string.hpp>
 
 using namespace entt::literals;
 
@@ -197,9 +201,13 @@ void StorageKycdDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         registry.emplace<StorageKycdPendTag>(entity);
 
         log::debug("[StorageKycdDrn] +StorageKycdPendTag client_id={} token_id={}", client_id, token_id);
-        float drn_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_DRN_COUNT"_hs);
-        if (ase::types::is_not_found(drn_count)) drn_count = 0.0f;
-        hub::set(registry, hub::GLOBAL, "STG_KYCD_DRN_COUNT"_hs, drn_count + 1.0f);
+    }
+
+    // The module's own counter row on the manager entity; StorageKycdStatPubSystem announces
+    // it as STG_KYCD_DRN_COUNT. One addition per tick, not one hub write per token.
+    for (auto mgr_entity : registry.view<StorageMgrTag>()) {
+        auto& stat = registry.get_or_emplace<StorageStaTknStatComponent>(mgr_entity);
+        stat.drained += count;
     }
 
     mgr.drain_clear();

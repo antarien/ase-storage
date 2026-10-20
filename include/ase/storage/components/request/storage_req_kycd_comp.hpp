@@ -11,13 +11,15 @@
  *              StorageKycdReqDrnSystem which creates the token entity
  *              (StorageStaIdnComponent + StorageStaKycdComponent +
  *              StorageKycdPendTag) and destroys the request entity.
- *              The request entity additionally carries hub::HubStgKycdPendTag
- *              so Hub systems can discover it without importing L3.
+ *              A request filed through the SDK stands on the entity of its hub
+ *              row HUB_STG_KYCD_REQ; one filed inside this module stands on an
+ *              entity of its own. The drain reads this component alone.
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    communication/request
  * @parity      server_only
+ * @usecase     usecase:100264 - issue customer keycard
  *
  * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
  *   Dies ist der EINGANG der Keycard-Praegung, nicht ihr Ergebnis: die HTTP-Route

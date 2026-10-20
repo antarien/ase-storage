@@ -1,9 +1,7 @@
 #pragma once
 
 /**
- * =============================================================================
  * ASE ECS COMPONENT (TAG)
- * =============================================================================
  *
  * @file        storage_acss_rule_sufx_tag.hpp
  * @brief       StorageAcssRuleSufxTag - ACL rule matches by path suffix
@@ -55,7 +53,6 @@
  * [ ] Each state = separate Tag + separate View in System
  * [ ] N-item support via Entity-per-Item + Tags
  *
- * =============================================================================
  */
 
 namespace ase::storage {

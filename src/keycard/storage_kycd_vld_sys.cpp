@@ -8,9 +8,10 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Ingestion
+ * @usecase     usecase:100265 - check access clearance
  * @created     2026-04-05
- * @modified    2026-04-16
- * @version     1.1.0
+ * @modified    2026-10-13
+ * @version     1.2.0
  *
  * CAUSAL CHAIN (Keycard Validation)
  *
@@ -28,11 +29,13 @@
  *   │  WRITES:                                    │
  *   │    - StorageKycdVldTag or StorageKycdRjctTag│
  *   │    - StorageStaIdnComponent (identity data) │
+ *   │    - StorageStaTknStatComponent counters    │
  *   └─────────────────────────────────────────────┘
  *          │
  *          │ Validated entities with identity
  *          ▼
  *   StorageKycdLnkSystem links identity to client
+ *   StorageKycdStatPubSystem announces STG_KYCD_VLD_ACCEPT_COUNT / _REJECT_COUNT
  *
  * HUB Pattern (N/A - No Hub reads/writes)
  *
@@ -40,7 +43,8 @@
  *   (none)
  *
  * WRITES (to Hub):
- *   (none)
+ *   (none) - accepted and rejected tokens are counted in the module's own row
+ *   StorageStaTknStatComponent on the manager entity; StorageKycdStatPubSystem announces it.
  *
  * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
  *   Token strings and JWT validation logic in StorageResourceManager.
@@ -146,18 +150,18 @@
 #include <ase/storage/components/state/storage_sta_tkn_comp.hpp>
 #include <ase/storage/components/state/storage_sta_idn_comp.hpp>
 #include <ase/storage/components/state/storage_sta_sess_comp.hpp>
+#include <ase/storage/components/state/storage_sta_tkn_stat_comp.hpp>
 #include <ase/storage/components/tag/storage_kycd_pend_tag.hpp>
 #include <ase/storage/components/tag/storage_kycd_vld_tag.hpp>
 #include <ase/storage/components/tag/storage_kycd_rjct_tag.hpp>
+#include <ase/storage/components/tag/storage_mgr_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
-// Hub API (counter)
-#include <ase/hub/api.hpp>
-// Types (L0 — is_not_found sentinel check)
-#include <ase/types/types.hpp>
 // FNV-1a32 hashing for the exact session owner
 #include <entt/core/hashed_string.hpp>
 // Logging
 #include <ase/log/log.hpp>
+
+#include <cstdint>
 
 using namespace entt::literals;
 
@@ -185,6 +189,8 @@ void StorageKycdVldSystem::on_start(ecs::Registry& /*registry*/) {
 void StorageKycdVldSystem::tick(ecs::Registry& registry, float /*dt*/) {
     auto& mgr = *registry.ctx().get<StorageResourceManager*>();
 
+    uint32_t accepted_now = 0u;
+    uint32_t rejected_now = 0u;
     auto view = registry.view<StorageStaTknComponent, StorageKycdPendTag>();
     for (auto entity : view) {
         auto& tkn = view.get<StorageStaTknComponent>(entity);
@@ -212,9 +218,7 @@ void StorageKycdVldSystem::tick(ecs::Registry& registry, float /*dt*/) {
             mgr.remove_token(tkn.token_id);
 
             log::debug("[StorageKycdVld] +StorageKycdVldTag client_id={} user='{}'", tkn.client_id, idn.user_id);
-            float acc_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_VLD_ACCEPT_COUNT"_hs);
-            if (ase::types::is_not_found(acc_count)) acc_count = 0.0f;
-            hub::set(registry, hub::GLOBAL, "STG_KYCD_VLD_ACCEPT_COUNT"_hs, acc_count + 1.0f);
+            accepted_now += 1u;
             log::info("[StorageKycdVld] Keycard validated for client {}", tkn.client_id);
         } else {
             registry.emplace<StorageKycdRjctTag>(entity);
@@ -222,19 +226,23 @@ void StorageKycdVldSystem::tick(ecs::Registry& registry, float /*dt*/) {
             mgr.remove_token(tkn.token_id);
 
             log::debug("[StorageKycdVld] +StorageKycdRjctTag client_id={} token_id={}", tkn.client_id, tkn.token_id);
-            float rej_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_VLD_REJECT_COUNT"_hs);
-            if (ase::types::is_not_found(rej_count)) rej_count = 0.0f;
-            hub::set(registry, hub::GLOBAL, "STG_KYCD_VLD_REJECT_COUNT"_hs, rej_count + 1.0f);
-            // VON warn AUF error, und der Hilfetext der Kategorie verlangt es woertlich:
-            // "Decision belongs in the error stream, not as a warning". Eine abgelehnte
-            // Keycard ist eine Zugriffsverweigerung, kein Schoenheitsfehler.
-            //
-            // Die Haeufigkeit wurde mitbedacht und spricht nicht dagegen: die Ablehnung wird
-            // vier Zeilen darueber ohnehin schon in STG_KYCD_VLD_REJECT_COUNT gezaehlt, die
-            // Zeile kommt also nicht oefter als bisher — sie steht nur im richtigen Strom.
-            // client_id bleibt als owner erhalten, es geht nichts verloren.
+            rejected_now += 1u;
+            // A rejected keycard is an access refusal, so it goes to the error stream, as the
+            // category's help text demands ("Decision belongs in the error stream, not as a
+            // warning"). The rejection is also counted into STG_KYCD_VLD_REJECT_COUNT, and this
+            // line appears exactly once per rejection. client_id stays the owner.
             log::error(log::ERR::CAT::ACCESS_DENIED, "StorageKycdVld", tkn.client_id,
                        "STG_KYCD_validation");
+        }
+    }
+
+    // The module's own counter row on the manager entity; StorageKycdStatPubSystem announces
+    // it. One addition per tick and outcome, not one hub write per token.
+    if (accepted_now > 0u || rejected_now > 0u) {
+        for (auto mgr_entity : registry.view<StorageMgrTag>()) {
+            auto& stat = registry.get_or_emplace<StorageStaTknStatComponent>(mgr_entity);
+            stat.accepted += accepted_now;
+            stat.rejected += rejected_now;
         }
     }
 }

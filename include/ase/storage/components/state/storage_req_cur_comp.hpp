@@ -23,6 +23,8 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
+ * @parity      server_only
+ * @usecase     usecase:100342 - approve asset version
  * @created     2026-04-06
  * @modified    2026-08-19
  * @version     1.1.0

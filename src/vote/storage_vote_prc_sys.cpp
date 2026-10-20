@@ -8,9 +8,10 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Observation
+ * @usecase     usecase:100402 - grant keycard by vote
  * @created     2026-04-05
- * @modified    2026-06-24
- * @version     1.0.0
+ * @modified    2026-10-12
+ * @version     1.1.0
  *
  * CAUSAL CHAIN (Vote Evaluation)
  *
@@ -151,8 +152,6 @@
 #include <ase/storage/components/tag/storage_vote_pend_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 #include <ase/storage/types.hpp>
-// Hub API (the keycard drain filters on hub::HubStgKycdPendTag)
-#include <ase/hub/api.hpp>
 // Utils (L0 — bounded string copy)
 #include <ase/utils/strops.hpp>
 
@@ -187,16 +186,16 @@ void StorageVotePrcSystem::tick(ecs::Registry& registry, float dt) {
     if (mgr_pp == nullptr || *mgr_pp == nullptr) return;  // no storage tier here
     const uint64_t now = (*mgr_pp)->get_wall_time_seconds();
     if (!now) {
-        // VON warn AUF error: die Wanduhr ist eine Ressource des StorageResourceManager, und
+        // error, nicht warn: die Wanduhr ist eine Ressource des StorageResourceManager, und
         // ohne sie faellt der GANZE Tick aus — das `return` steht direkt darunter, keine
         // einzige Frist wird ausgewertet. Das ist ein Ausfall, kein Schoenheitsfehler, und
-        // RESOURCE_UNAVAIL liegt in ERR::CAT. Es geht nichts verloren: die Zeile trug nie
-        // einen Laufzeitwert, den eine Form haette schlucken koennen.
+        // RESOURCE_UNAVAIL liegt in ERR::CAT. Die Zeile traegt keinen Laufzeitwert, den eine
+        // Form haette schlucken koennen.
         log::error(log::ERR::CAT::RESOURCE_UNAVAIL, "StorageVotePrc", "STG_wall_clock");
         return;
     }
 
-    // ── PASS 1: clear the tallies of every OPEN vote ────────────────────────
+    // PASS 1: clear the tallies of every OPEN vote
     // The counts are DERIVED from the ballots on every tick, never accumulated.
     // An accumulator can only ever count up, so a withdrawn or corrected ballot
     // could never lower a tally - and a motion would pass on ballots that no
@@ -209,7 +208,7 @@ void StorageVotePrcSystem::tick(ecs::Registry& registry, float dt) {
         cnt.votes_abstain = 0;
     }
 
-    // ── PASS 2: walk the BALLOTS once, reach the parent vote by entity ref ───
+    // PASS 2: walk the BALLOTS once, reach the parent vote by entity ref
     // The other direction - for each vote, scan every ballot - is the M:N shape
     // WS-K.2c forbids: it costs votes x ballots and rescans the whole ballot set
     // once per open motion. A ballot names its vote, so the join runs the cheap
@@ -228,7 +227,7 @@ void StorageVotePrcSystem::tick(ecs::Registry& registry, float dt) {
         cnt.votes_abstain = static_cast<uint8_t>(cnt.votes_abstain + (bllt.decision == BALLOT_ABSTAIN ? 1u : 0u));
     }
 
-    // ── PASS 3: conclude what can be concluded ──────────────────────────────
+    // PASS 3: conclude what can be concluded
     // Deferred: nothing is created or retagged while the filtered View is being
     // walked. StorageVotePendTag is the very filter of this View, so removing it
     // inside the loop would mutate the range under the iterator.
@@ -244,25 +243,11 @@ void StorageVotePrcSystem::tick(ecs::Registry& registry, float dt) {
         if (!cnt.votes_required) {
             // A motion nobody has to answer can never be decided, and it would
             // otherwise sit open forever, costing a ballot scan every tick.
-            // MIGRIERT. VALUE_INVALID trifft votes_required=0 woertlich: der Wert ist da und
-            // semantisch ungueltig. warn, weil der Durchlauf weitergeht — die Abstimmung wird
-            // als erledigt vorgemerkt und die Schleife nimmt die naechste.
-            //
-            // DIESER KOMMENTAR HATTE ZWEI FALSCHE GRUENDE NACHEINANDER, und beide sind als
-            // Warnung wertvoller als ihr Ersatz:
-            //   1. Der erste sagte, der Hilfetext verspreche "Value will be set to default".
-            //      Das stimmte um 12:24 und war um 12:50, als es hier stand, schon falsch —
-            //      die WRN-Kontrollflusszusagen waren um 12:37 entfernt worden.
-            //   2. Der zweite sagte, die FORM sperre die Stelle: die wert-tragende warn-Form
-            //      fuehre nur EINEN String, also falle vote.subject weg. Auch das war falsch.
-            //      Es gibt eine Ueberladung mit value_id UND detail, also ZWEI Stringplaetzen.
-            //      Die Zeile traegt ohnehin nur EINEN Laufzeitwert (vote.subject); "welches
-            //      Feld null ist" und "wie aufgeloest wurde" sind Konstanten und gehoeren in
-            //      den detail. Nichts geht verloren.
-            //
-            // Das Muster hinter beiden Irrtuemern ist dasselbe: eine Annahme ueber den Bestand,
-            // die nie gegen den Bestand geprueft wurde. Der Kopf der Ueberladungsliste in
-            // log.hpp beantwortet die Frage in zehn Sekunden.
+            // VALUE_INVALID trifft votes_required=0 woertlich: der Wert ist da und semantisch
+            // ungueltig. warn, weil der Durchlauf weitergeht — die Abstimmung wird als erledigt
+            // vorgemerkt und die Schleife nimmt die naechste. Die Form mit value_id UND detail
+            // traegt den einen Laufzeitwert (vote.subject); "welches Feld null ist" und "wie
+            // aufgeloest wurde" sind Konstanten und stehen im detail.
             log::warn(log::WRN::CAT::VALUE_INVALID, "StorageVotePrc", vote.subject,
                       "votes_required=0, undecidable - concluded as lapsed");
             done[done_n] = vote_ent;
@@ -295,10 +280,9 @@ void StorageVotePrcSystem::tick(ecs::Registry& registry, float dt) {
 
     // Issue the keycard for every passed motion. The mint is REQUESTED through
     // components, never by calling the keycard system: a fresh entity carrying
-    // StorageReqKycd + StorageReqKycdRelm + hub::HubStgKycdPendTag is exactly
-    // what StorageKycdReqDrnSystem already drains. What the keycard carries is
-    // the vote's own data, so a realm voting in a reader and one voting in a
-    // maintainer run the same code with different numbers.
+    // StorageReqKycd + StorageReqKycdRelm is exactly what StorageKycdReqDrnSystem
+    // drains. What the keycard carries is the vote's own data, so a realm voting in
+    // a reader and one voting in a maintainer run the same code with different numbers.
     for (uint32_t i = 0; i < accepted_n; ++i) {
         const auto* vote = registry.try_get<StorageStaVoteComponent>(accepted[i]);
         if (vote == nullptr) continue;
@@ -315,7 +299,6 @@ void StorageVotePrcSystem::tick(ecs::Registry& registry, float dt) {
         relm.relm_ref = vote->relm_ref;
         relm.perm = vote->granted_perm;
 
-        registry.emplace<hub::HubStgKycdPendTag>(req_ent);
         log::info("[StorageVotePrc] keycard requested for {} in realm {} (clearance {}, perm {})",
                   vote->subject, vote->relm_ref, static_cast<uint32_t>(vote->granted_clearance),
                   static_cast<uint32_t>(vote->granted_perm));

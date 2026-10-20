@@ -3,68 +3,55 @@
  *
  * @file        storage_kycd_ntfy_syn_sys.cpp
  * @brief       StorageKycdNtfySynSystem - mirrors the star lines of one keycard request
- * @description Hub READ only. Sechs Zeilen hinein, zwei Bruecken-Components hinaus, keine Rechnung.
+ * @description Hub READ only. Eine Hub-Zeile hinein, zwei Bruecken-Components hinaus, keine Rechnung.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Ingestion
+ * @usecase     usecase:100264 - issue customer keycard
  * @created     2026-09-21
- * @modified    2026-09-21
- * @version     00.00.00.00000 [seed]
+ * @modified    2026-10-12
+ * @version     00.00.00.00001 [seed]
  *
  * CAUSAL CHAIN (CAUSA_STG_KYCD_NTFY_SYN: the star is read here, the numbers are built there)
  *
- *   plugins/ase-pl-webserver auth_routes / sdk::emplace_keycard_request
+ *   ase-pl-webserver (Ausgabe, HUB_STG_KYCD_REQ) / ase-pl-edge-webserver (Praegung, HUB_STG_KYCD_MINT_REQ)
  *          │
- *          │ hub::HubStgKycdPendTag + sechs SES_KYCD_NTF_*-Zeilen unter der Anfrage
+ *          │ eine Hub-Zeile mit der Familienmarke HUB_STG_KYCD
  *          ▼
  *   ┌─────────────────────────────────────────────────────────────┐
  *   │  THIS SYSTEM: StorageKycdNtfySynSystem                      │
  *   │                                                             │
  *   │  READS:                                                     │
- *   │    - hub::HubStgKycdPendTag (die Anfragen)                  │
- *   │    - Hub: SES_KYCD_NTF_USER_ID_HI/_LO, _REALM_ID_HI/_LO,    │
- *   │           _EXP_AT, _CLRN (owner = die Anfrage)              │
+ *   │    - die Zeilen mit der Marke HUB_STG_KYCD, Feld fuer Feld  │
  *   │                                                             │
  *   │  WRITES:                                                    │
- *   │    - StorageInpKycdNtfyIdnComponent  (vier Haelften, roh)   │
- *   │    - StorageInpKycdNtfyGrntComponent (Stufe, Ablauf)        │
+ *   │    - StorageInpKycdNtfyIdnComponent  (Hashes, Benutzer-ID)  │
+ *   │    - StorageInpKycdNtfyGrntComponent (Stufe, Rechte, Ablauf)│
  *   └─────────────────────────────────────────────────────────────┘
  *          │
- *          │ StorageKycdNtfyDrnSystem setzt die Hashes zusammen
+ *          │ StorageKycdNtfyDrnSystem baut daraus die Anfrage
  *          ▼
  *   StorageReqKycdComponent, und von dort die bestehende Keycard-Kette
  *
- * WARUM DIESES SYSTEM EXISTIERT — GEMESSEN 2026-09-21. Der Validator meldete an
- * storage_kycd_ntfy_drn_sys.cpp HUB_IO_MIXED_WITH_MATH: sechs `hub::get` und die Rekonstruktion
- * der beiden uint32-Hashes aus je zwei 16-Bit-Haelften standen in EINEM tick(). Die `suggestion`
- * der Regel ist woertlich der Bauplan dieses Systems — eine SERVER-ONLY Seite liest den Stern in
- * eine `*_inp_*`-Zeile, die rechnende Seite nimmt sie von dort.
+ * WARUM DIESES SYSTEM EXISTIERT. Die Regel HUB_IO_MIXED_WITH_MATH trennt das Lesen des Sterns von
+ * der Rechnung; ihre `suggestion` ist woertlich der Bauplan dieses Systems — eine SERVER-ONLY Seite
+ * liest den Stern in eine `*_inp_*`-Zeile, die rechnende Seite nimmt sie von dort.
  *
- * DIE MELDUNG WANDERT MIT DEM LESEN. Die vier `log::error(HUB_NOT_FOUND)` gehoeren zu dem, der
- * den Stern befragt, und stehen deshalb hier. Fehlt eine Pflichtzeile, entsteht KEINE Bruecke;
- * der Drain filtert auf ihre Anwesenheit und sieht die Anfrage gar nicht erst. Das ist dasselbe
- * Verhalten wie das fruehere `continue` im Drain, nur an der Stelle, die es verantwortet.
+ * DIE MELDUNG WANDERT MIT DEM LESEN. Fehlt ein Pflichtfeld (Benutzer-Hash, Benutzer-ID, Ablauf),
+ * meldet es dieses System und legt KEINE Bruecke an; der Drain filtert auf ihre Anwesenheit und
+ * sieht die Anfrage gar nicht erst.
  *
- * WARUM DIE HAELFTEN ROH BLEIBEN. Ein uint32-Hash passt nicht in die 24-Bit-Mantisse eines float;
- * die SDK-Seite zerlegt ihn in zwei exakte 16-Bit-Haelften. Sie hier zusammenzusetzen hiesse, die
- * Rechnung zurueck an die Hub-Seite zu holen - also genau den Schnitt aufzuheben, den dieses
- * System herstellt.
- *
- * DIE PRUEFUNG STEHT NEBEN IHREM GRIFF, AUCH BEI DEN DREI FREIWILLIGEN ZEILEN. Ein Sentinel, der
- * erst mehrere Zeilen spaeter abgefangen wird, ist bis dahin eine Zahl wie jede andere - und das
- * Schreibtor meldet genau diese Distanz.
+ * DREI FELDER DUERFEN FEHLEN, und ihr Fehlen ist eine Aussage, keine Stoerung: die Ausstellung des
+ * Auth-Gates traegt keine Rechte, und Freigabestufe und Realm fallen bei Abwesenheit auf null.
  *
  * HUB Pattern (MIG_ASE_HUB_API v2.0):
  *
- * READS (from the star, owner = the request entity):
- *   "SES_KYCD_NTF_USER_ID_HI"_hs   ← obere 16 Bit des Benutzer-Hashes
- *   "SES_KYCD_NTF_USER_ID_LO"_hs   ← untere 16 Bit des Benutzer-Hashes
- *   "SES_KYCD_NTF_EXP_AT"_hs       ← Ablauf
- *   "SES_KYCD_NTF_CLRN"_hs         ← Freigabestufe, Abwesenheit = 0
- *   "SES_KYCD_NTF_REALM_ID_HI"_hs  ← obere 16 Bit des Realm-Hashes, Abwesenheit = 0
- *   "SES_KYCD_NTF_REALM_ID_LO"_hs  ← untere 16 Bit des Realm-Hashes, Abwesenheit = 0
+ * READS (from the star, every row with the family mark HUB_STG_KYCD, of either kind, on the request
+ *        entity; both kinds carry the same field ids):
+ *   HUB_STG_KYCD_REQ_USER_HASH, _USER_ID, _EXP_AT   ← Pflicht
+ *   HUB_STG_KYCD_REQ_CLEARANCE, _REALM_HASH, _PERM  ← Abwesenheit = 0
  *
  * WRITES (to the star):
  *   (none)
@@ -165,10 +152,12 @@
 #include <ase/storage/components/request/storage_req_kycd_comp.hpp>
 #include <ase/storage/components/state/storage_inp_kycd_ntfy_idn_comp.hpp>
 #include <ase/storage/components/state/storage_inp_kycd_ntfy_grnt_comp.hpp>
-// Abwesenheit ist eine Frage an die SSOT, kein Vergleich: types::is_not_found statt == NOT_FOUND.
-#include <ase/types/types.hpp>
-// Hub: api.hpp ist der EINZIGE erlaubte Hub-Header und traegt auch die Entdeckungsmarke mit.
+// Module constants (MAX_OWNER_ID, the width of a user id)
+#include <ase/storage/types.hpp>
+// Hub: api.hpp ist der EINZIGE erlaubte Hub-Header; die Zeile wird ueber ihn gelesen.
 #include <ase/hub/api.hpp>
+// Bounded string copy into the bridge (L0)
+#include <ase/utils/strops.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
@@ -202,66 +191,54 @@ void StorageKycdNtfySynSystem::on_start(ecs::Registry& /*registry*/) {
 
 void StorageKycdNtfySynSystem::tick(ecs::Registry& registry, float /*dt*/) {
     /**
-     * DIESELBE FILTERMENGE WIE DER DRAIN, UM EINE BEDINGUNG ERWEITERT.
+     * DIE ZEILEN, DIE NOCH KEINE BRUECKE UND KEINE NUTZLAST HABEN.
      *
-     * Anfragen mit der Entdeckungsmarke, die noch keine Nutzlast haben - und noch keine Bruecke.
-     * Der Ausschluss der Bruecke macht den Durchlauf idempotent: eine Anfrage wird genau einmal
-     * gespiegelt, und ein zweiter Takt vor dem Drain schreibt nichts neu.
+     * Der Ausschluss macht den Durchlauf idempotent: eine Anfrage wird genau einmal gespiegelt,
+     * und ein zweiter Takt vor dem Drain schreibt nichts neu.
      */
-    auto view = registry.view<hub::HubStgKycdPendTag>(
-        entt::exclude<StorageReqKycdComponent, StorageInpKycdNtfyIdnComponent>);
-    for (auto req_entity : view) {
-        const uint32_t owner = static_cast<uint32_t>(req_entity);
+    hub::mark_each(registry, "HUB_STG_KYCD"_hs, [&](ecs::Entity req_entity) {
+        if (registry.any_of<StorageReqKycdComponent, StorageInpKycdNtfyIdnComponent>(req_entity)) return;
+        const uint32_t row = static_cast<uint32_t>(req_entity);
 
         /**
-         * VIER PFLICHTZEILEN, JEDE EINZELN UND SOFORT GEPRUEFT.
-         *
-         * HUB_NOT_FOUND ist hier die exakte Kategorie und die Ebene bleibt error: der Wert FEHLT,
-         * er ist nicht ungueltig. Fehlt eine, entsteht KEINE Bruecke - der Drain sieht die
-         * Anfrage dann gar nicht, was dem frueheren `continue` entspricht.
+         * DREI PFLICHTFELDER, gemeinsam geprueft. Fehlt eines, entsteht KEINE Bruecke - der
+         * Drain sieht die Anfrage dann gar nicht. Die Benutzer-ID wird in ihrer Laenge gelesen;
+         * die Bruecke ist ein Byte breiter, damit sie terminiert bleibt.
          */
-        const float user_hash_hi = hub::get(registry, owner, "SES_KYCD_NTF_USER_ID_HI"_hs);
-        if (ase::types::is_not_found(user_hash_hi)) {
-            log::error(log::ERR::CAT::HUB_NOT_FOUND, "StorageKycdNtfySynSystem", owner,
-                       "SES_KYCD_NTF_USER_ID_HI");
-            continue;
-        }
-        const float user_hash_lo = hub::get(registry, owner, "SES_KYCD_NTF_USER_ID_LO"_hs);
-        if (ase::types::is_not_found(user_hash_lo)) {
-            log::error(log::ERR::CAT::HUB_NOT_FOUND, "StorageKycdNtfySynSystem", owner,
-                       "SES_KYCD_NTF_USER_ID_LO");
-            continue;
-        }
-        const float expires_at = hub::get(registry, owner, "SES_KYCD_NTF_EXP_AT"_hs);
-        if (ase::types::is_not_found(expires_at)) {
-            log::error(log::ERR::CAT::HUB_NOT_FOUND, "StorageKycdNtfySynSystem", owner,
-                       "SES_KYCD_NTF_EXP_AT");
-            continue;
+        uint32_t user_hash = 0u;
+        uint64_t expires_at = 0ull;
+        const uint32_t user_id_len = hub::bytes_len(registry, row, "HUB_STG_KYCD_REQ_USER_ID"_hs);
+        char user_id[MAX_OWNER_ID] = {};
+        if (!hub::try_get_u32(registry, row, "HUB_STG_KYCD_REQ_USER_HASH"_hs, user_hash) ||
+            !hub::try_get_u64(registry, row, "HUB_STG_KYCD_REQ_EXP_AT"_hs, expires_at) ||
+            user_id_len == 0u || user_id_len >= MAX_OWNER_ID ||
+            !hub::try_get_bytes(registry, row, "HUB_STG_KYCD_REQ_USER_ID"_hs, user_id, user_id_len)) {
+            log::warn(log::WRN::CAT::INPUT_TRUNCATED, "StorageKycdNtfySynSystem", row, "HUB_STG_KYCD_REQ",
+                      "the keycard request lacks a field and is not mirrored");
+            return;
         }
 
         /**
-         * DREI ZEILEN DUERFEN SCHWEIGEN, und ihr Schweigen ist eine Aussage, keine Stoerung:
-         * der Altpfad des Auth-Gates schickt weder Freigabestufe noch Realm mit. Abwesenheit
-         * faellt deshalb auf null - so stand es vor dem Schnitt und so steht es jetzt. Die
-         * Pruefung steht direkt am Griff, damit der Sentinel keine Zeile weit als Zahl reist.
+         * DREI FELDER DUERFEN FEHLEN und fallen dann auf null: die Ausstellung des Auth-Gates
+         * traegt keine Rechte und unter Umstaenden weder Freigabestufe noch Realm.
          */
-        float clearance = hub::get(registry, owner, "SES_KYCD_NTF_CLRN"_hs);
-        if (ase::types::is_not_found(clearance)) clearance = 0.0f;
-        float realm_hash_hi = hub::get(registry, owner, "SES_KYCD_NTF_REALM_ID_HI"_hs);
-        if (ase::types::is_not_found(realm_hash_hi)) realm_hash_hi = 0.0f;
-        float realm_hash_lo = hub::get(registry, owner, "SES_KYCD_NTF_REALM_ID_LO"_hs);
-        if (ase::types::is_not_found(realm_hash_lo)) realm_hash_lo = 0.0f;
+        uint32_t clearance = 0u;
+        uint32_t realm_hash = 0u;
+        uint32_t perm = 0u;
+        if (!hub::try_get_u32(registry, row, "HUB_STG_KYCD_REQ_CLEARANCE"_hs, clearance)) clearance = 0u;
+        if (!hub::try_get_u32(registry, row, "HUB_STG_KYCD_REQ_REALM_HASH"_hs, realm_hash)) realm_hash = 0u;
+        if (!hub::try_get_u32(registry, row, "HUB_STG_KYCD_REQ_PERM"_hs, perm)) perm = 0u;
 
         auto& idn = registry.emplace<StorageInpKycdNtfyIdnComponent>(req_entity);
-        idn.user_hash_hi = user_hash_hi;
-        idn.user_hash_lo = user_hash_lo;
-        idn.realm_hash_hi = realm_hash_hi;
-        idn.realm_hash_lo = realm_hash_lo;
+        idn.user_hash = user_hash;
+        idn.realm_hash = realm_hash;
+        ase::utils::str_copy(idn.user_id, MAX_OWNER_ID, user_id);
 
         auto& grnt = registry.emplace<StorageInpKycdNtfyGrntComponent>(req_entity);
         grnt.clearance = clearance;
+        grnt.perm = perm;
         grnt.expires_at = expires_at;
-    }
+    });
 }
 
 void StorageKycdNtfySynSystem::on_stop(ecs::Registry& /*registry*/) {

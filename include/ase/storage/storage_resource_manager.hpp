@@ -27,12 +27,14 @@
  *
  * THIS IS NOT A COMPONENT!
  *
+ * @usecase     usecase:100265 - check access clearance
+ *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    ecs/resource
  * @created     2026-04-05
- * @modified    2026-04-05
- * @version     1.0.0
+ * @modified    2026-10-13
+ * @version     1.0.1
  *
  * ECS RESOURCE MANAGER HEADER COMPLIANCE
  * [ ] NOT a Component - lives outside ECS registry
@@ -67,17 +69,14 @@ namespace ase::storage {
  */
 class StorageResourceManager {
 public:
-    // =========================================================================
+
     // JWT SECRET MANAGEMENT (developer platform tokens)
-    // =========================================================================
 
     void set_jwt_secret(const char* secret, uint16_t len);
     const char* get_jwt_secret() const;
     uint16_t get_jwt_secret_len() const;
 
-    // =========================================================================
     // TOKEN STRING STORAGE — Flyweight (developer keycards)
-    // =========================================================================
 
     uint32_t store_token(const char* token, uint16_t len);
     const char* get_token(uint32_t id) const;
@@ -85,9 +84,7 @@ public:
     bool has_token(uint32_t id) const;
     void remove_token(uint32_t id);
 
-    // =========================================================================
     // JWT VALIDATION (developer platform authentication)
-    // =========================================================================
 
     struct ValidationResult {
         bool valid;               // true if JWT signature + format OK
@@ -98,24 +95,18 @@ public:
 
     ValidationResult validate_jwt(uint32_t token_id) const;
 
-    // =========================================================================
     // TOKEN BUFFER — thread-safe push from callbacks, drain from ECS system
-    // =========================================================================
 
     void push_pending_token(uint32_t client_id, uint32_t token_id);
     uint32_t drain_pending_count();
     void drain_pending(uint32_t index, uint32_t& out_client_id, uint32_t& out_token_id);
     void drain_clear();
 
-    // =========================================================================
     // WALL CLOCK — OOP bridge (<ctime> forbidden in ECS Systems)
-    // =========================================================================
 
     uint64_t get_wall_time_seconds() const;
 
-    // =========================================================================
     // REALM PATH RESOLUTION — maps realm/project/path to filesystem location
-    // =========================================================================
 
     void set_data_dir(const char* path);
     const char* get_data_dir() const;
@@ -125,9 +116,7 @@ public:
     void resolve_path(const char* realm_id, const char* project_id,
                       const char* subpath, char* out_path, uint32_t out_len) const;
 
-    // =========================================================================
     // FILESYSTEM I/O — OOP bridge (<filesystem>, fopen forbidden in ECS)
-    // =========================================================================
 
     /** Ensure directory exists (mkdir -p equivalent). Returns true on success. */
     bool ensure_dir(const char* path);
@@ -147,16 +136,12 @@ public:
     /** Get file size in bytes. Returns 0 if not found. */
     uint64_t file_size(const char* path) const;
 
-    // =========================================================================
     // REALM STORAGE METRICS
-    // =========================================================================
 
     /** Calculate total bytes used by a realm (recursive directory scan). */
     uint64_t get_realm_usage(const char* realm_id) const;
 
-    // =========================================================================
     // BULK CLEANUP
-    // =========================================================================
 
     void clear_all();
 

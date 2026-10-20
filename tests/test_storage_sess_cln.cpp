@@ -5,19 +5,26 @@
  * @brief       Unit tests for StorageKycdSessClnSystem
  * @module      ase-storage
  * @layer       3 (Module)
+ * @usecase     usecase:100265 - check access clearance
  *
  * Drives the REAL StorageKycdSessClnSystem against the exact key set
  * StorageKycdLnkSystem publishes (storage_kycd_lnk_sys.cpp plus the
- * SES_USER_ID_HI/_LO halves). No main() here — test_storage_wflw.cpp owns
- * DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN for this executable.
+ * SES_USER_ID_HI/_LO and SES_REALM_ID_HI/_LO halves). No main() here —
+ * test_storage_wflw.cpp owns DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN for this
+ * executable.
  *
- * The defect under test (measured 2026-07-28): NetworkHubSyncSystem PASS 2
- * retires only NET_CLAI_ID / SES_IS_AUTHENTICATED / SES_EXP_AT, so
- * SES_CLEARANCE, SES_REALM_ID and the user-hash halves outlived every session.
- * HubSessLifeClnSystem releases HubSessLifeTag only once the owner's hub-value
- * count reaches ZERO — so a single surviving key pins the tag forever. That is
- * why the decisive assertion in these cases is hub::count(owner) == 0 and not
- * merely "the keys I named are gone".
+ * The defect class under test: NetworkHubSyncSystem PASS 2 retires only the
+ * keys ase-network wrote itself, so SES_CLEARANCE, the realm halves and the
+ * user-hash halves outlive the session unless this module retires them.
+ * HubSessLifeClnSystem withdraws the life row HUB_SESS_LIFE only once the
+ * owner's hub-value count reaches ZERO — so a single surviving key pins the
+ * row forever. That is why the decisive assertion in these cases is
+ * hub::count(owner) == 0 and not merely "the keys I named are gone".
+ *
+ * The session rows are built with the hub functions their real producers use:
+ * hub::row_adopt for the life row (NetworkHubSyncSystem PASS 1) and hub::row_tag
+ * for the mark HUB_SESS_LIFE_GONE (HubNetClaiSyncSystem PASS 4). ase-storage
+ * reaches neither module, so the test plays both edges through the hub.
  */
 
 #include <doctest/doctest.h>
@@ -37,6 +44,9 @@ namespace {
 
 namespace hub = ase::hub;
 
+// A realm hash above 2^24, where one float32 hub value would round it (D0692).
+constexpr uint32_t REALM_HASH = 0x40000001u;
+
 /** Publish exactly what StorageKycdLnkSystem publishes for a linked session.
  *  Kept in one place so a key added to the producer without adding it to the
  *  retirer fails the count assertion below instead of leaking silently. */
@@ -44,33 +54,33 @@ void publish_session_family(Registry& reg, uint32_t owner, uint32_t user_hash) {
     hub::set(reg, owner, "SES_IS_AUTHENTICATED"_hs, 1.0f);
     hub::set(reg, owner, "SES_CLEARANCE"_hs, 5.0f);
     hub::set(reg, owner, "SES_EXP_AT"_hs, 1785000000.0f);
-    hub::set(reg, owner, "SES_REALM_ID"_hs, 123456.0f);
+    hub::set(reg, owner, "SES_REALM_ID_HI"_hs, static_cast<float>(REALM_HASH >> 16));
+    hub::set(reg, owner, "SES_REALM_ID_LO"_hs, static_cast<float>(REALM_HASH & 0xFFFFu));
     hub::set(reg, owner, "SES_USER_ID_HI"_hs, static_cast<float>(user_hash >> 16));
     hub::set(reg, owner, "SES_USER_ID_LO"_hs, static_cast<float>(user_hash & 0xFFFFu));
 }
 
-/** A session entity as the live server holds it: keycard linked, identity
- *  mirror present, session-lifecycle tag present. */
+/** A session entity as the live server holds it: keycard linked and a life
+ *  row HUB_SESS_LIFE without the mark HUB_SESS_LIFE_GONE. */
 entt::entity make_live_session(Registry& reg, uint32_t user_hash) {
     auto e = reg.create();
     reg.emplace<StorageKycdVldTag>(e);
-    reg.emplace<hub::HubSessLifeTag>(e);
-    reg.emplace<hub::HubStaClaiIdntComponent>(e);
+    hub::row_adopt(reg, e, "HUB_SESS_LIFE"_hs);
     publish_session_family(reg, static_cast<uint32_t>(e), user_hash);
     return e;
 }
 
-/** The same entity after NetworkHubSyncSystem PASS 2 ran: the identity mirror
- *  is gone, HubSessLifeTag deliberately stays, and PASS 2 has already retired
- *  the two SES_* keys it wrote itself. */
+/** The same entity after its connection ended: the life row carries the mark
+ *  HUB_SESS_LIFE_GONE, and NetworkHubSyncSystem PASS 2 has already retired the
+ *  two SES_* keys it wrote itself. */
 void kill_session(Registry& reg, entt::entity e) {
-    reg.remove<hub::HubStaClaiIdntComponent>(e);
+    hub::row_tag(reg, e, "HUB_SESS_LIFE_GONE"_hs);
     uint32_t owner = static_cast<uint32_t>(e);
     hub::remove(reg, owner, "SES_IS_AUTHENTICATED"_hs);
     hub::remove(reg, owner, "SES_EXP_AT"_hs);
 }
 
-}  // anonymous namespace
+}  // namespace
 
 TEST_CASE("StorageKycdSessClnSystem retires the whole SES_* family of a dead session") {
     Registry reg;
@@ -78,26 +88,28 @@ TEST_CASE("StorageKycdSessClnSystem retires the whole SES_* family of a dead ses
 
     auto e = make_live_session(reg, 0xDEADBEEFu);
     uint32_t owner = static_cast<uint32_t>(e);
-    REQUIRE(hub::count(reg, owner) == 6);
+    REQUIRE(hub::count(reg, owner) == 7);
 
     kill_session(reg, e);
-    // What NetworkHubSyncSystem leaves behind today: four keys and a pinned tag.
-    REQUIRE(hub::count(reg, owner) == 4);
+    // What NetworkHubSyncSystem leaves behind on its own: five keys and a pinned life row.
+    REQUIRE(hub::count(reg, owner) == 5);
 
     sys.tick(reg, 1.0f);
 
     CHECK(hub::exists(reg, owner, "SES_CLEARANCE"_hs) == false);
-    CHECK(hub::exists(reg, owner, "SES_REALM_ID"_hs) == false);
+    CHECK(hub::exists(reg, owner, "SES_REALM_ID_HI"_hs) == false);
+    CHECK(hub::exists(reg, owner, "SES_REALM_ID_LO"_hs) == false);
     CHECK(hub::exists(reg, owner, "SES_USER_ID_HI"_hs) == false);
     CHECK(hub::exists(reg, owner, "SES_USER_ID_LO"_hs) == false);
 
-    // The condition HubSessLifeClnSystem waits for before it may release
-    // HubSessLifeTag. Anything above zero means the tag is pinned for the life
-    // of the process — that is the leak, not the individual key.
+    // The condition HubSessLifeClnSystem waits for before it may withdraw the
+    // life row. Anything above zero means the row is pinned for the life of the
+    // process — that is the leak, not the individual key.
     CHECK(hub::count(reg, owner) == 0);
 
     // A disconnected session holds no valid keycard.
-    CHECK(reg.all_of<StorageKycdVldTag>(e) == false);
+    auto vld_view = reg.view<StorageKycdVldTag>();
+    CHECK(vld_view.contains(e) == false);
 }
 
 TEST_CASE("StorageKycdSessClnSystem leaves a LIVE session untouched") {
@@ -109,9 +121,9 @@ TEST_CASE("StorageKycdSessClnSystem leaves a LIVE session untouched") {
 
     sys.tick(reg, 1.0f);
 
-    // The identity mirror is the exclude filter; while it is present the
+    // The mark HUB_SESS_LIFE_GONE is the filter; while it is absent the
     // session is alive and nothing may be retired.
-    CHECK(hub::count(reg, owner) == 6);
+    CHECK(hub::count(reg, owner) == 7);
     // DIE ANWESENHEIT WIRD GETRENNT ZUGESICHERT. hub::get liefert bei einem nie geschriebenen
     // Schluessel seinen Vorgabewert; ohne die zweite Zeile saehe "Freigabestufe falsch" genauso
     // aus wie "die Sitzungsfamilie wurde nie veroeffentlicht" — und genau das ist hier der
@@ -120,7 +132,8 @@ TEST_CASE("StorageKycdSessClnSystem leaves a LIVE session untouched") {
     // Begruendungsblock DAZWISCHEN wuerde die Pruefung daraus schieben.
     CHECK(hub::get(reg, owner, "SES_CLEARANCE"_hs) == 5.0f);
     CHECK(hub::is_measured(reg, owner, "SES_CLEARANCE"_hs));
-    CHECK(reg.all_of<StorageKycdVldTag>(live) == true);
+    auto vld_view = reg.view<StorageKycdVldTag>();
+    CHECK(vld_view.contains(live) == true);
 }
 
 TEST_CASE("StorageKycdSessClnSystem retires only the dead session, not its neighbour") {
@@ -136,8 +149,9 @@ TEST_CASE("StorageKycdSessClnSystem retires only the dead session, not its neigh
     sys.tick(reg, 1.0f);
 
     CHECK(hub::count(reg, dead_owner) == 0);
-    CHECK(hub::count(reg, live_owner) == 6);
-    CHECK(reg.all_of<StorageKycdVldTag>(live) == true);
+    CHECK(hub::count(reg, live_owner) == 7);
+    auto vld_view = reg.view<StorageKycdVldTag>();
+    CHECK(vld_view.contains(live) == true);
 }
 
 TEST_CASE("StorageKycdSessClnSystem ignores a dead session that never linked a keycard") {
@@ -148,7 +162,8 @@ TEST_CASE("StorageKycdSessClnSystem ignores a dead session that never linked a k
     // never did, so StorageKycdVldTag was never set and this module owns
     // nothing here.
     auto e = reg.create();
-    reg.emplace<hub::HubSessLifeTag>(e);
+    hub::row_adopt(reg, e, "HUB_SESS_LIFE"_hs);
+    hub::row_tag(reg, e, "HUB_SESS_LIFE_GONE"_hs);
     uint32_t owner = static_cast<uint32_t>(e);
     hub::set(reg, owner, "NET_CLAI_ID"_hs, 7.0f);
 
@@ -161,7 +176,7 @@ TEST_CASE("StorageKycdSessClnSystem is idempotent and survives an empty registry
     Registry reg;
     StorageKycdSessClnSystem sys;
 
-    // Empty view — must not crash and must not invent work.
+    // No life row at all — must not crash and must not invent work.
     sys.tick(reg, 1.0f);
     CHECK(hub::total_count(reg) == 0);
 
@@ -170,7 +185,7 @@ TEST_CASE("StorageKycdSessClnSystem is idempotent and survives an empty registry
     kill_session(reg, e);
 
     sys.tick(reg, 1.0f);
-    sys.tick(reg, 1.0f);  // second pass: the view no longer matches
+    sys.tick(reg, 1.0f);  // second pass: the session holds no StorageKycdVldTag any more
 
     CHECK(hub::count(reg, owner) == 0);
 }
@@ -203,8 +218,7 @@ TEST_CASE("SES_USER_ID halves survive the float32 hub value that one whole hash 
     // useSessionStore.ts performs exactly this reassembly browser-side.
     CHECK(((hi << 16) | lo) == user_hash);
 
-    // The single-value form the browser read until 2026-07-28 loses the low
-    // bits outright — this is what a bare SES_USER_ID would have delivered had
-    // anyone ever published it.
+    // A single float32 value loses the low bits outright — this is what a bare
+    // SES_USER_ID would deliver if anyone published it.
     CHECK(static_cast<uint32_t>(static_cast<float>(user_hash)) != user_hash);
 }

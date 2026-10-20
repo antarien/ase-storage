@@ -6,17 +6,18 @@
  * @file        storage_kycd_tier_seed_sys.hpp
  * @brief       StorageKycdTierSeedSystem - Seeds the KCD_SERVICE keycards of the tier services at launch
  * @description Emplaces one keycard request per machine participant (StorageReqKycdComponent +
- *              StorageReqKycdRelmComponent + hub::HubStgKycdPendTag) so the existing
- *              StorageKycdReqDrnSystem mints them through the SAME pipeline every other
- *              keycard travels. No new minting path, no second channel: only a new applicant.
+ *              StorageReqKycdRelmComponent) so the existing StorageKycdReqDrnSystem mints them
+ *              through the SAME pipeline every other keycard travels. No new minting path, no
+ *              second channel: only a new applicant.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Configuration
+ * @usecase     usecase:100403 - seed tier keycards
  * @created     2026-09-14
- * @modified    2026-09-14
- * @version     1.0.0
+ * @modified    2026-10-12
+ * @version     1.1.0
  *
  * WARUM EIN START-SEED UND KEIN AUSSTELLBEFEHL
  *   Eine Maschine kann sich nicht mit einem Netz-Credential ausweisen, um die Karte zu holen,
@@ -56,7 +57,7 @@ namespace ase::storage {
  *
  * @schedule Configuration - a lifecycle schedule, so the seed happens exactly once per process
  * @reads    nothing (the participant set is the one the Replica identity rows carry)
- * @writes   StorageReqKycdComponent + StorageReqKycdRelmComponent + hub::HubStgKycdPendTag
+ * @writes   StorageReqKycdComponent + StorageReqKycdRelmComponent
  * @depends  StorageKycdReqDrnSystem drains the requests into durable keycards (Ingestion)
  */
 class StorageKycdTierSeedSystem : public ecs::System {

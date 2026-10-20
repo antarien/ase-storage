@@ -6,20 +6,22 @@
  * @file        storage_kycd_sess_cln_sys.hpp
  * @brief       StorageKycdSessClnSystem - Retires the SES_* family of a dead session
  * @description StorageKycdLnkSystem publishes SES_IS_AUTHENTICATED, SES_CLEARANCE,
- *              SES_EXP_AT, SES_REALM_ID and SES_USER_ID_HI/_LO with owner = client
- *              entity. NetworkHubSyncSystem removes only the three keys it wrote
- *              itself when the client disconnects, so clearance, realm and the user
- *              hash outlive every session that ever authenticated. This system is
- *              the missing counterpart: the writer retires its own family, the same
- *              contract remove_keycard_ntf_family already applies to SES_KYCD_NTF_*.
+ *              SES_EXP_AT, SES_REALM_ID_HI/_LO and SES_USER_ID_HI/_LO with owner =
+ *              client entity. NetworkHubSyncSystem removes only the three keys it
+ *              wrote itself when the client disconnects, so clearance, realm and the
+ *              user hash outlive every session that ever authenticated. This system
+ *              is the missing counterpart: the writer retires its own family, the
+ *              same contract remove_keycard_ntf_family already applies to
+ *              SES_KYCD_NTF_*.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    action/maintenance/cleanup
  * @schedule    Preservation
+ * @usecase     usecase:100265 - check access clearance
  * @created     2026-07-28
- * @modified    2026-07-28
- * @version     1.0.0
+ * @modified    2026-10-10
+ * @version     1.1.0
  *
  * ECS SYSTEM HEADER COMPLIANCE
  *

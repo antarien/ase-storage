@@ -11,9 +11,10 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Observation
+ * @usecase     usecase:100402 - grant keycard by vote
  * @created     2026-04-05
- * @modified    2026-04-05
- * @version     1.0.0
+ * @modified    2026-10-12
+ * @version     1.1.0
  *
  * ECS SYSTEM HEADER COMPLIANCE
  *
@@ -42,7 +43,7 @@ namespace ase::storage {
  *           + StorageBlltVoteComponent (the ballots, walked child-first)
  * @writes   Re-derives the tallies, removes StorageVotePendTag, and on a passed
  *           motion creates a keycard REQUEST entity (StorageReqKycdComponent +
- *           StorageReqKycdRelmComponent + hub::HubStgKycdPendTag) for
+ *           StorageReqKycdRelmComponent) for
  *           StorageKycdReqDrnSystem to mint - never a call into that system.
  * @depends  HTTP routes create vote entities with StorageVotePendTag
  *           (the tag is StorageVotePendTag, not StorageVotePendTag - the older

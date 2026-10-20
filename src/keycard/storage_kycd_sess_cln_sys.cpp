@@ -8,48 +8,48 @@
  * @layer       3 (Modules)
  * @category    action/maintenance/cleanup
  * @schedule    Preservation
+ * @usecase     usecase:100265 - check access clearance
  * @created     2026-07-28
- * @modified    2026-07-28
- * @version     1.0.0
+ * @modified    2026-10-13
+ * @version     1.2.0
  *
  * CAUSAL CHAIN (Session Hub-Family Retirement)
  *
- *   [NetworkHubSyncSystem PASS 2: client disconnected]
+ *   [HubNetClaiSyncSystem PASS 4: claim row HUB_CLAI_IDNT is gone]
  *          │
- *          │ removes HubStaClaiIdntComponent, KEEPS HubSessLifeTag,
- *          │ removes only NET_CLAI_ID / SES_IS_AUTHENTICATED / SES_EXP_AT
+ *          │ marks the life row HUB_SESS_LIFE with HUB_SESS_LIFE_GONE,
+ *          │ the life row itself stays
  *          ▼
  *   ┌─────────────────────────────────────────────────────────────┐
  *   │  THIS SYSTEM: StorageKycdSessClnSystem                      │
  *   │                                                             │
- *   │  View: StorageKycdVldTag + HubSessLifeTag                   │
- *   │        excluding HubStaClaiIdntComponent                    │
+ *   │  Rows: HUB_SESS_LIFE carrying HUB_SESS_LIFE_GONE            │
+ *   │        and holding StorageKycdVldTag                        │
  *   │    → remove the SES_* family THIS module published          │
  *   │    → remove StorageKycdVldTag (dead session is not valid)   │
  *   └─────────────────────────────────────────────────────────────┘
  *          │
  *          │ owner holds no hub values any more
  *          ▼
- *   HubSessLifeClnSystem can finally drop HubSessLifeTag, which its own
- *   guard blocks for as long as ANY value still names the owner.
+ *   HubSessLifeClnSystem withdraws the life row, which its own guard blocks
+ *   for as long as ANY value still names the owner.
  *
  * WHY THIS SYSTEM EXISTS
  *
- *   StorageKycdLnkSystem writes six keys on the client entity; the network
- *   module retires three. Clearance, realm and the user hash therefore
- *   survived every disconnect, with three consequences measured on
- *   2026-07-28:
+ *   StorageKycdLnkSystem writes seven keys on the client entity; the network
+ *   module retires only its own. Without this retirer clearance, realm and the
+ *   user hash would survive every disconnect, with three consequences:
  *
- *   1. HubSessLifeClnSystem never releases HubSessLifeTag, because it waits
- *      for the owner's value count to reach zero. Dead sessions accumulate
- *      tags and values for the whole uptime of the process.
+ *   1. HubSessLifeClnSystem never withdraws the life row, because it waits
+ *      for the owner's value count to reach zero. Dead sessions would
+ *      accumulate rows and values for the whole uptime of the process.
  *   2. The connection snapshot is owner-blind, so the clearance and realm of
- *      every session that ever authenticated ship to every newly connecting
- *      client (PLAN_ASE_HUB_OWNR_SCOPE, IST-Zustand).
+ *      every session that ever authenticated would ship to every newly
+ *      connecting client (PLAN_ASE_HUB_OWNR_SCOPE).
  *   3. HubNetBctReqSystem recognises a disconnect-race owner through a
- *      fixed-size list capped at NET_BCT_MAX_VALUES_PER_MSG. Once the corpses
- *      outgrow that cap, later dead owners miss the drop branch and fall into
- *      the public catch-all.
+ *      fixed-size list capped at NET_BCT_MAX_VALUES_PER_MSG. Corpses beyond
+ *      that cap would miss the race class and fall to DENY with the wrong
+ *      reason.
  *
  *   Same defect class as remove_keycard_ntf_family (storage_kycd_req_drn_sys.cpp)
  *   and ReplicationTlmtPeerRmvSystem's RPL_PEER_* removal: hub values live on
@@ -59,19 +59,20 @@
  * HUB Pattern (Active)
  *
  * READS (from Hub):
- *   (none — the view alone decides which owner is dead; no value is read back,
- *    which is why no NOT_FOUND check appears in tick())
+ *   HUB_SESS_LIFE rows marked HUB_SESS_LIFE_GONE (hub::row_each) — the row
+ *   decides which owner is dead; no value is read back, which is why no
+ *   NOT_FOUND check appears in tick()
  *
  * WRITES (to Hub, owner = dead client entity):
- *   removes SES_IS_AUTHENTICATED, SES_CLEARANCE, SES_EXP_AT, SES_REALM_ID,
- *   SES_USER_ID_HI, SES_USER_ID_LO
+ *   removes SES_IS_AUTHENTICATED, SES_CLEARANCE, SES_EXP_AT, SES_REALM_ID_HI,
+ *   SES_REALM_ID_LO, SES_USER_ID_HI, SES_USER_ID_LO
  *
  * STAR Topology (Active)
  *   Leaf retirer in the Hub star. The only outbound L3 edge is ase::hub; the
- *   dead-session verdict is read from hub-owned components (HubSessLifeTag,
- *   HubStaClaiIdntComponent), never from ase-network directly. StorageKycdLnkSystem
- *   is the paired publisher and is reached solely through hub state — no
- *   system-to-system call exists in either direction.
+ *   dead-session verdict is read from a hub row and its mark, never from
+ *   ase-network directly. StorageKycdLnkSystem is the paired publisher and is
+ *   reached solely through hub state — no system-to-system call exists in
+ *   either direction.
  *
  * FLYWEIGHT Pattern (Active)
  *   hub::remove delegates to HubResourceManager, which drops the
@@ -173,7 +174,7 @@
 #include <ase/storage/systems/keycard/storage_kycd_sess_cln_sys.hpp>
 // Components from same module
 #include <ase/storage/components/tag/storage_kycd_vld_tag.hpp>
-// Hub API (owns HubSessLifeTag + HubStaClaiIdntComponent + remove)
+// Hub API (row_each over HUB_SESS_LIFE + remove)
 #include <ase/hub/api.hpp>
 // Logging
 #include <ase/log/log.hpp>
@@ -186,18 +187,10 @@ using namespace entt::literals;
 namespace ase::storage {
 
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
+// Only pure functions over primitive types belong here — no registry, no view, no query.
 namespace {
 
-/** INTENTIONALLY EMPTY.
- *
- *  `remove_session_family(ecs::Registry&, uint32_t)` stand hier und rief sechsmal
- *  hub::remove. Eine Funktion, die die Registry nimmt, ist kein Helfer, sondern Hub-I/O
- *  hinter einem Aufruf — kein Zaehler sieht sie (INST_ASE_LINT.md, "Anonymous Namespace").
- *  Die sechs Ruecknahmen stehen jetzt offen in tick(), wo die Paarigkeit mit
- *  StorageKycdLnkSystem am Code ablesbar ist statt nur im Kopf beschrieben.
- *
- *  Only pure functions over primitive types belong here — no registry, no view, no query. */
-}  // anonymous namespace
+}  // namespace
 
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
@@ -208,28 +201,31 @@ void StorageKycdSessClnSystem::on_start(ecs::Registry& /*registry*/) {
 
 void StorageKycdSessClnSystem::tick(ecs::Registry& registry, float /*dt*/) {
     /**
-     * Single-pass over sessions that carried a linked keycard and have lost
-     * their identity mirror. HubSessLifeTag is what distinguishes a dead
-     * SESSION entity from an ordinary entity that merely lacks the mirror, so
-     * both tags are required and the mirror is the exclude filter — exactly
-     * the triple HubSessLifeClnSystem and HubNetBctReqSystem already use to
-     * classify a disconnect.
+     * Single pass over the life rows HUB_SESS_LIFE that carry the mark
+     * HUB_SESS_LIFE_GONE. The mark is what distinguishes a dead SESSION from an
+     * ordinary entity that merely lacks a claim row; HubSessLifeClnSystem and
+     * HubNetBctReqSystem classify a disconnect through the same mark.
      *
-     * EnTT guarantees removing a component from the CURRENT entity during view
-     * iteration is safe (WRFL_ASE_DEFERRED_DELETION — EnTT Issue #772). The
-     * hub values destroyed by remove_session_family live on separate
-     * hub-internal entities and carry none of the components in this view, so
-     * they cannot invalidate the iteration.
+     * Only sessions that carried a linked keycard hold a SES_* family, so the
+     * membership in StorageKycdVldTag is asked of a named view on the visited
+     * row.
      *
-     * Dropping StorageKycdVldTag both terminates this loop for the entity and
-     * states the truth: a disconnected session holds no valid keycard. No
-     * ordering against HubSessLifeClnSystem is needed — if that system already
-     * ran this tick, it releases HubSessLifeTag on the next one.
+     * Removing StorageKycdVldTag inside fn touches a storage the row walk does
+     * not iterate, and the hub values destroyed by hub::remove live on separate
+     * hub-internal entities that are neither rows of HUB_SESS_LIFE nor holders
+     * of the mark, so neither can invalidate the walk.
+     *
+     * Dropping StorageKycdVldTag both ends the work for the session and states
+     * the truth: a disconnected session holds no valid keycard. No ordering
+     * against HubSessLifeClnSystem is needed — if that system already ran this
+     * tick, it withdraws the life row on the next one.
      */
-    auto dead_view = registry.view<StorageKycdVldTag, hub::HubSessLifeTag>(
-        entt::exclude<hub::HubStaClaiIdntComponent>);
-    for (auto entity : dead_view) {
-        uint32_t owner = static_cast<uint32_t>(entity);
+    auto vld_view = registry.view<StorageKycdVldTag>();
+    hub::row_each(registry, "HUB_SESS_LIFE"_hs, "HUB_SESS_LIFE_GONE"_hs, [&](ecs::Entity session) {
+        if (!vld_view.contains(session)) {
+            return;
+        }
+        uint32_t owner = static_cast<uint32_t>(session);
 
         /**
          * DIE SES_*-FAMILIE, DIE StorageKycdLnkSystem VEROEFFENTLICHT, WIRD HIER
@@ -237,9 +233,9 @@ void StorageKycdSessClnSystem::tick(ecs::Registry& registry, float /*dt*/) {
          *
          * DIE BEIDEN LISTEN SIND EIN PAAR: jeder Schluessel, der dort geschrieben wird,
          * steht hier — und ein Schluessel, der auf EINER Seite hinzukommt, strandet im Hub
-         * fuer die Lebensdauer des Prozesses. Wer drueben einen siebten Wert publiziert,
+         * fuer die Lebensdauer des Prozesses. Wer drueben einen achten Wert publiziert,
          * traegt ihn hier nach; kein Tor prueft diese Paarigkeit, und ausgeschrieben ist
-         * sie wenigstens ablesbar.
+         * sie wenigstens ablesbar. Das Reich reist in zwei Haelften, also gehen hier beide.
          *
          * hub::remove auf einen abwesenden Schluessel ist ein No-op und gibt false zurueck:
          * eine Sitzung, die nie ein Reich erreicht hat, hat schlicht nichts zurueckzunehmen —
@@ -248,15 +244,16 @@ void StorageKycdSessClnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         hub::remove(registry, owner, "SES_IS_AUTHENTICATED"_hs);
         hub::remove(registry, owner, "SES_CLEARANCE"_hs);
         hub::remove(registry, owner, "SES_EXP_AT"_hs);
-        hub::remove(registry, owner, "SES_REALM_ID"_hs);
+        hub::remove(registry, owner, "SES_REALM_ID_HI"_hs);
+        hub::remove(registry, owner, "SES_REALM_ID_LO"_hs);
         hub::remove(registry, owner, "SES_USER_ID_HI"_hs);
         hub::remove(registry, owner, "SES_USER_ID_LO"_hs);
 
-        registry.remove<StorageKycdVldTag>(entity);
+        registry.remove<StorageKycdVldTag>(session);
 
         log::debug("[StorageKycdSessClnSystem] Retired SES_* family for dead session owner={}",
                    owner);
-    }
+    });
 }
 
 void StorageKycdSessClnSystem::on_stop(ecs::Registry& /*registry*/) {

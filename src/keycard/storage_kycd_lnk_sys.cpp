@@ -8,9 +8,10 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Ingestion
+ * @usecase     usecase:100265 - check access clearance
  * @created     2026-04-05
- * @modified    2026-04-18
- * @version     1.2.0
+ * @modified    2026-10-13
+ * @version     1.4.0
  *
  * CAUSAL CHAIN (Keycard Link)
  *
@@ -24,37 +25,42 @@
  *   │  READS:                                     │
  *   │    - StorageKycdVldTag + StorageStaIdnComp  │
  *   │    - StorageStaKycdComponent (auth entity)  │
- *   │    - NET_CLAI_ID hub value (client mirror)  │
+ *   │    - session index (rows HUB_CLAI_IDNT)     │
  *   │                                             │
  *   │  WRITES:                                    │
  *   │    - StorageStaIdnComponent (client entity) │
  *   │    - StorageKycdVldTag (client entity)      │
+ *   │    - StorageKycdLnkCntTag (client entity)   │
  *   └─────────────────────────────────────────────┘
  *          │
  *          │ Client entity: identity + valid tag
  *          ▼
  *   StorageAcssChkSystem uses identity for ACL checks.
+ *   StorageKycdLnkCntSystem turns the count markers into the link counter.
  *   THIS system is the session hub publisher — it writes the SES_* family
- *   directly with owner = client entity. An earlier comment here pointed at
- *   ase-session's SessionIdnHubWritSystem; that system was deleted (ase-session
- *   ab7d3a9) and never had a producer for its input components, so it published
- *   nothing. ase-session is a lifecycle-marker skeleton today.
+ *   directly with owner = client entity. ase-session holds no publisher of
+ *   its own; it is a lifecycle-marker skeleton.
  *
  *   The values leave this module by TWO independent senders, neither of which
  *   this system chooses: HubNetBctReqSystem carries key creation to the browser,
  *   ReplicaHubSndSystem carries the full dirty set to the orchestrator peer over
  *   the binary WS. hub::set itself is storage, not transport.
  *
+ *   The session row HUB_CLAI_IDNT belongs to ase-network, and so does its field
+ *   HUB_CLAI_IDNT_USER_HASH. This system never fills it: NetworkHubSyncSystem
+ *   reads SES_USER_ID_HI/_LO from the same owner and writes the field itself.
+ *
  * HUB Pattern
  *
  * READS (from Hub):
- *   NET_CLAI_ID — per-client session identity anchor
+ *   (none) - the session is found through StorageAcssIndexResourceManager, which
+ *   StorageIdnIdxSystem fills from the rows HUB_CLAI_IDNT at the start of the frame.
  *
  * WRITES (to Hub, owner = client entity):
  *   SES_IS_AUTHENTICATED  1.0f once the keycard is linked
  *   SES_CLEARANCE         keycard clearance level
  *   SES_EXP_AT            keycard expiry (Unix seconds)
- *   SES_REALM_ID          FNV-1a32 hash of the realm id string
+ *   SES_REALM_ID_HI/_LO   realm FNV-1a32 hash in exact-carry halves
  *   SES_USER_ID_HI/_LO    user_id FNV-1a32 hash in exact-carry halves
  *
  *   StorageKycdSesClnSystem retires this exact family when the session dies.
@@ -168,17 +174,15 @@
 #include <ase/storage/storage_acss_index_resource_manager.hpp>
 #include <ase/storage/components/tag/storage_kycd_vld_tag.hpp>
 #include <ase/storage/components/tag/storage_kycd_rjct_tag.hpp>
-// Hub API for client identity mirror (Hub API 2.0: no L3→L3 network import)
+#include <ase/storage/components/tag/storage_kycd_lnk_cnt_tag.hpp>
+// Hub API - the ONLY allowed hub header: set
 #include <ase/hub/api.hpp>
-// Types (L0 — is_not_found sentinel check)
-#include <ase/types/types.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
 #include <entt/core/hashed_string.hpp>
 
 using namespace entt::literals;
-namespace types = ase::types;
 
 namespace ase::storage {
 
@@ -211,8 +215,9 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
     }
     auto& idx = **idx_ptr;
 
-    // Link each validated keycard entity to its network client entity
-    // Hub API 2.0: find clients via hub::HubNetClaiRdyTag (Mirror Tag) + hub::get() for client_id
+    // Link each validated keycard entity to the session entity of its network client.
+    // The session is found by client id in the index StorageIdnIdxSystem built from the
+    // rows HUB_CLAI_IDNT.
     auto auth_view = registry.view<StorageStaIdnComponent, StorageKycdVldTag>(
         entt::exclude<StorageKycdRjctTag>);
     for (auto auth_entity : auth_view) {
@@ -228,10 +233,9 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         }
         uint32_t target_client_id = auth_sess->client_id;
 
-        // The client is reached by the id it publishes. StorageIdnIdxSystem indexed every
-        // mirrored client at the start of this frame, so the answer is one lookup - the
-        // former version walked EVERY client and read a Hub value for each, once per
-        // authenticated session (WS-K.2c).
+        // The client is reached by its client id. StorageIdnIdxSystem indexed every open
+        // session at the start of this frame, so the answer is one lookup instead of a
+        // walk over every client per authenticated session (WS-K.2c).
         const uint32_t client_id = idx.get_client(target_client_id);
         if (client_id != INVALID_ENTITY) {
             const auto client_entity = static_cast<ecs::Entity>(client_id);
@@ -253,11 +257,11 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
 
             registry.emplace_or_replace<StorageKycdVldTag>(client_entity);
+            // One marker per link; StorageKycdLnkCntSystem counts it into the module's own
+            // counter row. This system writes the star and therefore does no arithmetic.
+            registry.emplace_or_replace<StorageKycdLnkCntTag>(client_entity);
             log::debug("[StorageKycdLnk] +StorageKycdVldTag client={} user='{}'",
                        static_cast<uint32_t>(client_entity), auth_idn.user_id);
-            float lnk_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_LNK_COUNT"_hs);
-            if (types::is_not_found(lnk_count)) lnk_count = 0.0f;
-            hub::set(registry, hub::GLOBAL, "STG_KYCD_LNK_COUNT"_hs, lnk_count + 1.0f);
 
             // Publish the SES_* hub contract keys for the newly-validated
             // session. hub::set writes HubDatValComponent and sets HubValDtyTag —
@@ -271,21 +275,14 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             // user_id STRING is NOT registered via set_debug_label (a debug-only channel); the
             // session identity lives in StorageStaIdnComponent, consumers read the string there.
 
-            // Server-side consumers read the exact uint32_t from the mirror
-            // component: a hub value is float32 and silently corrupts integers
-            // above 2^24 (ARCH_ASE_HUB_API.md).
-            if (auto* mirror = registry.try_get<hub::HubStaClaiIdntComponent>(client_entity);
-                mirror != nullptr) {
-                mirror->user_id_hash = user_id_hash;
-            }
             hub::set(registry, owner, "SES_IS_AUTHENTICATED"_hs, 1.0f);
 
-            // The browser has no mirror component, so the hash travels in two
-            // exact-carry halves — each below 2^16 and therefore lossless in a
-            // float32 hub value. Same split as SES_KYCD_NTF_USER_ID_HI/_LO
-            // (sdk_keycard_notify.cpp); useSessionStore.ts reassembles
-            // (HI << 16) | LO. Before this, useSessionStore read a bare
-            // SES_USER_ID that no producer ever wrote and always saw 0.
+            // The hash travels in two exact-carry halves — each below 2^16 and
+            // therefore lossless in a float32 hub value. Same split as
+            // SES_KYCD_NTF_USER_ID_HI/_LO; useSessionStore.ts
+            // reassembles (HI << 16) | LO, and NetworkHubSyncSystem reassembles it the
+            // same way into the u32 field HUB_CLAI_IDNT_USER_HASH of the session row,
+            // which the server-side readers take as the exact number.
             hub::set(registry, owner, "SES_USER_ID_HI"_hs,
                      static_cast<float>(user_id_hash >> 16));
             hub::set(registry, owner, "SES_USER_ID_LO"_hs,
@@ -299,11 +296,28 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
                 if (kycd->relm_ref != 0) {
                     auto relm_entity = static_cast<entt::entity>(kycd->relm_ref);
                     auto* relm = registry.try_get<StorageStaRelmComponent>(relm_entity);
-                    uint32_t realm_hash = (relm != nullptr)
-                                          ? entt::hashed_string{relm->id}.value()
-                                          : kycd->relm_ref;
-                    // realm id STRING is NOT registered via set_debug_label (debug-only channel).
-                    hub::set(registry, owner, "SES_REALM_ID"_hs, static_cast<float>(realm_hash));
+                    if (relm == nullptr) {
+                        // The keycard names a realm row that is gone. Its entity number is no
+                        // realm hash: publishing it would put an identity nobody issued on a
+                        // GRANT axis. No realm is published instead, and every realm-scoped
+                        // delivery treats the session as outside every realm until a keycard
+                        // with a live realm is linked.
+                        log::warn(log::WRN::CAT::REFERENCE_UNRESOLVED, "StorageKycdLnkSystem",
+                                  kycd->relm_ref, "kycd_realm_row");
+                    } else {
+                        const uint32_t realm_hash = entt::hashed_string{relm->id}.value();
+                        // realm id STRING is NOT registered via set_debug_label (debug-only
+                        // channel). The realm is a GRANT axis: the Replica delivers a cell, a
+                        // mark, a project row only to a session of the same realm. A single
+                        // float carries an integer exactly only up to 2^24, so two realms
+                        // whose hashes round to the same float would be one realm to every
+                        // reader (D0692). Two exact-carry halves, the same split as
+                        // SES_USER_ID_HI/_LO above.
+                        hub::set(registry, owner, "SES_REALM_ID_HI"_hs,
+                                 static_cast<float>(realm_hash >> 16));
+                        hub::set(registry, owner, "SES_REALM_ID_LO"_hs,
+                                 static_cast<float>(realm_hash & 0xFFFFu));
+                    }
                 }
             }
 

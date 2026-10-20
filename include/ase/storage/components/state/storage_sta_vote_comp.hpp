@@ -12,6 +12,8 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
+ * @parity      shared
+ * @usecase     usecase:100402 - grant keycard by vote
  * @created     2026-04-05
  * @modified    2026-04-05
  * @version     1.0.0

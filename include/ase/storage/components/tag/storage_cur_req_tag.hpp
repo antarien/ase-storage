@@ -10,6 +10,8 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    tag
+ * @parity      shared
+ * @usecase     usecase:100342 - approve asset version
  * @created     2026-04-06
  * @modified    2026-08-20
  * @version     1.0.1

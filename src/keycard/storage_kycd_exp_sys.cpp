@@ -8,9 +8,10 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Preservation
+ * @usecase     usecase:100265 - check access clearance
  * @created     2026-04-05
- * @modified    2026-04-16
- * @version     1.1.0
+ * @modified    2026-10-13
+ * @version     1.2.0
  *
  * CAUSAL CHAIN (Keycard Expiry)
  *
@@ -27,11 +28,13 @@
  *   │                                             │
  *   │  WRITES:                                    │
  *   │    - StorageKycdExpTag (replaces VldTag)    │
+ *   │    - StorageStaSessStatComponent.expired    │
  *   └─────────────────────────────────────────────┘
  *          │
  *          │ Expired entities denied by ACL system
  *          ▼
  *   StorageAcssChkSystem rejects expired keycards
+ *   StorageKycdStatPubSystem announces the expiry count as STG_KYCD_EXP_COUNT
  *
  * HUB Pattern (N/A - No Hub reads/writes)
  *
@@ -39,7 +42,8 @@
  *   (none)
  *
  * WRITES (to Hub):
- *   (none)
+ *   (none) - the expiry count is the module's own row StorageStaSessStatComponent on the
+ *   manager entity; StorageKycdStatPubSystem announces it.
  *
  * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
  *   Wall clock time accessed via StorageResourceManager.
@@ -143,15 +147,17 @@
 // Components from same module
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
 #include <ase/storage/components/state/storage_kycd_grnt_comp.hpp>
+#include <ase/storage/components/state/storage_sta_sess_stat_comp.hpp>
 #include <ase/storage/components/tag/storage_kycd_vld_tag.hpp>
 #include <ase/storage/components/tag/storage_kycd_exp_tag.hpp>
+#include <ase/storage/components/tag/storage_mgr_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
-// Hub API (counter)
-#include <ase/hub/api.hpp>
-// Types (L0 — is_not_found sentinel check)
-#include <ase/types/types.hpp>
 // Logging
 #include <ase/log/log.hpp>
+
+#include <entt/core/hashed_string.hpp>
+
+#include <cstdint>
 
 using namespace entt::literals;
 
@@ -180,6 +186,7 @@ void StorageKycdExpSystem::tick(ecs::Registry& registry, float /*dt*/) {
     }
 
     // SINGLE-PASS: check each valid keycard entity for expiry
+    uint32_t expired_now = 0u;
     auto view =
         registry.view<StorageStaKycdComponent, StorageKycdGrntComponent, StorageKycdVldTag>();
     for (auto entity : view) {
@@ -197,10 +204,17 @@ void StorageKycdExpSystem::tick(ecs::Registry& registry, float /*dt*/) {
             registry.emplace<StorageKycdExpTag>(entity);
             log::debug("[StorageKycdExp] -StorageKycdVldTag entity={} reason=expired",
                        static_cast<uint32_t>(entity));
-            float exp_count = hub::get(registry, hub::GLOBAL, "STG_KYCD_EXP_COUNT"_hs);
-            if (ase::types::is_not_found(exp_count)) exp_count = 0.0f;
-            hub::set(registry, hub::GLOBAL, "STG_KYCD_EXP_COUNT"_hs, exp_count + 1.0f);
+            expired_now += 1u;
             log::info("[StorageKycdExp] Keycard expired: {}", kycd.kycd_hash);
+        }
+    }
+
+    // The module's own counter row on the manager entity; StorageKycdStatPubSystem announces
+    // it as STG_KYCD_EXP_COUNT. One addition per tick, not one hub write per keycard.
+    if (expired_now > 0u) {
+        for (auto mgr_entity : registry.view<StorageMgrTag>()) {
+            auto& stat = registry.get_or_emplace<StorageStaSessStatComponent>(mgr_entity);
+            stat.expired += expired_now;
         }
     }
 }

@@ -16,6 +16,8 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
+ * @parity      shared
+ * @usecase     usecase:100264 - issue customer keycard
  * @created     2026-04-04
  * @modified    2026-08-19
  * @version     1.1.0

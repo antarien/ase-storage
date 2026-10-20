@@ -8,43 +8,40 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Ingestion
+ * @usecase     usecase:100264 - issue customer keycard
  * @created     2026-04-16
- * @modified    2026-04-16
- * @version     1.0.0
+ * @modified    2026-10-12
+ * @version     1.1.0
  *
  * CAUSAL CHAIN (SDK Hub Bridge → Storage Request Component)
  *
  *   [plugins/ase-pl-webserver auth_routes POST /api/auth/keycard-issued]
  *          │
- *          │ sdk::verify_keycard_notify + sdk::emplace_keycard_issuance_request
- *          │ publishes SES_KYCD_NTF_{USER_ID,CLRN,REALM_ID,EXP_AT} Hub keys on a
- *          │ fresh request entity + hub::HubStgKycdPendTag
+ *          │ the route verifies the HMAC, WebserverKycdDrnSystem files the hub row
+ *          │ HUB_STG_KYCD_REQ (mark HUB_STG_KYCD); StorageKycdNtfySynSystem mirrors it
  *          ▼
  *   ┌─────────────────────────────────────────────────────────────┐
  *   │  THIS SYSTEM: StorageKycdNtfyDrnSystem                      │
  *   │                                                             │
  *   │  READS (per request entity):                                │
- *   │    - hub::HubStgKycdPendTag (discovery tag)                 │
- *   │    - SES_KYCD_NTF_USER_ID   (float FNV-1a32 hash)           │
- *   │    - SES_KYCD_NTF_CLRN      (float clearance 0-9)           │
- *   │    - SES_KYCD_NTF_REALM_ID  (float FNV-1a32 hash)           │
- *   │    - SES_KYCD_NTF_EXP_AT    (float unix seconds)            │
+ *   │    - StorageInpKycdNtfyIdnComponent  (hashes, user id)      │
+ *   │    - StorageInpKycdNtfyGrntComponent (clearance, perm, exp) │
+ *   │    - SES_KYCD_NTF_GRANT_* (codeword grant flags, Hub)       │
  *   │                                                             │
  *   │  WRITES:                                                    │
  *   │    - StorageReqKycdComponent on the same request entity     │
- *   │      (leaves HubStgKycdPendTag intact for downstream)       │
+ *   │    - StorageReqKycdRelmComponent, StorageReqKycdCwrdComponent│
  *   └─────────────────────────────────────────────────────────────┘
  *          │
- *          │ Entity now carries both ReqKycdComponent + HubStgKycdPendTag
+ *          │ Entity now carries StorageReqKycdComponent
  *          ▼
  *   StorageKycdReqDrnSystem picks it up, creates token entity,
- *   destroys request entity (tag + component released together).
+ *   destroys request entity (row fields released with it).
  *
  * HUB Pattern (ARCH_ASE_HUB_API v2.0)
  *
  * READS (from Hub):
- *   SES_KYCD_NTF_USER_ID_HI, SES_KYCD_NTF_USER_ID_LO, SES_KYCD_NTF_CLRN,
- *   SES_KYCD_NTF_REALM_ID, SES_KYCD_NTF_EXP_AT
+ *   SES_KYCD_NTF_GRANT_BINARY, _SIG, _SBOM, _METADATA (owner = the request entity)
  *
  * WRITES (to Hub):
  *   (none — component emplace is module-local)
@@ -152,9 +149,9 @@
 #include <ase/storage/components/state/storage_sta_relm_comp.hpp>
 #include <ase/storage/storage_acss_index_resource_manager.hpp>
 #include <ase/storage/types.hpp>
-// Hub API (discovery tag + notify Hub keys)
+// Hub API (the codeword grant flags on the request entity)
 #include <ase/hub/api.hpp>
-// Die Bruecke des SYN-Schnitts: was frueher sechs hub::get in diesem tick() waren.
+// Die Bruecke des SYN-Schnitts: die gespiegelten Felder der Hub-Zeile.
 #include <ase/storage/components/state/storage_inp_kycd_ntfy_idn_comp.hpp>
 #include <ase/storage/components/state/storage_inp_kycd_ntfy_grnt_comp.hpp>
 // Types (L0 — is_not_found sentinel check)
@@ -202,48 +199,27 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
     auto& idx = **idx_ptr;
 
     /**
-     * DIE STERNSEITE STEHT NICHT MEHR HIER — SYN-SCHNITT VOM 2026-09-21.
+     * DIE STERNSEITE STEHT NICHT HIER. StorageKycdNtfySynSystem liest die Hub-Zeile und legt das
+     * Gelesene in zwei Bruecken-Zeilen ab; dieses System baut daraus die Anfrage.
      *
-     * Bis dahin las dieses System sechs Hub-Zeilen und setzte im selben tick() die beiden
-     * uint32-Hashes aus je zwei 16-Bit-Haelften zusammen; der Validator meldete das als
-     * HUB_IO_MIXED_WITH_MATH. Den Stern befragt jetzt StorageKycdNtfySynSystem und legt das
-     * Gelesene roh in zwei Bruecken-Zeilen ab - dieses System rechnet nur noch.
-     *
-     * DIE BRUECKE IM SICHTKOPF IST ZUGLEICH DER FILTER: eine Anfrage, deren Pflichtzeilen im
-     * Stern fehlten, bekommt keine Bruecke und erreicht diesen Durchlauf gar nicht erst. Das
-     * ist dasselbe Verhalten wie das fruehere `continue`, nur eine Stufe frueher - und die
-     * HUB_NOT_FOUND-Meldung steht jetzt bei dem, der den Stern befragt.
+     * DIE BRUECKE IM SICHTKOPF IST ZUGLEICH DER FILTER: eine Anfrage, deren Pflichtfelder fehlten,
+     * bekommt keine Bruecke und erreicht diesen Durchlauf gar nicht erst.
      */
-    auto view = registry.view<hub::HubStgKycdPendTag, StorageInpKycdNtfyIdnComponent,
-                              StorageInpKycdNtfyGrntComponent>(
+    auto view = registry.view<StorageInpKycdNtfyIdnComponent, StorageInpKycdNtfyGrntComponent>(
         entt::exclude<StorageReqKycdComponent>);
     for (auto [req_entity, idn_inp, grnt_inp] : view.each()) {
         uint32_t owner = static_cast<uint32_t>(req_entity);
 
-        // The SDK carries the exact uint32 FNV user_hash as two 16-bit float
-        // halves (a single float cast would truncate the gate owner via the
-        // 24-bit mantissa). Both halves are <= 65535 → exactly representable, so
-        // the reconstruction below is bit-exact and lands at the gate's owner.
-        uint32_t user_hash  = (static_cast<uint32_t>(idn_inp.user_hash_hi) << 16)
-                              | static_cast<uint32_t>(idn_inp.user_hash_lo);
-        uint32_t clearance  = static_cast<uint32_t>(grnt_inp.clearance);
-        // realm_hash is an FNV uint32 carried as two exact 16-bit halves (the SDK
-        // producer splits it); reconstruct bit-exact so the realm match below
-        // succeeds and the realm+permission binding is applied (single-float truncated).
-        uint32_t realm_hash = (static_cast<uint32_t>(idn_inp.realm_hash_hi) << 16)
-                              | static_cast<uint32_t>(idn_inp.realm_hash_lo);
-        uint64_t exp_at     = static_cast<uint64_t>(grnt_inp.expires_at);
+        // The hashes and the expiry arrive whole: the row carries them as u32 and u64 fields.
+        const uint32_t user_hash  = idn_inp.user_hash;
+        const uint32_t clearance  = grnt_inp.clearance;
+        const uint32_t realm_hash = idn_inp.realm_hash;
+        const uint64_t exp_at     = grnt_inp.expires_at;
 
-        // Resolve the user_id STRING the SDK carried on THIS request entity (1:1) via a DIRECT
-        // try_get - NOT get_name(), a debug-only channel that is never a production data source.
-        // try_get on the known req_entity handle is not a view iteration, so it is permitted for
-        // a data-carrying Hub component. Works on first-login issuance (no session identity exists
-        // yet) and operator-mint-for-other alike, because the request always carries the string.
-        const char* user_id_str = "";
-        if (const auto* req_idn = registry.try_get<hub::HubStgKycdIdnComponent>(req_entity);
-            req_idn != nullptr) {
-            user_id_str = req_idn->user_id;
-        }
+        // The user_id STRING the SDK carried on THIS request row, mirrored into the bridge. Works
+        // on first-login issuance (no session identity exists yet) and operator-mint-for-other
+        // alike, because the request always carries the string.
+        const char* user_id_str = idn_inp.user_id;
 
         auto& payload = registry.emplace<StorageReqKycdComponent>(req_entity);
         size_t copy_len = 0;
@@ -261,17 +237,13 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // hash to its realm entity and carry it + permission bits as a sibling
         // request component. Absent for the legacy auth-gate flow (realm_hash 0).
         if (realm_hash != 0) {
-            float perm_f = hub::get(registry, owner, "SES_KYCD_NTF_PERM"_hs);
-            if (ase::types::is_not_found(perm_f)) perm_f = 0.0f;
             // The realm is reached by its id hash, which is exactly the key the index is
-            // built on. The former version walked EVERY realm per notification and
-            // re-hashed each id string on the way (WS-K.2c) - a string walk inside a
-            // walk, for a lookup that is one number against one number.
+            // built on - one number against one number.
             const uint32_t realm_ref = idx.get_realm(static_cast<uint64_t>(realm_hash));
             if (realm_ref != INVALID_ENTITY) {
                 auto& relm_req = registry.emplace<StorageReqKycdRelmComponent>(req_entity);
                 relm_req.relm_ref = realm_ref;
-                relm_req.perm = static_cast<uint16_t>(perm_f);
+                relm_req.perm = static_cast<uint16_t>(grnt_inp.perm);
             }
         }
 

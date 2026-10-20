@@ -14,9 +14,10 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Integration
+ * @usecase     usecase:100406 - gate release artifacts
  * @created     2026-07-11
- * @modified    2026-07-11
- * @version     1.0.0
+ * @modified    2026-10-12
+ * @version     1.0.1
  *
  * ECS SYSTEM HEADER COMPLIANCE
  *
@@ -45,7 +46,7 @@ namespace ase::storage {
  *           StorageStaRelmComponent (realm ref for the audit record)
  * @writes   removes StorageWflwGateTag on pass; on fail STG_WFLW_RES = DENIED_GATE,
  *           StorageBufAudtComponent + StorageAudtPendTag, request destroyed
- * @depends  StorageResourceManager in ctx (file_exists), StorageWflwDrnSystem staged
+ * @depends  StorageResourceManager in ctx (file_exists), StorageWflwStgeSystem staged
  */
 class StorageWflwGateSystem : public ecs::System {
 public:

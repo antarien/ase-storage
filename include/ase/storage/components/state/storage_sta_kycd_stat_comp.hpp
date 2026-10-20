@@ -5,26 +5,29 @@
  *
  * @file        storage_sta_kycd_stat_comp.hpp
  * @brief       StorageStaKycdStatComponent - wie viele Keycards dieses Modul ausgestellt hat
- * @description Die Zaehlzeile des Moduls, gefuehrt auf der Verwalterentity. Sie ist die QUELLE
- *              der Hub-Zeile STG_KYCD_ISSUED_COUNT, nicht ihr Spiegel.
+ * @description Die Zaehlzeile der Ausstellung, gefuehrt auf der Verwalterentity. Sie ist die
+ *              QUELLE der Hub-Zeile STG_KYCD_ISSUED_COUNT, nicht ihr Spiegel.
  *
- *              WARUM DIE ZAHL HIER LIEGT UND NICHT IM STERN. Bis 2026-09-21 hielt der
- *              Ausstellungsschritt den Zaehler ausschliesslich im Hub und zaehlte ihn dort je
- *              Karte hoch: lesen, eins addieren, zurueckschreiben - und das INNERHALB der
- *              Schleife ueber alle Anfragen eines Takts. Zwei Dinge daran waren falsch. Erstens
- *              mischt es Hub-I/O mit Rechnung in einem System (HUB_IO_MIXED_WITH_MATH). Zweitens
- *              ist ein Hub-Wert EIN stehender Platz: zehn Karten in einem Takt hiessen zehn
- *              Schreibvorgaenge auf denselben Slot, von denen nur der letzte etwas bedeutet.
+ *              WARUM DIE ZAHL HIER LIEGT UND NICHT IM STERN. Ein Zaehler, der im Hub
+ *              hochgezaehlt wird (lesen, eins addieren, zurueckschreiben, je Karte INNERHALB der
+ *              Schleife ueber alle Anfragen eines Takts), ist zweimal falsch: er mischt Hub-I/O
+ *              mit Rechnung in einem System (HUB_IO_MIXED_WITH_MATH), und ein Hub-Wert ist EIN
+ *              stehender Platz, auf dem bei zehn Karten eines Takts nur der letzte Schrieb etwas
+ *              bedeutet.
  *
  *              Der Zaehler gehoert dem Modul, der Stern bekommt ihn ANGESAGT - einmal je Takt,
- *              von StorageKycdStatPubSystem.
+ *              von StorageKycdStatPubSystem. Die Zaehler der Token- und Sitzungsstufen stehen
+ *              in eigenen Zeilen (StorageStaTknStatComponent, StorageStaSessStatComponent):
+ *              jede Zeile gehoert genau der Stufe, die sie fuehrt.
+ *
+ * @usecase     usecase:100264 - issue customer keycard
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
  * @parity      server_only
  * @created     2026-09-21
- * @modified    2026-09-21
+ * @modified    2026-10-13
  * @version     00.00.00.00000 [seed]
  *
  * ECS COMPONENT COMPLIANCE

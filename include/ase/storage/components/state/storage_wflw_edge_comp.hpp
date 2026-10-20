@@ -16,6 +16,8 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
+ * @parity      server_only
+ * @usecase     usecase:100405 - apply workflow transition
  * @created     2026-07-11
  * @modified    2026-07-11
  * @version     1.0.0

@@ -248,7 +248,7 @@ void StorageAcssRslvSystem::tick(ecs::Registry& registry, float /*dt*/) {
         auto& req  = req_view.get<StorageReqAcssComponent>(entity);
         auto& cred = req_view.get<StorageReqCredComponent>(entity);
 
-        // ── Step 1: KEYCARD VALID ─ authenticated identity present
+        //Step 1: KEYCARD VALID ─ authenticated identity present
         // user_id is set by the HTTP route from the keycard JWT (validated by
         // StorageKycdVldSystem); an empty user_id means no valid keycard reached here.
         if (cred.user_id[0] == '\0') {
@@ -273,7 +273,7 @@ void StorageAcssRslvSystem::tick(ecs::Registry& registry, float /*dt*/) {
             continue;
         }
 
-        // ── Step 2: REALM MEMBERSHIP + CONCEALMENT ─ resolve the target realm core data
+        //Step 2: REALM MEMBERSHIP + CONCEALMENT ─ resolve the target realm core data
         char     target_id[MAX_REALM_ID] = {};
         bool     realm_found = false;
         bool     public_realm = false;
@@ -365,7 +365,7 @@ void StorageAcssRslvSystem::tick(ecs::Registry& registry, float /*dt*/) {
             continue;
         }
 
-        // ── Step 2 (cont.): match the ACL rule for this path ─ clearance/label/codeword src.
+        //Step 2 (cont.): match the ACL rule for this path ─ clearance/label/codeword src.
         // The public realm contributes an implicit PUBLIC protection rule (level 0, no
         // codewords) so engine defaults stay readable by every authenticated user — this is
         // the in-ladder replacement of the old pre-ladder "ase_shared" grant.

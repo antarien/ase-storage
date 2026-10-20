@@ -180,7 +180,7 @@ void StorageWflwEdgeIniSystem::on_start(ecs::Registry& registry) {
     // one thing: each is a named stage change with its own meaning, and the SHAPE of
     // the pipeline has to be readable here without following a table elsewhere.
     //
-    //     draft ────▶ review ────▶ approved ────▶ released ────▶ retired
+    //     draft  →  review  →  approved  →  released  →  retired
     //
     // What must hold in EVERY block below, and what no compiler and no gate checks:
     // the label copied into the field and the label handed to hashed_string are the

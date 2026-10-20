@@ -5,29 +5,26 @@
  *
  * @file        storage_kycd_ntfy_syn_sys.hpp
  * @brief       StorageKycdNtfySynSystem - spiegelt die Sternzeilen einer Ausstellungsanfrage
- * @description Die Hub-Haelfte des SYN-Schnitts an der Keycard-Anfrage. Dieses System LIEST den
- *              Stern und schreibt sechs Werte in zwei Bruecken-Zeilen auf derselben
- *              Anfrage-Entity; es rechnet nichts. Der Drain daneben rechnet und liest den Stern
- *              nicht mehr an.
+ * @description Die Hub-Haelfte des SYN-Schnitts an der Keycard-Anfrage. Dieses System LIEST die
+ *              Hub-Zeile HUB_STG_KYCD_REQ und schreibt ihre Felder in zwei Bruecken-Zeilen auf
+ *              derselben Anfrage-Entity; es rechnet nichts. Der Drain daneben rechnet und liest den
+ *              Stern nicht.
  *
- *              WARUM DER SCHNITT. Gemessen 2026-09-21 meldete der Validator an
- *              storage_kycd_ntfy_drn_sys.cpp HUB_IO_MIXED_WITH_MATH: sechs `hub::get` und die
- *              Rekonstruktion der beiden Hashes standen in EINEM tick(). Die Regel nennt ihren
- *              Weg selbst — eine server-only Seite liest in eine `*_inp_*`-Zeile, die rechnende
- *              Seite nimmt sie von dort (WRFL_ASE_SYN_PATTERN).
+ *              WARUM DER SCHNITT. Die Regel HUB_IO_MIXED_WITH_MATH trennt das Lesen des Sterns von
+ *              der Rechnung; sie nennt ihren Weg selbst — eine server-only Seite liest in eine
+ *              `*_inp_*`-Zeile, die rechnende Seite nimmt sie von dort (WRFL_ASE_SYN_PATTERN).
  *
- *              DIE MELDUNG WANDERT MIT DEM LESEN. Die vier `log::error(HUB_NOT_FOUND)` gehoeren
- *              zu dem, der den Stern befragt — sie stehen jetzt hier. Fehlt eine Pflichtzeile,
- *              entsteht KEINE Bruecke, und der Drain sieht die Anfrage gar nicht erst: dasselbe
- *              Verhalten wie das frueherere `continue`, nur an der richtigen Stelle.
+ *              DIE MELDUNG WANDERT MIT DEM LESEN. Fehlt ein Pflichtfeld, meldet es dieses System,
+ *              und es entsteht KEINE Bruecke; der Drain sieht die Anfrage gar nicht erst.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Ingestion
+ * @usecase     usecase:100264 - issue customer keycard
  * @created     2026-09-21
- * @modified    2026-09-21
- * @version     00.00.00.00000 [seed]
+ * @modified    2026-10-12
+ * @version     00.00.00.00001 [seed]
  *
  * ECS SYSTEM HEADER COMPLIANCE
  *
@@ -52,7 +49,7 @@ namespace ase::storage {
  * @brief StorageKycdNtfySynSystem - the star side of one keycard issuance request
  *
  * @schedule Ingestion - vor StorageKycdNtfyDrnSystem, das die Bruecke liest
- * @reads    Hub: SES_KYCD_NTF_USER_ID_HI/_LO, _REALM_ID_HI/_LO, _EXP_AT, _CLRN
+ * @reads    Hub: the rows HUB_STG_KYCD_REQ, field by field
  * @writes   StorageInpKycdNtfyIdnComponent + StorageInpKycdNtfyGrntComponent auf der Anfrage
  */
 class StorageKycdNtfySynSystem : public ecs::System {

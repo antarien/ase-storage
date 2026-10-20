@@ -8,28 +8,29 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Ingestion
+ * @usecase     usecase:100264 - issue customer keycard
  * @created     2026-04-16
- * @modified    2026-04-16
- * @version     1.0.0
+ * @modified    2026-10-12
+ * @version     1.1.0
  *
  * CAUSAL CHAIN (Keycard Issuance Drain)
  *
- *   [plugins/ase-pl-webserver auth_routes POST /api/auth/keycard-issued]
+ *   [StorageKycdNtfyDrnSystem on a HUB_STG_KYCD_REQ row, or a storage-internal producer
+ *    (StorageVotePrcSystem, StorageKycdTierSeedSystem) on its own entity]
  *          │
- *          │ After HMAC-verify: emplace<StorageReqKycdComponent> +
- *          │ emplace<hub::HubStgKycdPendTag> on fresh request entity
+ *          │ emplace<StorageReqKycdComponent> on the request entity
  *          ▼
  *   ┌─────────────────────────────────────────────────────────────┐
  *   │  THIS SYSTEM: StorageKycdReqDrnSystem                       │
  *   │                                                             │
  *   │  READS:                                                     │
- *   │    - StorageReqKycdComponent + hub::HubStgKycdPendTag       │
+ *   │    - StorageReqKycdComponent (not yet minted)               │
  *   │                                                             │
  *   │  WRITES:                                                    │
  *   │    - StorageStaIdnComponent (token entity)                  │
  *   │    - StorageStaKycdComponent (token entity)                 │
  *   │    - StorageKycdPendTag (token entity)                      │
- *   │    - STG_KYCD_ISSUED_COUNT (hub counter)                    │
+ *   │    - StorageStaKycdStatComponent.issued (manager row)       │
  *   │  DESTROYS:                                                  │
  *   │    - request entity (collect-then-destroy)                  │
  *   └─────────────────────────────────────────────────────────────┘
@@ -41,10 +42,11 @@
  * HUB Pattern (ARCH_ASE_HUB_API v2.0)
  *
  * READS (from Hub):
- *   STG_KYCD_ISSUED_COUNT - counter increment read-modify-write
+ *   (none - the request fields arrive through StorageKycdNtfyDrnSystem)
  *
  * WRITES (to Hub):
- *   STG_KYCD_ISSUED_COUNT - counter increment per drained request
+ *   removes SES_KYCD_NTF_GRANT_BINARY, _SIG, _SBOM, _METADATA (owner = the request entity)
+ *   before the request is destroyed; the fields of the hub row HUB_STG_KYCD_REQ fall with it
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -157,10 +159,8 @@
 #include <ase/storage/components/tag/storage_kycd_pend_tag.hpp>
 #include <ase/storage/components/tag/storage_mgr_tag.hpp>
 #include <ase/storage/components/tag/storage_kycd_pst_pend_tag.hpp>
-// Hub API (discovery tag + counter)
+// Hub API (the codeword grant values taken back before the release)
 #include <ase/hub/api.hpp>
-// Types (L0 — is_not_found sentinel check)
-#include <ase/types/types.hpp>
 // Utils (L0 — bounded string copy for codeword grants)
 #include <ase/utils/strops.hpp>
 // Logging
@@ -175,17 +175,11 @@ namespace ase::storage {
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 namespace {
 
-/** Remove the full SES_KYCD_NTF_* family a keycard mint/issuance request published for one owner.
- *  Mirrors remove_peer_family (replication_tlmt_peer_rmv_sys.cpp): these owner-scoped Hub values are
- *  transient SDK to drain IPC (set in sdk_keycard_notify.cpp, read in storage_kycd_ntfy_drn_sys.cpp).
- *  Each value lives on a separate hub-internal entity, so destroying the request entity does NOT
- *  clear it. Without this the 7 fixed keys plus the GRANT flags orphan and pollute every hub_values
- *  snapshot (immortal ghosts, the same defect class the peer family already fixed via hub::remove). */
-/* Der Rumpf steht jetzt an seiner einen Aufrufstelle in tick(). Eine Funktion, die die
- * Registry nimmt, ist kein Helfer, sondern Hub-I/O hinter einem Aufruf, und kein Zaehler
- * sieht sie (INST_ASE_LINT.md, "Anonymous Namespace"). Der Schwesterfall
- * `remove_session_family` in storage_kycd_sess_cln_sys.cpp ist am 2026-08-30 genauso
- * aufgeloest worden - beide Familien sind jetzt dort ablesbar, wo sie zurueckgenommen werden.
+/* The grant values are taken back at their one call site in tick(): a function that takes the
+ * registry is no helper but hub I/O behind a call, and no counter sees it (INST_ASE_LINT.md,
+ * "Anonymous Namespace"). The sister family `remove_session_family` in
+ * storage_kycd_sess_cln_sys.cpp stands the same way - both families read where they are taken
+ * back.
  *
  * Only pure functions over primitive types belong here - no registry, no view, no query. */
 }  // anonymous namespace
@@ -201,19 +195,17 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
     /**
      * DIE AUSGESTELLTEN DIESES TAKTS, GEZAEHLT IN EINER ORTSVARIABLEN.
      *
-     * Bis 2026-09-21 stand am Ende der Schleife je Karte ein Hub-Dreischritt: lesen, eins
-     * addieren, zurueckschreiben. Zwei Dinge daran waren falsch. Er mischte Hub-I/O mit
-     * Rechnung in einem System (HUB_IO_MIXED_WITH_MATH), und er schrieb zehnmal auf denselben
-     * STEHENDEN Platz, wenn zehn Karten in einem Takt entstanden - von zehn Schreibvorgaengen
-     * bedeutete nur der letzte etwas.
-     *
-     * Die Zahl gehoert jetzt dem Modul (StorageStaKycdStatComponent auf der Verwalterentity);
-     * der Stern bekommt sie von StorageKycdStatPubSystem angesagt, einmal je Takt.
+     * Die Zahl gehoert dem Modul (StorageStaKycdStatComponent auf der Verwalterentity); der Stern
+     * bekommt sie von StorageKycdStatPubSystem angesagt, einmal je Takt. Ein Hub-Dreischritt je
+     * Karte mischte Hub-I/O mit Rechnung (HUB_IO_MIXED_WITH_MATH) und schriebe zehnmal auf
+     * denselben stehenden Platz, wenn zehn Karten in einem Takt entstehen.
      */
     uint32_t issued_now = 0u;
 
-    // Collect-then-destroy: iterate view, remember request entities, destroy after.
-    auto view = registry.view<StorageReqKycdComponent, hub::HubStgKycdPendTag>();
+    // Collect-then-destroy: iterate view, remember request entities, destroy after. A request
+    // that already minted (StorageReqKycdTknComponent) and waits beyond the release batch of
+    // pass 3 is excluded, so it never mints a second keycard.
+    auto view = registry.view<StorageReqKycdComponent>(entt::exclude<StorageReqKycdTknComponent>);
     for (auto req_entity : view) {
         auto& req = view.get<StorageReqKycdComponent>(req_entity);
 
@@ -244,7 +236,7 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         kycd_idn.issued_to_hash = entt::hashed_string(req.user_id).value();
 
         // Optional realm/permission extension (operator edge-keycard mint).
-        // Absent on the legacy auth-gate flow → relm_ref/perm stay 0 (unchanged).
+        // Absent on the auth-gate flow → relm_ref/perm stay 0.
         const auto* relm_ext = registry.try_get<StorageReqKycdRelmComponent>(req_entity);
         if (relm_ext != nullptr) {
             kycd.relm_ref = relm_ext->relm_ref;
@@ -262,9 +254,8 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
         // The minted keycard is recorded ON the request. The codeword children name
         // their request in req_ref, so the SECOND pass below walks them once and reaches
-        // this keycard by entity reference. The former version did the opposite - it
-        // knew the parent and searched for the children, walking EVERY requested
-        // codeword for EVERY request (WS-K.2c).
+        // this keycard by entity reference, instead of searching the children of every
+        // request (WS-K.2c).
         auto& tkn = registry.emplace<StorageReqKycdTknComponent>(req_entity);
         tkn.kycd_ref = static_cast<uint32_t>(token_entity);
 
@@ -294,7 +285,7 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
     // PASS 2 - the codeword grants, walked ONCE over the children instead of once per
     // request. Each requested codeword names its request in req_ref, and the request now
     // carries the keycard it minted, so the parent is one try_get away. The entity is
-    // re-purposed in place. No matching entities on the legacy auth-gate flow → none.
+    // re-purposed in place. No matching entities on the auth-gate flow → none.
     for (auto [cwrd_req_entity, cwrd_req] :
          registry.view<StorageReqKycdCwrdComponent>().each()) {
         auto* tkn = registry.try_get<StorageReqKycdTknComponent>(
@@ -336,31 +327,20 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         ++minted_n;
     }
     for (uint32_t i = 0; i < minted_n; ++i) {
-        // Clear the transient SES_KYCD_NTF_* IPC values BEFORE releasing the request
-        // entity: they sit on separate hub-internal entities and would otherwise orphan
-        // into every hub_values snapshot (the preloader-flood the user reported).
         /**
-         * ELF FLUECHTIGE SES_KYCD_NTF_*-WERTE, EINZELN ZURUECKGENOMMEN.
+         * VIER FLUECHTIGE GRANT-WERTE, EINZELN ZURUECKGENOMMEN, DANN DIE ENTITY.
          *
-         * Sieben feste Schluessel plus vier GRANT-Marken. Jeder Wert lebt auf einer EIGENEN
-         * hub-internen Entity — `registry.destroy` auf die Anfrage-Entity raeumt sie NICHT
-         * mit ab. Ohne diese elf Ruecknahmen verwaisen sie und stehen in jedem
-         * hub_values-Schnappschuss: unsterbliche Geister, dieselbe Fehlerklasse, die die
-         * Schwesterfamilie (SES_* in storage_kycd_sess_cln_sys.cpp) bereits ueber
-         * hub::remove behoben hat.
+         * Die Felder der Hub-Zeile HUB_STG_KYCD_REQ fallen mit `registry.destroy` von selbst.
+         * Die Codewort-Freigaben aber sind Hub-WERTE unter dieser Entity als Besitzer, und jeder
+         * Wert lebt auf einer EIGENEN hub-internen Entity — das Zerstoeren der Anfrage raeumt sie
+         * NICHT mit ab. Ohne diese vier Ruecknahmen verwaisen sie und stehen in jedem
+         * hub_values-Schnappschuss, dieselbe Fehlerklasse, die die Schwesterfamilie (SES_* in
+         * storage_kycd_sess_cln_sys.cpp) ueber hub::remove behebt.
          *
-         * DIE REIHENFOLGE IST WICHTIG: erst raeumen, DANN die Entity freigeben. Wer
-         * `destroy` vorzieht, verliert den `owner`, unter dem die elf Werte stehen — und
-         * damit die Moeglichkeit, sie ueberhaupt noch zu finden.
+         * DIE REIHENFOLGE IST WICHTIG: erst raeumen, DANN die Entity freigeben. Wer `destroy`
+         * vorzieht, verliert den `owner`, unter dem die vier Werte stehen.
          */
         const uint32_t ntf_owner = static_cast<uint32_t>(minted[i]);
-        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_USER_ID_HI"_hs);
-        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_USER_ID_LO"_hs);
-        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_CLRN"_hs);
-        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_PERM"_hs);
-        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_REALM_ID_HI"_hs);
-        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_REALM_ID_LO"_hs);
-        hub::remove(registry, ntf_owner, "SES_KYCD_NTF_EXP_AT"_hs);
         hub::remove(registry, ntf_owner, "SES_KYCD_NTF_GRANT_BINARY"_hs);
         hub::remove(registry, ntf_owner, "SES_KYCD_NTF_GRANT_SIG"_hs);
         hub::remove(registry, ntf_owner, "SES_KYCD_NTF_GRANT_SBOM"_hs);

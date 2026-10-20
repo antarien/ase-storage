@@ -8,13 +8,14 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Integration
+ * @usecase     usecase:100406 - gate release artifacts
  * @created     2026-07-11
- * @modified    2026-07-11
- * @version     1.0.0
+ * @modified    2026-10-12
+ * @version     1.0.1
  *
  * CAUSAL CHAIN (released-Gate Precondition)
  *
- *   [StorageWflwDrnSystem staged a request targeting "released"]
+ *   [StorageWflwStgeSystem staged a request targeting "released"]
  *          │
  *          │ Integration schedule runs the Tag-filtered artifact check
  *          ▼
@@ -172,18 +173,11 @@ namespace ase::storage {
 namespace {
 
 // Audit record for a gate decision: one entity per decision, marked pending for the
-// Preservation batch-writer. Dieselbe FORM wie in der Zugriffsleiter — dort steht sie seit dem
-// 2026-08-31 ebenfalls offen im Rumpf jeder entscheidenden Stelle. Der frueher hier genannte
-// Bezugspunkt `emit_audit` existiert nicht mehr; er war selbst ein Helfer mit `ecs::Registry&`.
-/* HIER STAND `emit_gate_audit(ecs::Registry&, ...)` MIT SIEBEN PARAMETERN.
- *
- * Sie erzeugte eine Entity, legte zwei Components an und setzte eine Marke - also
- * Entity-Lebenszeit hinter einem Aufruf. Eine Funktion, die die Registry nimmt, ist kein
- * Helfer, und kein Zaehler sieht sie (INST_ASE_LINT.md, "Anonymous Namespace"). Die
- * Pruefspur wird jetzt an ihrer einen Aufrufstelle in tick() geschrieben, wo neben ihr
- * steht, WARUM sie geschrieben wird.
- *
- * Only pure functions over primitive types belong here - no registry, no view, no query. */
+// Preservation batch-writer, written at its one call site in tick(), beside the reason it is
+// written - the same form the access ladder uses at each deciding site. A function that takes
+// the registry is no helper, and no counter sees it (INST_ASE_LINT.md, "Anonymous Namespace").
+//
+// Only pure functions over primitive types belong here - no registry, no view, no query.
 
 // Companion-artifact presence: <asset-abs-path><suffix> must exist. Pure
 // string composition + manager query, no views.
@@ -219,8 +213,8 @@ void StorageWflwGateSystem::tick(ecs::Registry& registry, float dt) {
 
     // Edge realm entity ref for the audit records. The answer does not depend on the
     // request, so it is resolved ONCE per tick instead of once per request. The tag
-    // carries the identity (StorageEdgeIniSystem is its only producer), which replaces
-    // the former scan over every realm with a string compare per request.
+    // carries the identity (StorageEdgeIniSystem is its only producer), so no realm is
+    // compared by its string id.
     uint32_t relm_ref = 0;
     for (auto relm_ent : registry.view<StorageStaRelmComponent, StorageRelmEdgeTag>()) {
         relm_ref = static_cast<uint32_t>(relm_ent);
@@ -301,12 +295,10 @@ void StorageWflwGateSystem::tick(ecs::Registry& registry, float dt) {
 
         registry.emplace<StorageAudtPendTag>(aud_ent);
 
-        // MIGRIERT. Hier stand ein Vermerk mit einer falschen Praemisse: er behauptete, es gebe
-        // fuer die ZWEI Bezeichner dieser Zeile nur EINEN String-Platz, und man muesse einen
-        // opfern. Die detail-Ueberladung hat zwei, und mit `owner` davor sogar drei. `req.path`
-        // sagt WAS verlangt wurde, `missing` sagt WORAN es scheiterte — beide bleiben.
+        // The detail overload carries both identifiers of this line: `req.path` says WHAT was
+        // asked, `missing` says WHERE it failed.
         //
-        // WORK_PRECLUDED und nicht ACCESS_DENIED, obwohl der Vermerk letzteres nannte: die
+        // WORK_PRECLUDED und nicht ACCESS_DENIED: die
         // beiden trennen sich an der FRAGE, nicht am Wort "DENIED". ACCESS_DENIED behandelt eine
         // wohlgeformte Anfrage, die abgelehnt wird, weil der Anfragende NICHT DARF — eine
         // Berechtigungsfrage, und deshalb liegt sie bewusst auf ERR-Ebene, damit sie aus keinem

@@ -1,9 +1,7 @@
 #pragma once
 
 /**
- * =============================================================================
  * ASE ECS COMPONENT (TAG)
- * =============================================================================
  *
  * @file        storage_relm_edge_tag.hpp
  * @brief       StorageRelmEdgeTag - Realm distributes edge-daemon binaries
@@ -58,7 +56,6 @@
  * [ ] Each state = separate Tag + separate View in System
  * [ ] N-item support via Entity-per-Item + Tags
  *
- * =============================================================================
  */
 
 namespace ase::storage {

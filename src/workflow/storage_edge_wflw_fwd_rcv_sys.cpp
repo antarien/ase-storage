@@ -8,9 +8,10 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Reception
+ * @usecase     usecase:100317 - relay operator command
  * @created     2026-07-12
- * @modified    2026-10-03
- * @version     1.0.1
+ * @modified    2026-10-12
+ * @version     1.2.0
  *
  * CAUSAL CHAIN (EDGE_WFLW_FWD: Replica operator command → workflow drive / status read)
  *
@@ -22,25 +23,27 @@
  *   │  THIS SYSTEM: StorageEdgeWflwFwdRcvSystem (dist tier)         │
  *   │                                                               │
  *   │  POP:     drain LANE_WFLW frames                              │
- *   │  PROMOTE: emplace HubStgWflwReqComponent + HubStgWflwPendTag  │
- *   │           (the bridge StorageWflwDrnSystem drains)            │
+ *   │  PROMOTE: StorageReqWflwTranComponent + StorageWflwRcvTag     │
+ *   │           (the request StorageWflwStgeSystem stages)          │
  *   │  STATUS:  read owner-scoped STG_WFLW_STAGE / STG_WFLW_RES     │
  *   │  REPLY:   BIN_MSG_EDGE_WFLW_RES(114) onto the outbound queue  │
  *   └───────────────────────────────────────────────────────────────┘
  *          │
- *          │ promote: StorageWflwDrn/Gate/Tran/Pst drive the transition next tick
+ *          │ promote: StorageWflwStge/Gate/Tran/Pst drive the transition this tick
  *          │ reply: the Replica relays the 114 verdict to the ase-cli connection
  *          ▼
  *   [ase-cli prints the machine-parseable verdict line]
  *
- * HUB Pattern (Active - reads the workflow verdict, promote deposits the bridge)
+ * HUB Pattern (Active - reads the workflow verdict, grants the operator session)
  *
  * READS (from Hub):
  *   STG_WFLW_RES   (owner = hashed_string(path)) - workflow verdict (status op)
  *   STG_WFLW_STAGE (owner = hashed_string(path)) - workflow stage ordinal (status op)
+ *   SES_KYCD_PERM, SES_CLEARANCE (owner = hashed_string(by)) - before the promote grant
  *
  * WRITES (to Hub):
- *   (none directly - promote emplaces the typed HubStgWflwReqComponent bridge entity)
+ *   SES_KYCD_PERM, SES_CLEARANCE (owner = hashed_string(by)) - the Replica-verified operator
+ *   grant the transition gate reads; the promote request itself is a module component
  *
  * FLYWEIGHT Pattern (inbound + outbound lane)
  *   The forward frame is popped from the L1 transport InboundQueueResourceManager
@@ -145,9 +148,11 @@
 #include <ase/storage/systems/workflow/storage_edge_wflw_fwd_rcv_sys.hpp>
 // Module constants (EDGE_WFLW_* frame layout, WFLW_RES/STAGE ordinals, labels, MAX_*)
 #include <ase/storage/types.hpp>
-// Hub API ONLY (header isolation): the workflow verdict reads AND the workflow-bridge
-// component types (hub::HubStgWflwReqComponent / hub::HubStgWflwPendTag) are surfaced via
-// api.hpp - the SAME single header StorageWflwDrnSystem uses; NEVER a direct component include.
+// The promote request this receiver files, marked received for StorageWflwStgeSystem
+#include <ase/storage/components/request/storage_req_wflw_tran_comp.hpp>
+#include <ase/storage/components/tag/storage_wflw_rcv_tag.hpp>
+// Hub API ONLY (header isolation): the workflow verdict reads and the operator session grant go
+// through api.hpp; NEVER a direct include.
 #include <ase/hub/api.hpp>
 // Types SSOT (is_not_found / is_in_rng_i32 sentinel + range checks on hub::get reads)
 #include <ase/types/types.hpp>
@@ -320,24 +325,24 @@ void StorageEdgeWflwFwdRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
                           op_owner, by, static_cast<uint32_t>(granted_perm),
                           static_cast<uint32_t>(EDGE_CLEARANCE_OPERATOR));
 
-                // Deposit the hub workflow-bridge request (StorageWflwDrnSystem drains it,
-                // StorageWflwTranSystem applies the transition + audit). This is the ONLY live
-                // depositor: the /admin/workflow/promote route that used to deposit it through
-                // sdk::emplace_workflow_promote_request no longer exists (measured 2026-10-03), so
-                // the field copies here are the form, not a mirror of it.
-                auto bridge = registry.create();
-                auto& breq = registry.emplace<hub::HubStgWflwReqComponent>(bridge);
-                ase::utils::str_copy(breq.path, static_cast<uint32_t>(sizeof(breq.path)), path);
-                ase::utils::str_copy(breq.target_label, static_cast<uint32_t>(sizeof(breq.target_label)), label);
-                ase::utils::str_copy(breq.requested_by, static_cast<uint32_t>(sizeof(breq.requested_by)), by);
-                registry.emplace<hub::HubStgWflwPendTag>(bridge);
+                // File the promote request in the module's own form: the request component with
+                // the three strings, marked received. StorageWflwStgeSystem stages it in Ingestion
+                // (pending tag, released gate, verdict), the same staging the hub-row door
+                // StorageWflwDrnSystem feeds, so the staging stands once for both doors and this
+                // receiver reaches no other module than the hub.
+                const ecs::Entity req_ent = registry.create();
+                auto& req = registry.emplace<StorageReqWflwTranComponent>(req_ent);
+                ase::utils::str_copy_json_safe(req.path, MAX_PATH_LEN, path);
+                ase::utils::str_copy_json_safe(req.target_label, MAX_LABEL_LEN, label);
+                ase::utils::str_copy_json_safe(req.requested_by, MAX_OWNER_ID, by);
+                registry.emplace<StorageWflwRcvTag>(req_ent);
 
                 ase::utils::str_copy(json, sizeof(json), "{\"status\":\"promote_requested\",\"path\":\"");
                 ase::utils::str_append(json, sizeof(json), path);
                 ase::utils::str_append(json, sizeof(json), "\",\"target_label\":\"");
                 ase::utils::str_append(json, sizeof(json), label);
                 ase::utils::str_append(json, sizeof(json), "\"}");
-                log::info("[StorageEdgeWflwFwdRcv] promote staged: {} to {} (by {}, cli_conn={})",
+                log::info("[StorageEdgeWflwFwdRcv] promote received: {} to {} (by {}, cli_conn={})",
                           path, label, by, cli_conn);
             }
         } else {

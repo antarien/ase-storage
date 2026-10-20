@@ -5,35 +5,29 @@
  *
  * @file        storage_inp_kycd_ntfy_grnt_comp.hpp
  * @brief       StorageInpKycdNtfyGrntComponent - was die angefragte Keycard oeffnet, aus dem Stern
- * @description Die Bedingungshaelfte der Bruecke einer Ausstellungsanfrage: Freigabestufe und
- *              Ablauf, gespiegelt von StorageKycdNtfSynSystem. Sie liegt auf derselben
- *              ANFRAGE-Entity wie die Identitaetshaelfte.
+ * @description Die Bedingungshaelfte der Bruecke einer Ausstellungsanfrage: Freigabestufe, Rechte
+ *              und Ablauf, gespiegelt von StorageKycdNtfySynSystem aus der Hub-Zeile
+ *              HUB_STG_KYCD_REQ. Sie liegt auf derselben ANFRAGE-Entity wie die Identitaetshaelfte.
  *
  *              WARUM DIE FUGE HIER LIEGT UND WARUM SIE `grnt` HEISST. Das Modul trennt dieselbe
  *              Sache schon einmal so: StorageStaKycdComponent traegt, WEM die Karte gilt,
  *              StorageKycdGrntComponent, WAS sie oeffnet und BIS WANN. Die Bruecke folgt dieser
- *              Fuge und ihrem Wort, statt eine eigene zu erfinden - ein `trm` fuer "terms" wurde
- *              vom Tor zu Recht abgewiesen: es steht in keinem Katalog, und ein erfundenes
- *              Kuerzel ist schlechter als gar keins.
+ *              Fuge und ihrem Wort, statt eine eigene zu erfinden.
  *
- *              WARUM ES DEN SCHNITT UEBERHAUPT GIBT. Gemessen 2026-09-21 meldete der Validator an
- *              storage_kycd_ntfy_drn_sys.cpp HUB_IO_MIXED_WITH_MATH: sechs hub::get und die
- *              Rekonstruktion der Hashes standen in EINEM tick(). Eine server-only Seite liest
- *              den Stern in eine *_inp_*-Zeile, die rechnende Seite nimmt sie von dort
- *              (WRFL_ASE_SYN_PATTERN).
+ *              DER ABLAUF STEHT ALS u64. Die Zeile fuehrt ihn bitgenau; Unix-Sekunden passen nicht
+ *              in die 24-Bit-Mantisse eines float.
  *
- *              DIE ABWESENHEIT DER FREIGABESTUFE IST KEIN FEHLER. Fehlt SES_KYCD_NTF_CLRN im
- *              Stern, bleibt das Feld auf null - so stand es vor dem Schnitt im Drain und so
- *              steht es jetzt im Spiegel. Nur die vier Pflichtzeilen fuehren bei Abwesenheit zu
- *              einer Meldung und zum Ueberspringen.
+ *              DIE ABWESENHEIT VON FREIGABESTUFE UND RECHTEN IST KEIN FEHLER. Die Ausstellung des
+ *              Auth-Gates traegt keine Rechte; fehlt ein Feld, bleibt es auf null.
  *
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    state
  * @parity      server_only
+ * @usecase     usecase:100264 - issue customer keycard
  * @created     2026-09-21
- * @modified    2026-09-21
- * @version     00.00.00.00000 [seed]
+ * @modified    2026-10-12
+ * @version     00.00.00.00001 [seed]
  *
  * ECS COMPONENT COMPLIANCE
  *
@@ -64,20 +58,23 @@
  * [ ] Component stores ONLY primitive ID (uint32_t) referencing external resource
  */
 
+#include <cstdint>
+
 namespace ase::storage {
 
 /**
  * @brief StorageInpKycdNtfyGrntComponent - the star side of WHAT a requested keycard opens
  *
- * Written by StorageKycdNtfSynSystem, read by StorageKycdNtfyDrnSystem. Both fields are a
- * MIRROR of a hub line under this request entity; nothing here is computed.
+ * Written by StorageKycdNtfySynSystem, read by StorageKycdNtfyDrnSystem. Every field is a
+ * MIRROR of a field of the hub row on this request entity; nothing here is computed.
  *
- * @hub_reads  SES_KYCD_NTF_CLRN, SES_KYCD_NTF_EXP_AT (by the sync system)
+ * @hub_reads  HUB_STG_KYCD_REQ_CLEARANCE, _PERM, _EXP_AT (by the sync system)
  * @hub_writes none
  */
 struct StorageInpKycdNtfyGrntComponent {
-    float clearance = 0.0f;                   // requested clearance level, 0 when the star is silent
-    float expires_at = 0.0f;                  // requested expiry, seconds since epoch
+    uint32_t clearance = 0;                   // requested clearance level, 0 when the request names none
+    uint32_t perm = 0;                        // requested permission bits, 0 when the request names none
+    uint64_t expires_at = 0;                  // requested expiry, seconds since epoch, exact
 };
 
 }  // namespace ase::storage

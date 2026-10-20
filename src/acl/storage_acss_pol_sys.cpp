@@ -319,7 +319,7 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
         ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
         aud.timestamp = now;
 
-        // ── Step 7: LABEL ─ workflow-status gate.
+        //Step 7: LABEL ─ workflow-status gate.
         // retired = withdrawn build (no access); draft/review = team-only (clearance >= TEAM).
         if (rslv.rule_label_hash == EDGE_LABEL_RETIRED_HASH) {
             registry.emplace<StorageAcssDenyTag>(entity);
@@ -342,7 +342,7 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
             continue;
         }
 
-        // ── Step 8: NEED-TO-KNOW ─ active task scoping (Enterprise).
+        //Step 8: NEED-TO-KNOW ─ active task scoping (Enterprise).
         // When the assignee has any active need-to-know task in this project, access is
         // restricted to that task's path scope. Owner-preset governs all and is exempt.
         if (!owner_preset && req.proj_ref != 0) {
@@ -388,7 +388,7 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
         }
 
-        // ── Step 9: QUOTA ─ realm storage budget gate (WRITE only).
+        //Step 9: QUOTA ─ realm storage budget gate (WRITE only).
         // A write is refused when the realm's measured usage already meets its tier limit.
         if (req.action == AUD_WRITE) {
             uint64_t tier_limit = QUOTA_INDIE_STORAGE;
@@ -406,7 +406,7 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
         }
 
-        // ── Step 10: GRANT + AUDIT(GRANTED) ─ reached only after every applicable step passed
+        //Step 10: GRANT + AUDIT(GRANTED) ─ reached only after every applicable step passed
         registry.emplace<StorageAcssGrntTag>(entity);
         auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
         outc.action = req.action;

@@ -11,6 +11,8 @@
  * @module      ase-storage
  * @layer       3 (Module)
  * @category    tag
+ * @parity      server_only
+ * @usecase     usecase:100265 - check access clearance
  * @created     2026-04-05
  * @modified    2026-08-20
  * @version     1.0.1

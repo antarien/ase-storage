@@ -4,6 +4,8 @@
  * @file        storage_idn_idx_sys.cpp
  * @brief       StorageIdnIdxSystem - indexes the identities the frame resolves by key
  *
+ * @usecase     usecase:100265 - check access clearance
+ *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
@@ -14,16 +16,16 @@
  *
  * CAUSAL CHAIN (Identity Index Build)
  *
- *   [Reception created realms; the Hub mirrors ready network clients]
+ *   [Reception created realms; ase-network adopts a HUB_CLAI_IDNT row per open session]
  *          │
- *          │ Each identity publishes a key: a realm its id hash, a client its NET_CLAI_ID
+ *          │ Each identity carries a key: a realm its id hash, a session its client id
  *          ▼
  *   ┌─────────────────────────────────────────────┐
  *   │  THIS SYSTEM: StorageIdnIdxSystem           │
  *   │                                             │
  *   │  READS:                                     │
  *   │    - StorageRelmIdnComponent (realms)       │
- *   │    - hub::HubNetClaiRdyTag (ready clients)  │
+ *   │    - hub row HUB_CLAI_IDNT (open sessions)  │
  *   │                                             │
  *   │  WRITES:                                    │
  *   │    - StorageAcssIndexResourceManager (ctx)  │
@@ -45,10 +47,11 @@
  *   exactly ONE writer. This system owns realms and clients; StorageAcssIdxSystem owns
  *   rules, links, required codewords, tasks and edges. Neither clears the other's rows.
  *
- * HUB Pattern (Active - reads NET_CLAI_ID)
+ * HUB Pattern (Active - reads the rows HUB_CLAI_IDNT)
  *
  * READS (from Hub):
- *   NET_CLAI_ID - the network client id a mirrored client entity publishes
+ *   HUB_CLAI_IDNT            - row kind, one row per open session, the session entity is the row
+ *   HUB_CLAI_IDNT_CLIENT_ID  - u32 field, the network client id of that session
  *
  * WRITES (to Hub):
  *   (none)
@@ -158,14 +161,14 @@
 #include <ase/storage/components/state/storage_relm_idn_comp.hpp>
 #include <ase/storage/storage_acss_index_resource_manager.hpp>
 #include <ase/storage/types.hpp>
-// Hub (Layer 1)
+// Hub API - the ONLY allowed hub header: row_each, try_get_u32
 #include <ase/hub/api.hpp>
-// Types
-#include <ase/types/types.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
 #include <entt/core/hashed_string.hpp>
+
+#include <cstdint>
 
 using namespace entt::literals;
 
@@ -175,14 +178,6 @@ namespace ase::storage {
 // NO STRUCTS HERE! Structs = Data = Components!
 // NO View/Query operations in helpers! Only pure math!
 namespace {
-
-// A Hub value is an f32, so the client id survives the round trip only while it fits the
-// 24-bit mantissa. Converting in ONE named place is what keeps that limit visible; a bare
-// cast at the call site would hide the moment ids grow past it and clients silently start
-// indexing under a neighbouring number.
-uint32_t clai_id_from_hub(float published) {
-    return static_cast<uint32_t>(published);
-}
 
 }  // namespace
 
@@ -217,17 +212,20 @@ void StorageIdnIdxSystem::tick(ecs::Registry& registry, float dt) {
                         static_cast<uint32_t>(relm_ent));
     }
 
-    // Network clients under the id they publish. A mirrored client without the value is
-    // not a fault - the Hub mirror can be ready before the id is written - so it is
-    // skipped and picked up on the next frame.
-    for (auto client_ent : registry.view<hub::HubNetClaiRdyTag>()) {
-        const float net_id =
-            hub::get(registry, static_cast<uint32_t>(client_ent), "NET_CLAI_ID"_hs);
-        if (ase::types::is_not_found(net_id)) {
-            continue;
+    // Open sessions under their client id. ase-network writes both fields in the step that
+    // adopts the row, so a row without the field is a broken row, not a race; it is
+    // reported and left out of the index. The field is a u32, so the id is exact at any
+    // size.
+    hub::row_each(registry, "HUB_CLAI_IDNT"_hs, [&](ecs::Entity sess) {
+        const auto owner = static_cast<uint32_t>(sess);
+        uint32_t client_id = 0u;
+        if (!hub::try_get_u32(registry, owner, "HUB_CLAI_IDNT_CLIENT_ID"_hs, client_id)) {
+            log::warn(log::WRN::CAT::HUB_NOT_FOUND, "StorageIdnIdxSystem", owner,
+                      "HUB_CLAI_IDNT_CLIENT_ID");
+            return;
         }
-        idx.store_client(clai_id_from_hub(net_id), static_cast<uint32_t>(client_ent));
-    }
+        idx.store_client(client_id, owner);
+    });
 }
 
 void StorageIdnIdxSystem::on_stop(ecs::Registry& registry) {

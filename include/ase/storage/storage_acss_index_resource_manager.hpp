@@ -42,12 +42,14 @@
  *
  * THIS IS NOT A COMPONENT!
  *
+ * @usecase     usecase:100265 - check access clearance
+ *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    ecs/resource
  * @created     2026-08-16
- * @modified    2026-08-16
- * @version     1.0.0
+ * @modified    2026-10-13
+ * @version     1.0.1
  *
  * ECS RESOURCE MANAGER HEADER COMPLIANCE
  * [ ] NOT a Component - lives outside ECS registry
@@ -296,17 +298,17 @@ public:
     bool has_session(uint32_t user_hash) const;
 
     /**
-     * @brief Register a network client entity under the NET_CLAI_ID it publishes.
+     * @brief Register a session entity under the client id of its HUB_CLAI_IDNT row.
      *
      * The keycard link binds an authenticated session to its client entity by that id.
-     * Reading it back from the Hub for every client on every session was a walk inside
-     * a walk; the id is DATA, so it is a key, not a Tag.
+     * Reading it back from the Hub for every client on every session would be a walk
+     * inside a walk; the id is DATA, so it is a key, not a Tag.
      */
     void store_client(uint32_t net_client_id, uint32_t client_entity);
 
     /**
-     * @brief O(1) client entity for a NET_CLAI_ID.
-     * @return The stored entity id, or INVALID_ENTITY if no client publishes that id.
+     * @brief O(1) session entity for a client id (field HUB_CLAI_IDNT_CLIENT_ID).
+     * @return The stored entity id, or INVALID_ENTITY if no open session carries that id.
      */
     uint32_t get_client(uint32_t net_client_id) const;
 
@@ -362,7 +364,7 @@ private:
     // Flattened keycard x held-codeword membership: mix(user, realm scope, codeword).
     ase::containers::HashMap<uint64_t, uint32_t, ase::containers::IntMixHash> held_keys_;
 
-    // Network client entity by the NET_CLAI_ID it publishes (1:1 - an id names one client).
+    // Session entity by the client id of its HUB_CLAI_IDNT row (1:1 - an id names one client).
     ase::containers::HashMap<uint32_t, uint32_t, ase::containers::IntMixHash> client_by_net_id_;
 
     // Users holding an authenticated session, by user hash (membership only).

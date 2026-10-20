@@ -5,8 +5,9 @@
  *
  * @file        storage_req_wflw_tran_comp.hpp
  * @brief       StorageReqWflwTranComponent - Workflow label-transition request
- * @description One entity per requested promote (Entity-per-Item). Drained from
- *              the Hub bridge (HubStgWflwReqComponent) by StorageWflwDrnSystem;
+ * @description One entity per requested promote (Entity-per-Item). Filled by
+ *              StorageEdgeWflwFwdRcvSystem (frame 113) or by StorageWflwDrnSystem
+ *              (hub row HUB_STG_WFLW_REQ) and staged by StorageWflwStgeSystem;
  *              validated data-driven against the seeded StorageWflwEdgeComponent
  *              entities by StorageWflwTranSystem, which writes the new label into
  *              the matching StorageAcssRuleComponent + the audit attribution.
@@ -15,10 +16,12 @@
  * @layer       3 (Module)
  * @category    communication/request
  * @parity      server_only
+ * @usecase     usecase:100329 - stage workflow promotion
  *
  * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
- *   Der Antrag auf eine Label-Transition, nicht das Label. StorageWflwDrnSystem erzeugt
- *   die Zeile aus der Hub-Bruecke; StorageWflwGateSystem und StorageWflwTranSystem lesen
+ *   Der Antrag auf eine Label-Transition, nicht das Label. StorageEdgeWflwFwdRcvSystem oder
+ *   StorageWflwDrnSystem erzeugt die Zeile, StorageWflwStgeSystem stellt sie ein;
+ *   StorageWflwGateSystem und StorageWflwTranSystem lesen
  *   sie, faellen das Urteil und zerstoeren die Entity (deferred delete) - kein Verbraucher
  *   reicht path/target_label/requested_by weiter. Das ERGEBNIS verlaesst diesen Rumpf auf
  *   zwei eigenen Wegen: der neue Zustand als label auf StorageAcssRuleComponent, das
@@ -27,8 +30,8 @@
  *   Zusaetzlich traegt die Zeile mit requested_by eine Operator-Identitaet, die auf der
  *   Serverseite zur Attribution gebraucht wird und im Browser nichts zu suchen hat.
  * @created     2026-07-11
- * @modified    2026-07-11
- * @version     1.0.0
+ * @modified    2026-10-16
+ * @version     1.0.2
  *
  * ECS COMPONENT COMPLIANCE
  *
@@ -59,6 +62,9 @@
  * [ ] Component stores ONLY primitive ID (uint32_t) referencing external resource
  */
 
+// MAX_PATH_LEN, MAX_LABEL_LEN, MAX_OWNER_ID - the module's slot widths, NUL included
+#include <ase/storage/types.hpp>
+
 namespace ase::storage {
 
 /**
@@ -75,9 +81,9 @@ namespace ase::storage {
  * @hub_writes none
  */
 struct StorageReqWflwTranComponent {
-    char path[256] = {};                      // Realm-relative asset path (matches StorageAcssRuleComponent.path_pattern)
-    char target_label[32] = {};               // Requested workflow label ("review", "released", ...)
-    char requested_by[64] = {};               // Operator user_id string (keycard attribution for the audit entry)
+    char path[MAX_PATH_LEN] = {};             // Realm-relative asset path (matches StorageAcssRuleComponent.path_pattern)
+    char target_label[MAX_LABEL_LEN] = {};    // Requested workflow label ("review", "released", ...)
+    char requested_by[MAX_OWNER_ID] = {};     // Operator user_id string (keycard attribution for the audit entry)
 };
 
 }  // namespace ase::storage

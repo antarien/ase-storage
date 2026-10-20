@@ -2,51 +2,55 @@
  * ASE ECS SYSTEM IMPLEMENTATION
  *
  * @file        storage_kycd_stat_pub_sys.cpp
- * @brief       StorageKycdStatPubSystem - announces the issue count on the star
- * @description Hub WRITE only. Die Zahl entsteht in StorageKycdReqDrnSystem, hier wird sie
- *              ausschliesslich weitergereicht.
+ * @brief       StorageKycdStatPubSystem - announces the keycard stage counters on the star
+ * @description Hub WRITE only. Die Zahlen entstehen in den Systemen der einzelnen Stufen, hier
+ *              werden sie ausschliesslich weitergereicht.
+ *
+ * @usecase     usecase:100264 - issue customer keycard
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Dissemination
  * @created     2026-09-21
- * @modified    2026-09-21
+ * @modified    2026-10-13
  * @version     00.00.00.00000 [seed]
  *
- * CAUSAL CHAIN (CAUSA_STG_KYCD_STAT: counted here, announced there)
+ * CAUSAL CHAIN (CAUSA_STG_KYCD_STAT: counted there, announced here)
  *
- *   StorageKycdReqDrnSystem (Ingestion)
+ *   StorageKycdReqDrnSystem, StorageKycdDrnSystem, StorageKycdVldSystem,
+ *   StorageKycdLnkCntSystem, StorageKycdExpSystem
  *          │
- *          │ StorageStaKycdStatComponent.issued += Karten dieses Takts
+ *          │ Zaehlzeilen auf der Verwalterentity
  *          ▼
  *   ┌─────────────────────────────────────────────────────────────┐
  *   │  THIS SYSTEM: StorageKycdStatPubSystem                      │
  *   │                                                             │
  *   │  READS:                                                     │
  *   │    - StorageStaKycdStatComponent (auf StorageMgrTag)        │
+ *   │    - StorageStaTknStatComponent (auf StorageMgrTag)         │
+ *   │    - StorageStaSessStatComponent (auf StorageMgrTag)        │
  *   │                                                             │
  *   │  WRITES:                                                    │
- *   │    - "STG_KYCD_ISSUED_COUNT"_hs unter hub::GLOBAL           │
+ *   │    - sechs STG_KYCD_*_COUNT unter hub::GLOBAL               │
  *   └─────────────────────────────────────────────────────────────┘
  *          │
  *          │ Betriebssicht, Zaehlwerk
  *          ▼
- *   Wer die Ausstellungen beobachtet, liest EINE Zeile
+ *   Wer die Keycard-Stufen beobachtet, liest je Stufe EINE Zeile
  *
- * WARUM DER SCHNITT — GEMESSEN 2026-09-21. Der Ausstellungsschritt fuehrte den Zaehler bis dahin
- * selbst im Stern: lesen, eins addieren, zurueckschreiben, je Karte, INNERHALB seiner Schleife.
- * Das ist zweimal falsch. Es mischt Hub-I/O mit Rechnung in einem System und faellt damit unter
- * HUB_IO_MIXED_WITH_MATH; und ein Hub-Wert ist EIN stehender Platz, also bedeutete bei zehn
- * Karten in einem Takt nur der zehnte Schrieb etwas. Der Bestand gehoert dem Modul, der Stern
- * bekommt ihn angesagt.
+ * WARUM DER SCHNITT. Ein Zaehler, den eine Stufe selbst im Stern fuehrt (lesen, eins addieren,
+ * zurueckschreiben, je Ereignis, INNERHALB ihrer Schleife), ist zweimal falsch. Er mischt Hub-I/O
+ * mit Rechnung in einem System und faellt damit unter HUB_IO_MIXED_WITH_MATH; und ein Hub-Wert
+ * ist EIN stehender Platz, also bedeutet bei zehn Ereignissen in einem Takt nur der zehnte
+ * Schrieb etwas. Der Bestand gehoert dem Modul, der Stern bekommt ihn angesagt.
+ *
+ * Eine Zaehlzeile entsteht erst mit dem ersten Ereignis ihrer Stufe. Solange sie fehlt, steht
+ * auch der Hub-Wert nicht da; die Ansage erfindet keine Null.
  *
  * DIES IST KEINE ZWEITE PRAEGESCHIENE — die Abgrenzung steht im Kopf von
  * storage_kycd_tier_seed_sys.cpp und gilt hier genauso. Das System stellt keine Karte aus, nimmt
- * keinen Antrag entgegen und beruehrt keine Keycard-Entity; es liest eine Zahl und schreibt sie.
- * Auch der dortige Satz "ein Hub-Wert waere ein dritter Ort fuer dieselbe Aussage" trifft nicht
- * zu: er gilt dem TEILNEHMERBESTAND, der keine Laufzeitgroesse ist. Eine Ausstellungszahl ist
- * genau das.
+ * keinen Antrag entgegen und beruehrt keine Keycard-Entity; es liest Zahlen und schreibt sie.
  *
  * HUB Pattern (MIG_ASE_HUB_API v2.0):
  *
@@ -54,7 +58,12 @@
  *   (none)
  *
  * WRITES (to the star, under hub::GLOBAL):
- *   "STG_KYCD_ISSUED_COUNT"_hs → StorageStaKycdStatComponent.issued
+ *   "STG_KYCD_ISSUED_COUNT"_hs      → StorageStaKycdStatComponent.issued
+ *   "STG_KYCD_DRN_COUNT"_hs         → StorageStaTknStatComponent.drained
+ *   "STG_KYCD_VLD_ACCEPT_COUNT"_hs  → StorageStaTknStatComponent.accepted
+ *   "STG_KYCD_VLD_REJECT_COUNT"_hs  → StorageStaTknStatComponent.rejected
+ *   "STG_KYCD_LNK_COUNT"_hs         → StorageStaSessStatComponent.linked
+ *   "STG_KYCD_EXP_COUNT"_hs         → StorageStaSessStatComponent.expired
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -150,11 +159,15 @@
 #include <ase/storage/systems/keycard/storage_kycd_stat_pub_sys.hpp>
 // Components from same module
 #include <ase/storage/components/state/storage_sta_kycd_stat_comp.hpp>
+#include <ase/storage/components/state/storage_sta_sess_stat_comp.hpp>
+#include <ase/storage/components/state/storage_sta_tkn_stat_comp.hpp>
 #include <ase/storage/components/tag/storage_mgr_tag.hpp>
-// Hub for the O(1) API - die Zaehlzeile verlaesst das Modul hier und nur hier
+// Hub for the O(1) API - die Zaehlzeilen verlassen das Modul hier und nur hier
 #include <ase/hub/api.hpp>
 // Logging
 #include <ase/log/log.hpp>
+
+#include <entt/core/hashed_string.hpp>
 
 #include <cstdint>
 
@@ -186,7 +199,7 @@ void StorageKycdStatPubSystem::on_start(ecs::Registry& /*registry*/) {
 
 void StorageKycdStatPubSystem::tick(ecs::Registry& registry, float /*dt*/) {
     /**
-     * EINE SICHT, EIN SCHRIEB, KEINE RECHNUNG.
+     * JE ZAEHLZEILE EINE SICHT, JE ZAHL EIN SCHRIEB, KEINE RECHNUNG.
      *
      * Die Umwandlung nach float ist die FORM der Hub-Zeile, nicht eine Rechnung ueber den
      * Wert - der Stern fuehrt jede Groesse als float, und die Zahl geht unveraendert hinein.
@@ -195,6 +208,22 @@ void StorageKycdStatPubSystem::tick(ecs::Registry& registry, float /*dt*/) {
         (void)mgr;
         hub::set(registry, hub::GLOBAL, "STG_KYCD_ISSUED_COUNT"_hs,
                  static_cast<float>(stat.issued));
+    }
+    for (auto [mgr, stat] : registry.view<StorageStaTknStatComponent, StorageMgrTag>().each()) {
+        (void)mgr;
+        hub::set(registry, hub::GLOBAL, "STG_KYCD_DRN_COUNT"_hs,
+                 static_cast<float>(stat.drained));
+        hub::set(registry, hub::GLOBAL, "STG_KYCD_VLD_ACCEPT_COUNT"_hs,
+                 static_cast<float>(stat.accepted));
+        hub::set(registry, hub::GLOBAL, "STG_KYCD_VLD_REJECT_COUNT"_hs,
+                 static_cast<float>(stat.rejected));
+    }
+    for (auto [mgr, stat] : registry.view<StorageStaSessStatComponent, StorageMgrTag>().each()) {
+        (void)mgr;
+        hub::set(registry, hub::GLOBAL, "STG_KYCD_LNK_COUNT"_hs,
+                 static_cast<float>(stat.linked));
+        hub::set(registry, hub::GLOBAL, "STG_KYCD_EXP_COUNT"_hs,
+                 static_cast<float>(stat.expired));
     }
 }
 

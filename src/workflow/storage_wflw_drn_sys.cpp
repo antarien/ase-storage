@@ -8,41 +8,43 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Ingestion
+ * @usecase     usecase:100329 - stage workflow promotion
  * @created     2026-07-11
- * @modified    2026-10-03
- * @version     1.0.1
+ * @modified    2026-10-16
+ * @version     1.3.0
  *
  * CAUSAL CHAIN (Workflow Promote Drain)
  *
- *   [`ase edge promote` → Replica frame 113 → StorageEdgeWflwFwdRcvSystem deposits the bridge]
+ *   [a plugin files a hub row HUB_STG_WFLW_REQ with sdk::row_create and sdk::set_bytes]
  *          │
- *          │ Ingestion schedule drains the Hub bridge
+ *          │ Ingestion schedule drains the hub rows
  *          ▼
  *   ┌─────────────────────────────────────────────┐
  *   │  THIS SYSTEM: StorageWflwDrnSystem          │
  *   │                                             │
  *   │  READS:                                     │
- *   │    - hub::HubStgWflwReqComponent            │
- *   │    - hub::HubStgWflwPendTag (filter)        │
+ *   │    - HUB_STG_WFLW_REQ rows (three strings)  │
  *   │                                             │
  *   │  WRITES:                                    │
  *   │    - StorageReqWflwTranComponent (new)      │
- *   │    - StorageWflwPendTag (new entity)        │
- *   │    - StorageWflwGateTag (target=released)   │
- *   │    - STG_WFLW_RES = PENDING (owner-scoped)  │
+ *   │    - StorageWflwRcvTag (new entity)         │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Bridge entity destroyed, request staged
+ *          │ row released, request received
  *          ▼
- *   StorageWflwGateSystem / StorageWflwTranSystem (Integration)
+ *   StorageWflwStgeSystem (Ingestion, run_after this system)
  *
  * HUB Pattern (Active)
  *
  * READS (from Hub):
- *   (none — the bridge payload rides the typed HubStgWflwReqComponent)
+ *   - the rows of the kind HUB_STG_WFLW_REQ (register A0902): path, target label and requester as
+ *     byte fields, read at their stored length with hub::bytes_len and hub::try_get_bytes
+ *   - the contract widths STG_CONST_WFLW_PATH_BYTES, STG_CONST_WFLW_LABEL_BYTES and
+ *     STG_CONST_WFLW_REQUESTER_BYTES on GLOBAL (hub_constants.json), checked against the request
+ *     buffers MAX_PATH_LEN, MAX_LABEL_LEN and MAX_OWNER_ID
  *
  * WRITES (to Hub):
- *   - STG_WFLW_RES (owner = hashed_string(path)): WFLW_RES_PENDING
+ *   (none - the staging and its verdict STG_WFLW_RES belong to StorageWflwStgeSystem)
  *
  * FLYWEIGHT PATTERN (N/A - no external resources)
  *
@@ -144,11 +146,12 @@
 #include <ase/storage/systems/workflow/storage_wflw_drn_sys.hpp>
 // Components from same module
 #include <ase/storage/components/request/storage_req_wflw_tran_comp.hpp>
-#include <ase/storage/components/tag/storage_wflw_pend_tag.hpp>
-#include <ase/storage/components/tag/storage_wflw_gate_tag.hpp>
+#include <ase/storage/components/tag/storage_wflw_rcv_tag.hpp>
 #include <ase/storage/types.hpp>
-// Hub API (bridge component + discovery tag + verdict publish)
+// Hub API (the request rows)
 #include <ase/hub/api.hpp>
+// NOT_FOUND sentinel and range predicates for the contract widths (L0)
+#include <ase/types/types.hpp>
 // String ops (L0 — sanitized copy)
 #include <ase/utils/strops.hpp>
 
@@ -163,10 +166,8 @@ namespace ase::storage {
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 namespace {
 
-// No helper functions needed - the sanitized bounded copy this system used to
-// carry its own version of now lives in ase::utils::str_copy_json_safe (L0),
-// where the persist document builders reach it too. Three private copies of one
-// string rule is three places for it to drift apart.
+// No helper functions needed - the sanitized bounded copy lives in
+// ase::utils::str_copy_json_safe (L0), where the persist document builders reach it too.
 
 }  // anonymous namespace
 
@@ -180,57 +181,92 @@ void StorageWflwDrnSystem::on_start(ecs::Registry& /*registry*/) {
 void StorageWflwDrnSystem::tick(ecs::Registry& registry, float dt) {
     (void)dt;
 
-    // Deferred deletion: collect drained bridge entities, destroy after the loop
-    // (bounded batch per tick, mirror StorageCredAcssRspSystem).
-    ecs::Entity done[WFLW_REQ_BATCH];
-    uint32_t done_n = 0;
+    /**
+     * ONE walk over the bridge rows, bounded per tick (WFLW_REQ_BATCH, mirror
+     * StorageCredAcssRspSystem); each row is released inside the walk, which row_each permits for
+     * the visited row. Rows beyond the bound stay and are drained next tick.
+     *
+     * A string is read at its stored length into a buffer one byte wider, so it stays terminated.
+     * An empty field, one that is not stored, or one wider than the contract's width is a request
+     * the caller should not have sent.
+     */
+    if (hub::row_count(registry, "HUB_STG_WFLW_REQ"_hs) == 0u) return;
 
-    auto bridge_view = registry.view<hub::HubStgWflwReqComponent, hub::HubStgWflwPendTag>();
-    for (auto [bridge_ent, breq] : bridge_view.each()) {
-        if (done_n >= WFLW_REQ_BATCH) break;
+    /**
+     * THE WIDTHS ARE THE CONTRACT'S (hub_constants.json, read by the writer the same way). Without them
+     * no row can be judged against its bound, so the rows wait; a width the request buffers cannot hold
+     * with their NUL is a broken contract, not a bad request.
+     */
+    const float path_bytes = hub::get(registry, hub::GLOBAL, "STG_CONST_WFLW_PATH_BYTES"_hs);
+    if (types::is_not_found(path_bytes)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageWflwDrnSystem", "STG_CONST_WFLW_PATH_BYTES");
+        return;
+    }
+    const float label_bytes = hub::get(registry, hub::GLOBAL, "STG_CONST_WFLW_LABEL_BYTES"_hs);
+    if (types::is_not_found(label_bytes)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageWflwDrnSystem", "STG_CONST_WFLW_LABEL_BYTES");
+        return;
+    }
+    const float by_bytes = hub::get(registry, hub::GLOBAL, "STG_CONST_WFLW_REQUESTER_BYTES"_hs);
+    if (types::is_not_found(by_bytes)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageWflwDrnSystem", "STG_CONST_WFLW_REQUESTER_BYTES");
+        return;
+    }
+    if (!types::is_in_rng_f(path_bytes, 1.0f, static_cast<float>(MAX_PATH_LEN - 1u))) {
+        log::error(log::ERR::CAT::VALUE_OUT_OF_RANGE, "StorageWflwDrnSystem", "STG_CONST_WFLW_PATH_BYTES", path_bytes);
+        return;
+    }
+    if (!types::is_in_rng_f(label_bytes, 1.0f, static_cast<float>(MAX_LABEL_LEN - 1u))) {
+        log::error(log::ERR::CAT::VALUE_OUT_OF_RANGE, "StorageWflwDrnSystem", "STG_CONST_WFLW_LABEL_BYTES", label_bytes);
+        return;
+    }
+    if (!types::is_in_rng_f(by_bytes, 1.0f, static_cast<float>(MAX_OWNER_ID - 1u))) {
+        log::error(log::ERR::CAT::VALUE_OUT_OF_RANGE, "StorageWflwDrnSystem", "STG_CONST_WFLW_REQUESTER_BYTES", by_bytes);
+        return;
+    }
+    const uint32_t path_max = static_cast<uint32_t>(path_bytes);
+    const uint32_t label_max = static_cast<uint32_t>(label_bytes);
+    const uint32_t by_max = static_cast<uint32_t>(by_bytes);
 
-        if (breq.path[0] == '\0' || breq.target_label[0] == '\0' || breq.requested_by[0] == '\0') {
+    uint32_t drained = 0u;
+    hub::row_each(registry, "HUB_STG_WFLW_REQ"_hs, [&](ecs::Entity bridge) {
+        if (drained >= WFLW_REQ_BATCH) return;
+        ++drained;
+        const uint32_t row = static_cast<uint32_t>(bridge);
+        const uint32_t path_len = hub::bytes_len(registry, row, "HUB_STG_WFLW_REQ_PATH"_hs);
+        const uint32_t label_len = hub::bytes_len(registry, row, "HUB_STG_WFLW_REQ_TARGET_LABEL"_hs);
+        const uint32_t by_len = hub::bytes_len(registry, row, "HUB_STG_WFLW_REQ_REQUESTED_BY"_hs);
+        char path[MAX_PATH_LEN] = {};
+        char target_label[MAX_LABEL_LEN] = {};
+        char requested_by[MAX_OWNER_ID] = {};
+        if (path_len == 0u || label_len == 0u || by_len == 0u ||
+            path_len > path_max || label_len > label_max || by_len > by_max ||
+            !hub::try_get_bytes(registry, row, "HUB_STG_WFLW_REQ_PATH"_hs, path, path_len) ||
+            !hub::try_get_bytes(registry, row, "HUB_STG_WFLW_REQ_TARGET_LABEL"_hs, target_label,
+                                label_len) ||
+            !hub::try_get_bytes(registry, row, "HUB_STG_WFLW_REQ_REQUESTED_BY"_hs, requested_by,
+                                by_len)) {
             // INPUT_REJECTED (WRN::CAT, SSOT core/ase-log/data/log_categories.json — die
-            // Kategorie IST ihr Name, eine Nummer gibt es seit dem Hash-Umbau nicht mehr):
-            // eine Bruecken-Anfrage von aussen ohne Pflichtfeld wird
-            // verworfen — woertlich "caller sent something unserviceable". Die Ebene wechselt
-            // von error auf warn, und das ist hier KEIN Sichtbarkeitsverlust wie auf dem
-            // Autorisierungspfad: eine unvollstaendige Anfrage ist kein Sicherheitsereignis,
-            // sondern ein Formfehler des Aufrufers — genau das sagt der Hilfetext ("not an
-            // engine fault").
+            // Kategorie IST ihr Name): eine Bruecken-Anfrage von aussen ohne Pflichtfeld wird
+            // verworfen — woertlich "caller sent something unserviceable". Die Ebene ist warn,
+            // und das ist hier KEIN Sichtbarkeitsverlust wie auf dem Autorisierungspfad: eine
+            // unvollstaendige Anfrage ist kein Sicherheitsereignis, sondern ein Formfehler des
+            // Aufrufers — genau das sagt der Hilfetext ("not an engine fault").
             log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageWflwDrn", "bridge_request_fields");
-            done[done_n] = bridge_ent;
-            ++done_n;
-            continue;
+            hub::row_release(registry, bridge);
+            return;
         }
 
         auto req_ent = registry.create();
         auto& req = registry.emplace<StorageReqWflwTranComponent>(req_ent);
-        ase::utils::str_copy_json_safe(req.path, MAX_PATH_LEN, breq.path);
-        ase::utils::str_copy_json_safe(req.target_label, MAX_LABEL_LEN, breq.target_label);
-        ase::utils::str_copy_json_safe(req.requested_by, MAX_OWNER_ID, breq.requested_by);
-        registry.emplace<StorageWflwPendTag>(req_ent);
+        ase::utils::str_copy_json_safe(req.path, MAX_PATH_LEN, path);
+        ase::utils::str_copy_json_safe(req.target_label, MAX_LABEL_LEN, target_label);
+        ase::utils::str_copy_json_safe(req.requested_by, MAX_OWNER_ID, requested_by);
+        // StorageWflwStgeSystem stages it: pending tag, released gate and the verdict.
+        registry.emplace<StorageWflwRcvTag>(req_ent);
 
-        // released-gate: the artifact precondition runs as a SEPARATE Tag-filtered
-        // check (StorageWflwGateSystem) — the transition system never re-tests it.
-        if (entt::hashed_string(req.target_label).value() == EDGE_LABEL_RELEASED_HASH) {
-            registry.emplace<StorageWflwGateTag>(req_ent);
-        }
-
-        // Publish the staged verdict so the route's poll sees the request landed.
-        const uint32_t owner = entt::hashed_string(req.path).value();
-        hub::set(registry, owner, "STG_WFLW_RES"_hs, static_cast<float>(WFLW_RES_PENDING));
-
-        log::info("[StorageWflwDrn] Promote request staged: {} -> {} (by {})",
-                  req.path, req.target_label, req.requested_by);
-
-        done[done_n] = bridge_ent;
-        ++done_n;
-    }
-
-    for (uint32_t i = 0; i < done_n; ++i) {
-        registry.destroy(done[i]);
-    }
+        hub::row_release(registry, bridge);
+    });
 }
 
 void StorageWflwDrnSystem::on_stop(ecs::Registry& /*registry*/) {

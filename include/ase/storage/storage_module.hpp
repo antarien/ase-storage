@@ -10,9 +10,10 @@
  *
  * @module      ase-storage
  * @layer       3 (Modules)
+ * @usecase     usecase:100265 - check access clearance
  * @created     2026-04-05
- * @modified    2026-04-05
- * @version     1.0.0
+ * @modified    2026-10-12
+ * @version     1.0.1
  *
  * Systems by schedule:
  *
@@ -76,6 +77,7 @@
 #include <ase/storage/systems/keycard/storage_kycd_tier_seed_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_vld_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp>
+#include <ase/storage/systems/keycard/storage_kycd_lnk_cnt_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_sess_cln_sys.hpp>
 // Keycard-keyed gate projection (replaces the session-keyed cwrd_pub): projects a
 // minted keycard's A/ACS axes (clearance + permission + codewords) to the edge gate
@@ -97,6 +99,7 @@
 #include <ase/storage/systems/acl/storage_cncm_flt_sys.hpp>
 #include <ase/storage/systems/fs/storage_file_writ_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_drn_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_stge_sys.hpp>
 #include <ase/storage/systems/workflow/storage_edge_wflw_fwd_rcv_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_gate_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_tran_sys.hpp>
@@ -172,14 +175,14 @@ struct StorageModule {
         app.add_system<StorageIdnIdxSystem>(ecs::Schedule::Ingestion);
         app.add_system_with<StorageKycdDrnSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageIdnIdxSystem");
-        // SDK Hub-bridge drain: convert SES_KYCD_NTF_* Hub keys into
+        // SDK Hub-bridge drain: the hub rows HUB_STG_KYCD_REQ become
         // StorageReqKycdComponent on the request entity before the main
         // keycard-req drain sees it (same tick).
         //
         // NO run_after ON HubRcvDrnSystem, AND THE ABSENCE IS THE POINT — without this note the
-        // next reader adds it back here and at StorageWflwDrnSystem below. Both edges existed
-        // and both were inert: run_after orders only WITHIN one schedule (dependency_sorter),
-        // and HubRcvDrnSystem is registered in Reception (hub_module.hpp) while these drains run
+        // next reader adds it back here and at StorageWflwDrnSystem below. Such an edge is
+        // inert: run_after orders only WITHIN one schedule (dependency_sorter), and
+        // HubRcvDrnSystem is registered in Reception (hub_module.hpp) while these drains run
         // in Ingestion. A name from another schedule is looked up, not found, and dropped
         // without a word.
         //
@@ -195,18 +198,18 @@ struct StorageModule {
         // The edges BELOW that name Storage* systems are a different case and MUST STAY: both
         // ends run in Ingestion, same schedule, so the sorter resolves them.
         /**
-         * SYN-SCHNITT AN DER KEYCARD-ANFRAGE (2026-09-21): erst der Stern, dann die Rechnung.
+         * SYN-SCHNITT AN DER KEYCARD-ANFRAGE: erst der Stern, dann die Rechnung.
          *
-         * Der Spiegel liest die sechs SES_KYCD_NTF_*-Zeilen in zwei Bruecken-Components, der
-         * Drain setzt daraus die beiden Hashes zusammen. Beide in Ingestion, der Drain
-         * `run_after` dem Spiegel — sonst laese er im selben Takt eine Bruecke, die es noch
-         * nicht gibt, und die Anfrage wartete einen Takt laenger als noetig.
+         * Der Spiegel liest die Hub-Zeile HUB_STG_KYCD_REQ in zwei Bruecken-Components, der
+         * Drain baut daraus die Anfrage. Beide in Ingestion, der Drain `run_after` dem
+         * Spiegel — sonst laese er im selben Takt eine Bruecke, die es noch nicht gibt, und
+         * die Anfrage wartete einen Takt laenger als noetig.
          */
         app.add_system<StorageKycdNtfySynSystem>(ecs::Schedule::Ingestion);
         app.add_system_with<StorageKycdNtfyDrnSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageKycdNtfySynSystem");
         // HTTP-posted keycard issuance drain runs after the notify bridge so it
-        // sees StorageReqKycdComponent + HubStgKycdPendTag together.
+        // sees the StorageReqKycdComponent the bridge laid on in the same tick.
         app.add_system_with<StorageKycdReqDrnSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageKycdNtfyDrnSystem");
         /**
@@ -214,22 +217,30 @@ struct StorageModule {
          *
          * Dissemination (70) liegt hinter Ingestion (11), also traegt die Ansage jedes Takts
          * schon die Karten DIESES Takts. Der Zaehler selbst entsteht im Drain, auf der
-         * Verwalterzeile — bis 2026-09-21 fuehrte der Drain ihn im Stern und mischte damit
-         * Hub-I/O mit Rechnung.
+         * Verwalterzeile; eine Fuehrung im Stern mischte Hub-I/O mit Rechnung.
          */
         app.add_system<StorageKycdStatPubSystem>(ecs::Schedule::Dissemination);
         app.add_system_with<StorageKycdVldSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageKycdDrnSystem");
         app.add_system_with<StorageKycdLnkSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageKycdVldSystem");
-        // Workflow-promote Hub-bridge drain: converts HubStgWflwReqComponent bridge
-        // entities (deposited by StorageEdgeWflwFwdRcvSystem from frame 113, `ase edge
-        // promote`) into module-local StorageReqWflwTranComponent requests (+ released-gate tag).
+        // The link system writes the star and does no arithmetic; it marks each link and this
+        // system counts the marks into the module's own row (StorageKycdStatPubSystem announces).
+        app.add_system_with<StorageKycdLnkCntSystem>(ecs::Schedule::Ingestion)
+            .run_after("StorageKycdLnkSystem");
+        // Workflow-promote hub-row drain: converts the hub rows HUB_STG_WFLW_REQ (a plugin files
+        // them with sdk::row_create and sdk::set_bytes) into module-local StorageReqWflwTranComponent
+        // requests marked StorageWflwRcvTag - the form StorageEdgeWflwFwdRcvSystem (frame 113,
+        // `ase edge promote`) files in Reception.
         //
         // NO run_after ON HubRcvDrnSystem — same case as StorageKycdNtfyDrnSystem above, and
         // the reasoning is written out there once: Reception and Ingestion share the Frame tier
         // and run in array order, so the ordering holds without an edge.
         app.add_system<StorageWflwDrnSystem>(ecs::Schedule::Ingestion);
+        // One staging for both doors: pending tag, released-gate tag and the STG_WFLW_RES
+        // verdict PENDING, after the drain so a row drained this tick is staged in it.
+        app.add_system_with<StorageWflwStgeSystem>(ecs::Schedule::Ingestion)
+            .run_after("StorageWflwDrnSystem");
 
         // Integration (60Hz): index → ACL → file ops → workflow → concealment
         // The index is built FIRST and read by the ladder in the same tick. Ordering it
@@ -287,7 +298,7 @@ struct StorageModule {
 
         // Integration (60Hz): Curator request processing (after ACL)
         // NACH DER GANZEN LEITER: der Kurator arbeitet auf gewaehrten Anfragen, und die
-        // Gewaehrung faellt seit dem 2026-08-31 in StorageAcssPolSystem.
+        // Gewaehrung faellt in StorageAcssPolSystem.
         app.add_system_with<StorageCurPrcSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssPolSystem");
 
@@ -313,7 +324,7 @@ struct StorageModule {
         // three it wrote itself. Without this system clearance, realm and the user
         // hash of every session that ever authenticated stay in the hub for the
         // life of the process — and HubSessLifeClnSystem, which waits for the
-        // owner's value count to reach zero, never releases HubSessLifeTag.
+        // owner's value count to reach zero, never withdraws the row HUB_SESS_LIFE.
         app.add_system<StorageKycdSessClnSystem>(ecs::Schedule::Preservation);
         // Workflow-label durable persist: drains the applied-transition buffers
         // (StorageBufWflwComponent + StorageWflwPstPendTag) into frame-112
@@ -353,8 +364,8 @@ struct StorageModule {
         // RsnMemResDrnSystem). A NOT_FOUND / revoked keycard publishes nothing.
         app.add_system<StorageEdgeKycdResDrnSystem>(ecs::Schedule::Reception);
         // Operator release-workflow WS console receiver (Phase 12): pops BIN_MSG_EDGE_WFLW_FWD off
-        // LANE_WFLW (the Replica already verified the operator YK-JWT), deposits the hub workflow-bridge
-        // request for a promote (StorageWflwDrn/Gate/Tran/Pst drive it) or reads STG_WFLW_STAGE/RES for a
+        // LANE_WFLW (the Replica already verified the operator YK-JWT), files the promote request
+        // (StorageWflwStge/Gate/Tran/Pst drive it) or reads STG_WFLW_STAGE/RES for a
         // status, and ships BIN_MSG_EDGE_WFLW_RES back for the Replica to relay to the ase-cli. Reception,
         // alongside the kernel WS inbound demux, mirror of StorageEdgeKycdResDrnSystem.
         app.add_system<StorageEdgeWflwFwdRcvSystem>(ecs::Schedule::Reception);

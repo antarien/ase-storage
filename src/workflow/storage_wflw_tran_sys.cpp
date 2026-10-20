@@ -8,13 +8,14 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Integration
+ * @usecase     usecase:100405 - apply workflow transition
  * @created     2026-04-05
- * @modified    2026-07-11
- * @version     2.0.0
+ * @modified    2026-10-12
+ * @version     2.0.1
  *
  * CAUSAL CHAIN (Workflow Transition)
  *
- *   [StorageWflwDrnSystem staged request; StorageWflwGateSystem passed released-gate]
+ *   [StorageWflwStgeSystem staged request; StorageWflwGateSystem passed released-gate]
  *          │
  *          │ Integration schedule processes label change
  *          ▼
@@ -166,7 +167,7 @@
 #include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
 #include <ase/storage/storage_resource_manager.hpp>
 // Workflow stage vocabulary (audit record, reason composer, stage ordinal) - shared with
-// StorageWflwPermSystem and StorageWflwIniSystem since the split of 2026-08-29
+// StorageWflwPermSystem and StorageWflwIniSystem
 #include <ase/storage/storage_wflw_stage.hpp>
 #include <ase/storage/types.hpp>
 // Hub API (perm read + verdict/stage publish)
@@ -225,8 +226,8 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
 
     // Edge realm entity ref (rule scope + audit record). The answer does not depend on
     // the request, so it is resolved ONCE per tick instead of once per request. The tag
-    // carries the identity (StorageEdgeIniSystem is its only producer), which replaces
-    // the former scan over every realm with a string compare per request.
+    // carries the identity (StorageEdgeIniSystem is its only producer), so no realm is
+    // compared by its string id.
     uint32_t relm_ref = 0;
     for (auto relm_ent : registry.view<StorageStaRelmComponent, StorageRelmEdgeTag>()) {
         relm_ref = static_cast<uint32_t>(relm_ent);
@@ -241,14 +242,13 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
         const uint32_t owner = entt::hashed_string(req.path).value();
         const uint64_t now = mgr.get_wall_time_seconds();
 
-        // DIE BERECHTIGUNG IST SEIT 2026-08-29 EIN EIGENES SYSTEM (StorageWflwPermSystem).
+        // Permission is its own system (StorageWflwPermSystem), so a change to the graph never
+        // touches the file that holds a security decision.
         //
         // "Darf dieser Anrufer befoerdern" ist eine A/ACS-Frage - dieselbe Familie wie die
         // Zugriffsleiter -, "ist dieser Uebergang im Graphen vorgesehen" eine Frage an den
         // Arbeitsablauf. Die erste hat eine eigene Quelle (die Keycard-Sitzung im Hub), eine
-        // eigene Fehlerkategorie (ACCESS_DENIED) und einen eigenen Ausgang; sie lief hier als
-        // Vorspann der zweiten, und damit war jede Aenderung am Graphen eine Aenderung an der
-        // Datei, in der eine Sicherheitsentscheidung steht.
+        // eigene Fehlerkategorie (ACCESS_DENIED) und einen eigenen Ausgang.
         //
         // Was hier ankommt, ist bereits berechtigt: das Berechtigungssystem schliesst seine
         // Ablehnungen im selben Tick ab, fail-closed, mit Pruefspur.
@@ -257,7 +257,6 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
         // rule's label field IS the asset's current workflow stage.
         // Only the rules of THIS realm are examined - the realm filter is the bucket
         // itself, taken from the index StorageAcssIdxSystem rebuilt earlier this tick.
-        // The former version walked every ACL rule in the registry once per request.
         ecs::Entity rule_ent_found = entt::null;
         const uint32_t req_path_hash = entt::hashed_string(req.path).value();
         const uint32_t rule_count = idx.get_rule_count(relm_ref);
@@ -272,7 +271,7 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
             break;
         }
 
-        // DIE ADOPTION IST SEIT 2026-08-29 EIN EIGENES SYSTEM (StorageWflwIniSystem).
+        // Adoption is its own system (StorageWflwIniSystem).
         //
         // Ein Gut OHNE Regel ist der Entwurf: publish legt Builds direkt ins Revier, die erste
         // Beförderung nimmt sie auf. Das ist ein eigener Vorgang mit eigener Bedingung (liegt
@@ -344,11 +343,10 @@ void StorageWflwTranSystem::tick(ecs::Registry& registry, float dt) {
             outc.result = AUD_DENIED;
             ase::utils::str_copy(outc.reason, MAX_REASON_LEN, reason);
             registry.emplace<StorageAudtPendTag>(aud_ent);
-            // MIGRIERT, zusammen mit der PERM_PROMOTE-Zeile oben — beide in EINEM Schrieb, weil
-            // das Tor das Dateiergebnis prueft und ein Teilschritt geblockt haette.
+            // A different category than StorageWflwPermSystem uses, and that is the point.
             //
-            // ANDERE KATEGORIE ALS OBEN, und das ist der Punkt: dort fehlte dem Anfragenden ein
-            // RECHT, hier ist die verlangte KANTE nicht vorgesehen. Der Anfragende darf
+            // Dort fehlt dem Anfragenden ein RECHT, hier ist die verlangte KANTE nicht
+            // vorgesehen. Der Anfragende darf
             // promoten; er hat nur einen Uebergang benannt, den der Graph nicht kennt. Das ist
             // INPUT_REJECTED — ein fremder Aufrufer hat etwas Unbedienbares geschickt — und die
             // ERR-Haelfte davon, weil der Vorgang hier endet statt weiterzulaufen. Wer

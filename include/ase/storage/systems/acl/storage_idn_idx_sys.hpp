@@ -5,7 +5,9 @@
  *
  * @file        storage_idn_idx_sys.hpp
  * @brief       StorageIdnIdxSystem - indexes the identities the frame resolves by key
- * @description Realms by their id hash, network clients by their published NET_CLAI_ID
+ * @description Realms by their id hash, open sessions by the client id of their HUB_CLAI_IDNT row
+ *
+ * @usecase     usecase:100265 - check access clearance
  *
  * @module      ase-storage
  * @layer       3 (Modules)
@@ -50,7 +52,7 @@ namespace ase::storage {
  *   StorageAcssIdxSystem owns rules, links, codewords, tasks and edges.
  *
  * @schedule Ingestion - Runs first, before the keycard drain and link systems
- * @reads    StorageRelmIdnComponent, hub::HubNetClaiRdyTag
+ * @reads    StorageRelmIdnComponent, hub row HUB_CLAI_IDNT (field HUB_CLAI_IDNT_CLIENT_ID)
  * @writes   StorageAcssIndexResourceManager (registry.ctx(), not a Component)
  * @depends  StorageAcssIdxSystem::on_start registers the manager in ctx()
  */

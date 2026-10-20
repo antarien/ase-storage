@@ -94,6 +94,8 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/state/storage_task_idn_comp.hpp
     include/ase/storage/components/state/storage_sta_kycd_comp.hpp
     include/ase/storage/components/state/storage_sta_kycd_stat_comp.hpp
+    include/ase/storage/components/state/storage_sta_sess_stat_comp.hpp
+    include/ase/storage/components/state/storage_sta_tkn_stat_comp.hpp
     include/ase/storage/components/state/storage_inp_kycd_ntfy_idn_comp.hpp
     include/ase/storage/components/state/storage_inp_kycd_ntfy_grnt_comp.hpp
     include/ase/storage/components/state/storage_kycd_grnt_comp.hpp
@@ -140,6 +142,7 @@ add_library(${PROJECT_NAME} SHARED
     ]]
     include/ase/storage/components/tag/storage_mgr_tag.hpp
     include/ase/storage/components/tag/storage_kycd_vld_tag.hpp
+    include/ase/storage/components/tag/storage_kycd_lnk_cnt_tag.hpp
     include/ase/storage/components/tag/storage_kycd_exp_tag.hpp
     include/ase/storage/components/tag/storage_kycd_rjct_tag.hpp
     include/ase/storage/components/tag/storage_kycd_rev_tag.hpp
@@ -150,6 +153,7 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/tag/storage_acss_ownr_tag.hpp
     include/ase/storage/components/tag/storage_acss_deny_tag.hpp
     include/ase/storage/components/tag/storage_audt_pend_tag.hpp
+    include/ase/storage/components/tag/storage_wflw_rcv_tag.hpp
     include/ase/storage/components/tag/storage_wflw_pend_tag.hpp
     include/ase/storage/components/tag/storage_wflw_gate_tag.hpp
     include/ase/storage/components/tag/storage_wflw_pst_pend_tag.hpp
@@ -187,6 +191,7 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/systems/keycard/storage_kycd_tier_seed_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_vld_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp
+    include/ase/storage/systems/keycard/storage_kycd_lnk_cnt_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_sess_cln_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_cwrd_pub_sys.hpp
     include/ase/storage/systems/keycard/storage_edge_kycd_res_drn_sys.hpp
@@ -215,10 +220,13 @@ add_library(${PROJECT_NAME} SHARED
 
     #[[
     SYSTEMS - WORKFLOW
+    The promote request comes through two doors and is staged once (usecase:100329 - stage
+    workflow promotion).
     ]]
     include/ase/storage/storage_wflw_stage.hpp
     include/ase/storage/systems/workflow/storage_wflw_ini_sys.hpp
     include/ase/storage/systems/workflow/storage_wflw_drn_sys.hpp
+    include/ase/storage/systems/workflow/storage_wflw_stge_sys.hpp
     include/ase/storage/systems/workflow/storage_wflw_gate_sys.hpp
     include/ase/storage/systems/workflow/storage_wflw_tran_sys.hpp
     include/ase/storage/systems/workflow/storage_wflw_perm_sys.hpp
@@ -288,6 +296,7 @@ add_library(${PROJECT_NAME} SHARED
     src/keycard/storage_kycd_tier_seed_sys.cpp
     src/keycard/storage_kycd_vld_sys.cpp
     src/keycard/storage_kycd_lnk_sys.cpp
+    src/keycard/storage_kycd_lnk_cnt_sys.cpp
     src/keycard/storage_kycd_sess_cln_sys.cpp
     src/keycard/storage_kycd_cwrd_pub_sys.cpp
     src/keycard/storage_edge_kycd_res_drn_sys.cpp
@@ -318,6 +327,7 @@ add_library(${PROJECT_NAME} SHARED
     ]]
     src/workflow/storage_wflw_ini_sys.cpp
     src/workflow/storage_wflw_drn_sys.cpp
+    src/workflow/storage_wflw_stge_sys.cpp
     src/workflow/storage_edge_wflw_fwd_rcv_sys.cpp
     src/workflow/storage_wflw_gate_sys.cpp
     src/workflow/storage_wflw_tran_sys.cpp
@@ -384,7 +394,8 @@ target_link_libraries(${PROJECT_NAME}
         ase::types        # Layer 0 - Type helpers (is_not_found)
         ase::containers   # Layer 0 - HashMap/Vector (ResourceManager storage)
         ase::crypto       # Layer 0 - HMAC-SHA256 for keycard validation (OpenSSL wrapper)
-        ase::hub          # Hub API 2.0 (client identity via Mirror Tags)
+        ase::hub          # Hub API 2.0 (client identity via Mirror Tags; the promote requests HUB_STG_WFLW_REQ this owner takes)
+        # VERBOTEN: ase::sdk - the SDK is the door of the plugins; a module reaches the star through ase::hub.
         ase::transport    # Layer 1 - WS lane queues (edge keycard-authz fetch: emit/drain the BIN_MSG_EDGE_KYCD_REQ/RES frames; the L2 kernel demux owns the socket)
 )
 

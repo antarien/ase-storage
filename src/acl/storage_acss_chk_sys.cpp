@@ -328,7 +328,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         const uint32_t path_len = ase::utils::str_len(req.path, MAX_PATH_LEN);
         path_prefix_hashes(req.path, path_len, pfx_hash);
 
-        // ── Step 3: LATTICE ─ cross-realm access requires a valid, bilateral link.
+        //Step 3: LATTICE ─ cross-realm access requires a valid, bilateral link.
         // A request whose path lies in another realm's shared prefix is only admissible
         // through an approved, unexpired lattice link; the link caps clearance and perms.
         // Owner-preset access stays within the owner's own realm hierarchy (no link needed).
@@ -395,7 +395,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
         }
 
-        // ── Step 4: CLEARANCE ─ vertical Schutzstufe gate (public realm rule keeps PUBLIC)
+        //Step 4: CLEARANCE ─ vertical Schutzstufe gate (public realm rule keeps PUBLIC)
         if (eff_clrn < rslv.required_protection) {
             registry.emplace<StorageAcssDenyTag>(entity);
             auto aud_ent = registry.create();
@@ -413,7 +413,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             continue;
         }
 
-        // ── Step 5: CODEWORD ─ horizontal gate; keycard must hold EVERY required codeword.
+        //Step 5: CODEWORD ─ horizontal gate; keycard must hold EVERY required codeword.
         // The owner-preset wildcard satisfies any requirement; a held "ALL" codeword too.
         // The public realm carries no required codewords, so public reads pass unaffected.
         if (rslv.matched_rule != INVALID_ENTITY && !owner_preset) {
@@ -460,7 +460,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
         }
 
-        // ── Step 6: PERMISSION ─ action bitflag gate (owner preset holds all flags)
+        //Step 6: PERMISSION ─ action bitflag gate (owner preset holds all flags)
         if (!(eff_perm & required_perm)) {
             registry.emplace<StorageAcssDenyTag>(entity);
             auto aud_ent = registry.create();
@@ -478,7 +478,7 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             continue;
         }
 
-        // ── DIE FUENF SCHLUESSEL-TORE HABEN GEHALTEN ─ die Anfrage geht an die Politik-Tore.
+        //DIE FUENF SCHLUESSEL-TORE HABEN GEHALTEN ─ die Anfrage geht an die Politik-Tore.
         // KEINE PRUEFSPUR HIER, und das ist die Naht: entschieden ist noch nichts. Eine Zeile,
         // die "gewaehrt" oder "abgelehnt" behauptet, gehoert an den Ausgang, der es entscheidet,
         // und der liegt in StorageAcssPolSystem auf Sprosse 10.

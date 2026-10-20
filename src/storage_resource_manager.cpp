@@ -5,12 +5,14 @@
  * @brief       StorageResourceManager - Flyweight storage + realm paths + filesystem I/O
  * @description Platform developer authentication + realm filesystem. Components store ONLY uint32_t IDs.
  *
+ * @usecase     usecase:100265 - check access clearance
+ *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    ecs/resource
  * @created     2026-04-05
- * @modified    2026-04-05
- * @version     1.0.0
+ * @modified    2026-10-18
+ * @version     1.1.0
  *
  * ECS RESOURCE MANAGER IMPLEMENTATION COMPLIANCE
  *
@@ -39,80 +41,16 @@
 #include <ase/utils/strops.hpp>
 
 #include <cstring>
-#include <cstdlib>
 #include <cstdio>
 #include <ctime>
 #include <sys/stat.h>
 #include <dirent.h>
 #include <unistd.h>
-#include <ase/crypto/hmac.hpp>
-#include <ase/crypto/compare.hpp>
+#include <ase/crypto/jwt.hpp>
 
 namespace ase::storage {
 
 namespace {
-
-int b64url_decode_char(char c) {
-    if (c >= 'A' && c <= 'Z') return c - 'A';
-    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
-    if (c >= '0' && c <= '9') return c - '0' + 52;
-    if (c == '-') return 62;
-    if (c == '_') return 63;
-    return -1;
-}
-
-uint32_t b64url_decode(const char* in, uint16_t in_len, char* out, uint32_t out_max) {
-    uint32_t olen = 0;
-    uint32_t acc = 0;
-    int bits = 0;
-    for (uint16_t i = 0; i < in_len && olen < out_max; ++i) {
-        int val = b64url_decode_char(in[i]);
-        if (val < 0) continue;
-        acc = (acc << 6) | static_cast<uint32_t>(val);
-        bits += 6;
-        if (bits >= 8) {
-            bits -= 8;
-            out[olen++] = static_cast<char>((acc >> bits) & 0xFF);
-        }
-    }
-    return olen;
-}
-
-uint16_t json_extract(const char* json, uint32_t jlen,
-                       const char* key, uint16_t klen,
-                       char* out, uint16_t omax) {
-    for (uint32_t i = 0; i + klen + 4 < jlen; ++i) {
-        if (json[i] != '"') continue;
-        bool match = true;
-        for (uint16_t k = 0; k < klen; ++k) {
-            if (json[i + 1 + k] != key[k]) { match = false; break; }
-        }
-        if (!match || json[i + 1 + klen] != '"') continue;
-        uint32_t vi = i + 1 + klen + 1;
-        while (vi < jlen && (json[vi] == ':' || json[vi] == ' ')) ++vi;
-        if (vi >= jlen) return 0;
-        if (json[vi] == '"') {
-            ++vi;
-            uint16_t ol = 0;
-            while (vi < jlen && json[vi] != '"' && ol < omax - 1) out[ol++] = json[vi++];
-            out[ol] = '\0';
-            return ol;
-        }
-        uint16_t ol = 0;
-        while (vi < jlen && json[vi] != ',' && json[vi] != '}' && ol < omax - 1) out[ol++] = json[vi++];
-        out[ol] = '\0';
-        return ol;
-    }
-    return 0;
-}
-
-uint64_t parse_u64(const char* s, uint16_t len) {
-    uint64_t r = 0;
-    for (uint16_t i = 0; i < len; ++i) {
-        if (s[i] >= '0' && s[i] <= '9') r = r * 10 + static_cast<uint64_t>(s[i] - '0');
-    }
-    return r;
-}
 
 void mkdir_recursive(const char* path) {
     char buf[512];
@@ -150,9 +88,7 @@ uint64_t dir_size_recursive(const char* path) {
 
 }  // anonymous namespace
 
-// =============================================================================
 // JWT SECRET MANAGEMENT
-// =============================================================================
 
 void StorageResourceManager::set_jwt_secret(const char* secret, uint16_t len) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -172,9 +108,7 @@ uint16_t StorageResourceManager::get_jwt_secret_len() const {
     return jwt_secret_len_;
 }
 
-// =============================================================================
 // TOKEN STRING STORAGE (Flyweight)
-// =============================================================================
 
 uint32_t StorageResourceManager::store_token(const char* token, uint16_t len) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -210,9 +144,7 @@ void StorageResourceManager::remove_token(uint32_t id) {
     token_entries_.erase(id);
 }
 
-// =============================================================================
 // TOKEN BUFFER (thread-safe push/drain)
-// =============================================================================
 
 void StorageResourceManager::push_pending_token(uint32_t client_id, uint32_t token_id) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -237,9 +169,7 @@ void StorageResourceManager::drain_clear() {
     pending_tokens_.clear();
 }
 
-// =============================================================================
 // JWT VALIDATION
-// =============================================================================
 
 StorageResourceManager::ValidationResult StorageResourceManager::validate_jwt(uint32_t token_id) const {
     ValidationResult result{};
@@ -257,65 +187,31 @@ StorageResourceManager::ValidationResult StorageResourceManager::validate_jwt(ui
 
     if (jwt_secret_len_ < 1) return result;
 
-    int dot1 = -1;
-    int dot2 = -1;
-    for (int i = 0; i < static_cast<int>(token_len); ++i) {
-        if (token[i] == '.') {
-            if (dot1 < 0) dot1 = i;
-            else { dot2 = i; break; }
-        }
-    }
-    if (dot1 < 0 || dot2 < 0) return result;
-
-    std::uint8_t expected[ase::crypto::HMAC_SHA256_SIZE];
-    if (!ase::crypto::hmac_sha256(jwt_secret_buf_, jwt_secret_len_,
-                                   token, static_cast<size_t>(dot2),
-                                   expected)) {
-        return result;
-    }
-
-    const char* sig_b64 = token + dot2 + 1;
-    uint16_t sig_b64_len = token_len - static_cast<uint16_t>(dot2) - 1;
-    char actual[32];
-    uint32_t actual_len = b64url_decode(sig_b64, sig_b64_len, actual, 32);
-
-    if (actual_len != ase::crypto::HMAC_SHA256_SIZE) return result;
-    if (!ase::crypto::constant_time_equal(actual, expected, ase::crypto::HMAC_SHA256_SIZE)) {
-        return result;
-    }
-
-    const char* payload_b64 = token + dot1 + 1;
-    uint16_t payload_b64_len = static_cast<uint16_t>(dot2 - dot1 - 1);
-    char payload[1024];
-    uint32_t payload_len = b64url_decode(payload_b64, payload_b64_len, payload, 1024);
-
-    char sub_val[64] = {};
+    // ONE HS256 CHECK for every module that admits a token of the login server
+    // (clients/aut-client-web): ase::crypto verifies alg, signature and expiry and writes
+    // sub, type and exp only after all of them passed. An expired token opens no realm.
     char type_val[16] = {};
-    char exp_val[32] = {};
-    uint16_t sub_len = json_extract(payload, payload_len, "sub", 3, sub_val, 64);
-    json_extract(payload, payload_len, "type", 4, type_val, 16);
-    uint16_t exp_len = json_extract(payload, payload_len, "exp", 3, exp_val, 32);
+    uint64_t expires_at = 0;
+    if (!ase::crypto::hs256_jwt_verify(token, token_len, jwt_secret_buf_, jwt_secret_len_,
+                                       result.user_id, sizeof(result.user_id),
+                                       type_val, sizeof(type_val), expires_at)) {
+        return result;
+    }
 
+    // Only an access token grants access; the issuer also signs refresh, temp and device.
     result.valid = true;
-    std::memcpy(result.user_id, sub_val, 64);
-    result.expires_at = parse_u64(exp_val, exp_len);
-    result.is_access = (sub_len > 0 && type_val[0] == 'a');
-    (void)sub_len;
-
+    result.expires_at = expires_at;
+    result.is_access = (result.user_id[0] != '\0' && std::strcmp(type_val, "access") == 0);
     return result;
 }
 
-// =============================================================================
 // WALL CLOCK
-// =============================================================================
 
 uint64_t StorageResourceManager::get_wall_time_seconds() const {
     return static_cast<uint64_t>(time(nullptr));
 }
 
-// =============================================================================
 // REALM PATH RESOLUTION
-// =============================================================================
 
 void StorageResourceManager::set_data_dir(const char* path) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -342,9 +238,7 @@ void StorageResourceManager::resolve_path(const char* realm_id, const char* proj
     }
 }
 
-// =============================================================================
 // FILESYSTEM I/O
-// =============================================================================
 
 bool StorageResourceManager::ensure_dir(const char* path) {
     mkdir_recursive(path);
@@ -391,9 +285,7 @@ uint64_t StorageResourceManager::file_size(const char* path) const {
     return static_cast<uint64_t>(st.st_size);
 }
 
-// =============================================================================
 // REALM STORAGE METRICS
-// =============================================================================
 
 uint64_t StorageResourceManager::get_realm_usage(const char* realm_id) const {
     char realm_path[512];
@@ -404,9 +296,7 @@ uint64_t StorageResourceManager::get_realm_usage(const char* realm_id) const {
     return dir_size_recursive(realm_path);
 }
 
-// =============================================================================
 // BULK CLEANUP
-// =============================================================================
 
 void StorageResourceManager::clear_all() {
     std::lock_guard<std::mutex> lock(mutex_);

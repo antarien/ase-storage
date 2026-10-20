@@ -8,9 +8,11 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Initialization
+ * @design      DSGN_021
+ * @usecase     usecase:100264 - issue customer keycard
  * @created     2026-04-05
- * @modified    2026-06-24
- * @version     1.0.0
+ * @modified    2026-10-14
+ * @version     1.0.1
  *
  * CAUSAL CHAIN (Storage Initialization)
  *
@@ -34,6 +36,12 @@
  *          │ Manager entity + ResourceManager + Realms ready
  *          ▼
  *   StorageKycdDrnSystem drains tokens from ResourceManager
+ *
+ * THE DATA DIRECTORY FOLLOWS THE ENVIRONMENT, ELSE THE WORKING DIRECTORY. ASE_DATA_DIR names it
+ * (on the server /opt/ase/data); without it the fallback clients/ase-client-web/public is a
+ * RELATIVE path and resolves against the working directory of the process. A tier started
+ * anywhere but the repository root without ASE_DATA_DIR therefore creates its realm directories
+ * in the wrong place, and nothing reports it.
  *
  * HUB Pattern (N/A - No Hub reads/writes)
  *
@@ -167,7 +175,7 @@ namespace {
 
 // No helper functions needed → all logic inline in on_start()
 
-}  // anonymous namespace
+}  // namespace
 
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
@@ -180,11 +188,11 @@ void StorageIniSystem::on_start(ecs::Registry& registry) {
     registry.emplace<StorageMgrTag>(entity);
 
     /**
-     * DIE ZAEHLZEILE ENTSTEHT MIT DEM VERWALTER, nicht bei der ersten Ausstellung.
+     * THE COUNTER ROW ARISES WITH THE MANAGER, not with the first keycard issued.
      *
-     * Sonst haette StorageKycdStatPubSystem in jedem Takt vor der ersten Karte eine leere
-     * Sicht und meldete gar nichts - eine Null, die fehlt, ist von einer Null, die stimmt,
-     * nicht zu unterscheiden.
+     * Otherwise StorageKycdStatPubSystem would see an empty view in every tick before the first
+     * card and report nothing at all - a zero that is missing cannot be told from a zero that
+     * is right.
      */
     registry.emplace<StorageStaKycdStatComponent>(entity);
 
@@ -201,21 +209,19 @@ void StorageIniSystem::on_start(ecs::Registry& registry) {
         mgr.set_jwt_secret(secret, len);
         log::info("[StorageIni] JWT secret loaded ({} bytes)", len);
     } else {
-        // CONFIG_MISSING (ERR::CAT, SSOT core/ase-log/data/log_categories.json — die Kategorie
-        // IST ihr Name; die frueher hier genannte Nummer gibt es seit dem Hash-Umbau nicht
-        // mehr, und sie war ab da still falsch): "Env/config value absent —
-        // lives BEFORE the registry". Woertlich dieser Fall — es gibt dazu keine Hub-Zeile,
-        // keine Entity und keine Component, der Wert kommt aus der .env des Tiers.
-        // Ebene error statt warn: ein fehlendes Signaturgeheimnis ist kein ungueltiger Wert,
-        // sondern ein fehlender. Der Hilfetext ist eine Checkliste (".env geladen? Tippfehler?
-        // leer?") und sagt keine Korrektur zu, das `return`/Weiterlaufen darunter ist also
-        // unbedenklich.
+        // CONFIG_MISSING (ERR::CAT, SSOT core/ase-log/data/log_categories.json - the category IS
+        // its name): an environment or configuration value is absent before the registry. Here
+        // that is literally the case - no hub row, no entity and no component carries it, the
+        // value comes from the .env of the tier. Error level, not warn: a missing signing secret
+        // is not an invalid value but an absent one. The help text is a checklist and promises
+        // no correction, so running on below is sound.
         log::error(log::ERR::CAT::CONFIG_MISSING, "StorageIniSystem", "AUTH_JWT_SECRET");
     }
 
     // Set data directory: ASE_DATA_DIR env
     // Server (Hetzner):  ASE_DATA_DIR=/opt/ase/data
     // Local (dev):       ASE_DATA_DIR=clients/ase-client-web/public
+    // Without it the fallback is relative and resolves against the working directory.
     const char* data_dir = std::getenv("ASE_DATA_DIR");
     if (data_dir) {
         mgr.set_data_dir(data_dir);

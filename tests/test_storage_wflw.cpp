@@ -6,7 +6,7 @@
  * Drives the REAL StorageWflwTranSystem over the data-driven transition graph
  * (die Kanten): the allowed edges draft→review→approved→released→retired are
  * seeded exactly as StorageWflwEdgeIniSystem seeds them, requests are the same
- * StorageReqWflwTranComponent + StorageWflwPendTag entities StorageWflwDrnSystem
+ * StorageReqWflwTranComponent + StorageWflwPendTag entities StorageWflwStgeSystem
  * stages, and every verdict is asserted on the REAL side effects — the ACL rule
  * label, the owner-scoped STG_WFLW_RES Hub verdict, the attributed audit entity
  * (AUD_PROMOTE + requester user_id) and the frame-112 persist buffer. No
@@ -16,6 +16,9 @@
 
 #include <ase/storage/storage_module.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_tran_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_drn_sys.hpp>
+#include <ase/storage/systems/workflow/storage_wflw_stge_sys.hpp>
+#include <ase/storage/components/tag/storage_wflw_rcv_tag.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_perm_sys.hpp>
 #include <ase/storage/components/request/storage_req_wflw_tran_comp.hpp>
 #include <ase/storage/components/state/storage_wflw_edge_comp.hpp>
@@ -103,7 +106,7 @@ Entity seed_realm_and_rule(Registry& reg, const char* start_label) {
     return rule_ent;
 }
 
-// Stage a promote request exactly as StorageWflwDrnSystem does (sans gate tag —
+// Stage a promote request exactly as StorageWflwStgeSystem does (sans gate tag —
 // these tests exercise the EDGE validation, not the released artifact gate).
 Entity stage_request(Registry& reg, const char* target) {
     auto req_ent = reg.create();
@@ -121,12 +124,32 @@ void grant_promote(Registry& reg, uint16_t perm) {
     ase::hub::set(reg, owner, "SES_KYCD_PERM"_hs, static_cast<float>(perm));
 }
 
-// DIE ANWESENHEIT WIRD HIER ZUGESICHERT UND NICHT AN DIE VIER AUFRUFER DELEGIERT — und das ist
-// der Unterschied zu einer echten Fassade. Bei sdk::get darf keine Pruefung stehen, weil der
-// AUFRUFER weiss, ob ein fehlender Wert ein Fehler ist; eine Pruefung dort naehme jedem Aufrufer
-// den Rohwert weg. Hier ist die Lage umgekehrt und gemessen: alle vier Aufrufstellen (200, 273,
-// 338, 392) vergleichen gegen ein erwartetes Urteil, keine einzige haelt sein Fehlen fuer
-// zulaessig, und -1.0f kommt in der ganzen Datei nur in dieser einen Zeile vor.
+// The contract widths of HUB_STG_WFLW_REQ as the hub loader stands them from hub_constants.json; this
+// test does not run the loader, so it stands the values itself (usecase:100329).
+void stand_wflw_widths(Registry& reg) {
+    ase::hub::set(reg, ase::hub::GLOBAL, "STG_CONST_WFLW_PATH_BYTES"_hs, 255.0f);
+    ase::hub::set(reg, ase::hub::GLOBAL, "STG_CONST_WFLW_LABEL_BYTES"_hs, 31.0f);
+    ase::hub::set(reg, ase::hub::GLOBAL, "STG_CONST_WFLW_REQUESTER_BYTES"_hs, 63.0f);
+}
+
+// A promote row as a plugin files it with the general SDK blocks (row_create, set_bytes at each
+// string's own length); here reached as hub::row_create and hub::set_bytes.
+Entity file_promote(Registry& reg, const char* path, uint32_t path_len, const char* label) {
+    const auto bridge = ase::hub::row_create(reg, "HUB_STG_WFLW_REQ"_hs);
+    const uint32_t row = static_cast<uint32_t>(bridge);
+    ase::hub::set_bytes(reg, row, "HUB_STG_WFLW_REQ_PATH"_hs, path, path_len);
+    ase::hub::set_bytes(reg, row, "HUB_STG_WFLW_REQ_TARGET_LABEL"_hs, label,
+                        ase::utils::str_len(label, MAX_LABEL_LEN));
+    ase::hub::set_bytes(reg, row, "HUB_STG_WFLW_REQ_REQUESTED_BY"_hs, kOperator,
+                        ase::utils::str_len(kOperator, MAX_OWNER_ID));
+    return bridge;
+}
+
+// DIE ANWESENHEIT WIRD HIER ZUGESICHERT UND NICHT AN DIE AUFRUFER DELEGIERT. Bei sdk::get darf
+// keine Pruefung stehen, weil der AUFRUFER weiss, ob ein fehlender Wert ein Fehler ist; eine
+// Pruefung dort naehme jedem Aufrufer den Rohwert weg. Hier ist die Lage umgekehrt: jede
+// Aufrufstelle von read_verdict vergleicht gegen ein erwartetes Urteil, keine haelt sein Fehlen
+// fuer zulaessig, und -1.0f kommt in der ganzen Datei nur in dieser einen Zeile vor.
 //
 // WAS DIE ZEILE VERHINDERT: ohne sie ist "das System hat ein falsches Urteil veroeffentlicht"
 // von "das System hat ueberhaupt nichts veroeffentlicht" nicht zu unterscheiden — beide enden
@@ -143,51 +166,31 @@ float read_verdict(Registry& reg) {
 // DER VERWALTER LIEGT IN ALLEN SECHS FAELLEN AUF DEM STAPEL, der ctx bekommt seine ADRESSE.
 // Diese Begruendung gilt fuer die ganze Datei und steht deshalb einmal hier.
 //
-// Vorher stand in jedem Fall `auto* mgr = new StorageResourceManager();` mit einem `delete mgr;`
-// am Ende. Der ctx nimmt weiterhin einen ZEIGER (StorageResourceManager*), so wie der
-// Produktivcode ihn erwartet — nur der Besitz wandert vom Freispeicher auf den Stapel.
-//
-// ES IST NICHT NUR FORMKONFORM, SONDERN SICHERER: das `delete` stand am ENDE des Falles. Bricht
-// ein REQUIRE davor ab, wird es nie erreicht und der Verwalter leckt. Ein Stapelobjekt raeumt auf
-// jedem Weg aus dem Block auf, auch auf dem, den niemand vorsah.
+// Der ctx nimmt einen ZEIGER (StorageResourceManager*), so wie der Produktivcode ihn erwartet;
+// den Besitz haelt der Stapel. Ein Stapelobjekt raeumt auf jedem Weg aus dem Block auf, auch
+// dann, wenn ein REQUIRE den Fall vorzeitig abbricht.
 //
 // ZUR LEBENSDAUER, weil die Reihenfolge hier zaehlt: `mgr` steht NACH `App app;`, wird also VOR
 // ihm zerstoert. Der ctx haelt danach einen ungueltigen Zeiger — unbedenklich, weil ein roher
 // Zeiger beim Zerstoeren nicht dereferenziert wird und die Systeme zu diesem Zeitpunkt ueber
-// app.shutdown() bereits stehen. Wer hier spaeter etwas einbaut, das den Zeiger IM Destruktor von
-// App liest, muss `mgr` vor `app` deklarieren.
+// app.shutdown() bereits stehen. Wer hier etwas einbaut, das den Zeiger IM Destruktor von App
+// liest, muss `mgr` vor `app` deklarieren.
 //
-// ZWEI STELLEN LASEN DEN VERWALTER MIT `mgr->`, und der Umbau hat sie mitgezogen (jetzt `mgr.`).
-// Das war kein Nebenschauplatz: haette ich nur die Anlage getauscht, waere die Datei nicht mehr
-// uebersetzbar gewesen — und der Validator haette das NICHT gemeldet, weil er Quelltext prueft
-// und keine Uebersetzbarkeit. Gefunden hat es der Sprachdienst, belegt die Syntaxprobe.
+// DIE KETTE IST DIE DER PRODUKTION, in allen vier Kettenfaellen: Index, Rechtetor, Uebergang.
+// Der Index ist Produktionsverdrahtung und kein Geruest: StorageWflwTranSystem liest seine
+// Realm-Regeln aus ihm, ohne ihn liefe ein System, das nichts findet, und der Fall bestuende oder
+// scheiterte aus dem falschen Grund. Das Rechtetor StorageWflwPermSystem prueft die
+// PERM_PROMOTE-Achse der Keycard-Sitzung, schliesst seine Ablehnungen im selben Tick ab und laesst
+// nur Berechtigte weiter; der Uebergang setzt voraus, dass, was bei ihm ankommt, berechtigt ist,
+// und storage_module.hpp verdrahtet die Kette Perm → Ini → Tran. Ohne das Tor waere
+// `grant_promote()` in jedem Fall wirkungslos, und die Zusage „ohne PERM_PROMOTE wird
+// fail-closed abgelehnt“ wuerde von niemandem geprueft: der Uebergang wendete dann nach seinem
+// eigenen Vertrag korrekt an, und STG_WFLW_RES stuende auf WFLW_RES_APPLIED statt
+// WFLW_RES_DENIED_PERM. Ein Test, der die Produktionskette nur zur Haelfte aufbaut, misst eine
+// Ordnung, die es nicht gibt.
 TEST_CASE("workflow edges: allowed transition applies label + attributed audit + persist buffer") {
     App app;
     app.set_source("ase-storage");
-    // The index is production wiring, not test scaffolding: StorageWflwTranSystem reads
-    // its realm rules from it, so a run without it would exercise a system that finds
-    // nothing and would pass or fail for the wrong reason.
-    //
-    // DASSELBE GILT FUER DAS RECHTETOR, UND HIER FEHLTE ES (nachgezogen 2026-08-31).
-    //
-    // Die Berechtigung ist seit dem 2026-08-29 ein EIGENES System: StorageWflwPermSystem
-    // prueft die PERM_PROMOTE-Achse der Keycard-Sitzung, schliesst seine Ablehnungen im
-    // selben Tick ab und laesst nur Berechtigte weiter — `storage_wflw_tran_sys.cpp:244-254`
-    // sagt es ausdruecklich: „Was hier ankommt, ist bereits berechtigt."
-    // `storage_module.hpp:207-212` verdrahtet die Kette Perm → Ini → Tran.
-    //
-    // Diese Datei registrierte nur Idx + Tran. Damit lief das Rechtetor NIE, und der Fall
-    // „requester without PERM_PROMOTE is denied fail-closed" mass eine Aufstellung, die
-    // die Frage gar nicht beantworten kann: STG_WFLW_RES stand auf WFLW_RES_APPLIED (1)
-    // statt WFLW_RES_DENIED_PERM (4), weil der Uebergang nach seinem eigenen Vertrag
-    // korrekt anwandte. Der Code war richtig; die VERDRAHTUNG des Tests war es nicht.
-    //
-    // DIE SCHWERERE HAELFTE IST NICHT DER ROTE TEST, SONDERN DIE STILLE: solange das System
-    // hier fehlte, war `grant_promote()` in JEDEM Fall dieser Datei wirkungslos — die Zusage
-    // „ohne PERM_PROMOTE wird fail-closed abgelehnt" wurde von NIEMANDEM geprueft. Deshalb
-    // steht das Tor jetzt in allen vier Kettenfaellen und nicht nur in dem, der rot war:
-    // ein Test, der die Produktionskette nur zur Haelfte aufbaut, misst eine Ordnung, die
-    // es nicht gibt.
     app.add_system<StorageAcssIdxSystem>(Schedule::Integration);
     app.add_system_with<StorageWflwPermSystem>(Schedule::Integration)
         .run_after("StorageAcssIdxSystem");
@@ -239,30 +242,6 @@ TEST_CASE("workflow edges: allowed transition applies label + attributed audit +
 TEST_CASE("workflow edges: forbidden edge (draft to released) is denied, label untouched") {
     App app;
     app.set_source("ase-storage");
-    // The index is production wiring, not test scaffolding: StorageWflwTranSystem reads
-    // its realm rules from it, so a run without it would exercise a system that finds
-    // nothing and would pass or fail for the wrong reason.
-    //
-    // DASSELBE GILT FUER DAS RECHTETOR, UND HIER FEHLTE ES (nachgezogen 2026-08-31).
-    //
-    // Die Berechtigung ist seit dem 2026-08-29 ein EIGENES System: StorageWflwPermSystem
-    // prueft die PERM_PROMOTE-Achse der Keycard-Sitzung, schliesst seine Ablehnungen im
-    // selben Tick ab und laesst nur Berechtigte weiter — `storage_wflw_tran_sys.cpp:244-254`
-    // sagt es ausdruecklich: „Was hier ankommt, ist bereits berechtigt."
-    // `storage_module.hpp:207-212` verdrahtet die Kette Perm → Ini → Tran.
-    //
-    // Diese Datei registrierte nur Idx + Tran. Damit lief das Rechtetor NIE, und der Fall
-    // „requester without PERM_PROMOTE is denied fail-closed" mass eine Aufstellung, die
-    // die Frage gar nicht beantworten kann: STG_WFLW_RES stand auf WFLW_RES_APPLIED (1)
-    // statt WFLW_RES_DENIED_PERM (4), weil der Uebergang nach seinem eigenen Vertrag
-    // korrekt anwandte. Der Code war richtig; die VERDRAHTUNG des Tests war es nicht.
-    //
-    // DIE SCHWERERE HAELFTE IST NICHT DER ROTE TEST, SONDERN DIE STILLE: solange das System
-    // hier fehlte, war `grant_promote()` in JEDEM Fall dieser Datei wirkungslos — die Zusage
-    // „ohne PERM_PROMOTE wird fail-closed abgelehnt" wurde von NIEMANDEM geprueft. Deshalb
-    // steht das Tor jetzt in allen vier Kettenfaellen und nicht nur in dem, der rot war:
-    // ein Test, der die Produktionskette nur zur Haelfte aufbaut, misst eine Ordnung, die
-    // es nicht gibt.
     app.add_system<StorageAcssIdxSystem>(Schedule::Integration);
     app.add_system_with<StorageWflwPermSystem>(Schedule::Integration)
         .run_after("StorageAcssIdxSystem");
@@ -304,30 +283,6 @@ TEST_CASE("workflow edges: forbidden edge (draft to released) is denied, label u
 TEST_CASE("workflow edges: requester without PERM_PROMOTE is denied fail-closed") {
     App app;
     app.set_source("ase-storage");
-    // The index is production wiring, not test scaffolding: StorageWflwTranSystem reads
-    // its realm rules from it, so a run without it would exercise a system that finds
-    // nothing and would pass or fail for the wrong reason.
-    //
-    // DASSELBE GILT FUER DAS RECHTETOR, UND HIER FEHLTE ES (nachgezogen 2026-08-31).
-    //
-    // Die Berechtigung ist seit dem 2026-08-29 ein EIGENES System: StorageWflwPermSystem
-    // prueft die PERM_PROMOTE-Achse der Keycard-Sitzung, schliesst seine Ablehnungen im
-    // selben Tick ab und laesst nur Berechtigte weiter — `storage_wflw_tran_sys.cpp:244-254`
-    // sagt es ausdruecklich: „Was hier ankommt, ist bereits berechtigt."
-    // `storage_module.hpp:207-212` verdrahtet die Kette Perm → Ini → Tran.
-    //
-    // Diese Datei registrierte nur Idx + Tran. Damit lief das Rechtetor NIE, und der Fall
-    // „requester without PERM_PROMOTE is denied fail-closed" mass eine Aufstellung, die
-    // die Frage gar nicht beantworten kann: STG_WFLW_RES stand auf WFLW_RES_APPLIED (1)
-    // statt WFLW_RES_DENIED_PERM (4), weil der Uebergang nach seinem eigenen Vertrag
-    // korrekt anwandte. Der Code war richtig; die VERDRAHTUNG des Tests war es nicht.
-    //
-    // DIE SCHWERERE HAELFTE IST NICHT DER ROTE TEST, SONDERN DIE STILLE: solange das System
-    // hier fehlte, war `grant_promote()` in JEDEM Fall dieser Datei wirkungslos — die Zusage
-    // „ohne PERM_PROMOTE wird fail-closed abgelehnt" wurde von NIEMANDEM geprueft. Deshalb
-    // steht das Tor jetzt in allen vier Kettenfaellen und nicht nur in dem, der rot war:
-    // ein Test, der die Produktionskette nur zur Haelfte aufbaut, misst eine Ordnung, die
-    // es nicht gibt.
     app.add_system<StorageAcssIdxSystem>(Schedule::Integration);
     app.add_system_with<StorageWflwPermSystem>(Schedule::Integration)
         .run_after("StorageAcssIdxSystem");
@@ -356,30 +311,6 @@ TEST_CASE("workflow edges: requester without PERM_PROMOTE is denied fail-closed"
 TEST_CASE("workflow edges: full chain draft to review to approved to released to retired") {
     App app;
     app.set_source("ase-storage");
-    // The index is production wiring, not test scaffolding: StorageWflwTranSystem reads
-    // its realm rules from it, so a run without it would exercise a system that finds
-    // nothing and would pass or fail for the wrong reason.
-    //
-    // DASSELBE GILT FUER DAS RECHTETOR, UND HIER FEHLTE ES (nachgezogen 2026-08-31).
-    //
-    // Die Berechtigung ist seit dem 2026-08-29 ein EIGENES System: StorageWflwPermSystem
-    // prueft die PERM_PROMOTE-Achse der Keycard-Sitzung, schliesst seine Ablehnungen im
-    // selben Tick ab und laesst nur Berechtigte weiter — `storage_wflw_tran_sys.cpp:244-254`
-    // sagt es ausdruecklich: „Was hier ankommt, ist bereits berechtigt."
-    // `storage_module.hpp:207-212` verdrahtet die Kette Perm → Ini → Tran.
-    //
-    // Diese Datei registrierte nur Idx + Tran. Damit lief das Rechtetor NIE, und der Fall
-    // „requester without PERM_PROMOTE is denied fail-closed" mass eine Aufstellung, die
-    // die Frage gar nicht beantworten kann: STG_WFLW_RES stand auf WFLW_RES_APPLIED (1)
-    // statt WFLW_RES_DENIED_PERM (4), weil der Uebergang nach seinem eigenen Vertrag
-    // korrekt anwandte. Der Code war richtig; die VERDRAHTUNG des Tests war es nicht.
-    //
-    // DIE SCHWERERE HAELFTE IST NICHT DER ROTE TEST, SONDERN DIE STILLE: solange das System
-    // hier fehlte, war `grant_promote()` in JEDEM Fall dieser Datei wirkungslos — die Zusage
-    // „ohne PERM_PROMOTE wird fail-closed abgelehnt" wurde von NIEMANDEM geprueft. Deshalb
-    // steht das Tor jetzt in allen vier Kettenfaellen und nicht nur in dem, der rot war:
-    // ein Test, der die Produktionskette nur zur Haelfte aufbaut, misst eine Ordnung, die
-    // es nicht gibt.
     app.add_system<StorageAcssIdxSystem>(Schedule::Integration);
     app.add_system_with<StorageWflwPermSystem>(Schedule::Integration)
         .run_after("StorageAcssIdxSystem");
@@ -434,7 +365,8 @@ TEST_CASE("workflow retention: retired build older than 90 days is swept with ru
     auto& retr = reg.emplace<StorageWflwRetrComponent>(retr_ent);
     ase::utils::str_copy(retr.path, MAX_PATH_LEN, kAsset);
     retr.rule_ref = static_cast<uint32_t>(rule_ent);
-    retr.retired_at = now - WFLW_RETIRED_RETENTION_S - 100;
+    const uint64_t retired_long_ago = now - WFLW_RETIRED_RETENTION_S - 100;
+    retr.retired_at = retired_long_ago;
     reg.emplace<StorageWflwRetrTag>(retr_ent);
 
     app.run_schedule(Schedule::Observation, 1.0f);
@@ -475,7 +407,8 @@ TEST_CASE("workflow retention: retired build within 90 days is kept, not swept")
     auto& retr = reg.emplace<StorageWflwRetrComponent>(retr_ent);
     ase::utils::str_copy(retr.path, MAX_PATH_LEN, kAsset);
     retr.rule_ref = static_cast<uint32_t>(rule_ent);
-    retr.retired_at = now - 100;
+    const uint64_t retired_just_now = now - 100;
+    retr.retired_at = retired_just_now;
     reg.emplace<StorageWflwRetrTag>(retr_ent);
 
     app.run_schedule(Schedule::Observation, 1.0f);
@@ -496,4 +429,127 @@ TEST_CASE("workflow retention: retired build within 90 days is kept, not swept")
     CHECK(del_audits == 0);
 
     app.shutdown();
+}
+
+// usecase:100329 - stage workflow promotion. The row below is the one a plugin files through the
+// general SDK blocks, sdk::row_create and sdk::set_bytes (the contract of HUB_STG_WFLW_REQ in
+// modules/ase-hub/data/hub_rows.json): the three strings as byte fields at their own length
+// (register A0902). Inside this L3 test the same blocks are reached as hub::row_create and
+// hub::set_bytes.
+TEST_CASE("the drain takes a filed promote row into a received request the staging marks pending") {
+    Registry reg;
+    StorageWflwDrnSystem drn;
+    StorageWflwStgeSystem stge;
+    stand_wflw_widths(reg);
+    file_promote(reg, kAsset, ase::utils::str_len(kAsset, MAX_PATH_LEN), EDGE_LABEL_RELEASED);
+
+    drn.tick(reg, 0.0f);
+
+    // The row is taken and the request stands received with all three strings; nothing is
+    // staged and no verdict is published before the staging runs.
+    CHECK(ase::hub::row_count(reg, "HUB_STG_WFLW_REQ"_hs) == 0u);
+    CHECK(reg.view<StorageReqWflwTranComponent, StorageWflwRcvTag>().size_hint() == 1u);
+    CHECK(reg.view<StorageReqWflwTranComponent, StorageWflwPendTag>().size_hint() == 0u);
+    CHECK_FALSE(ase::hub::is_measured(reg, entt::hashed_string(kAsset).value(), "STG_WFLW_RES"_hs));
+
+    stge.tick(reg, 0.0f);
+
+    // Staged: pending, no longer received, and the released target carries the gate tag the
+    // transition system leaves to StorageWflwGateSystem.
+    uint32_t staged = 0u;
+    for (auto [e, req] : reg.view<StorageReqWflwTranComponent, StorageWflwPendTag>().each()) {
+        ++staged;
+        CHECK(std::strcmp(req.path, kAsset) == 0);
+        CHECK(std::strcmp(req.target_label, EDGE_LABEL_RELEASED) == 0);
+        CHECK(std::strcmp(req.requested_by, kOperator) == 0);
+        CHECK(reg.all_of<StorageWflwGateTag>(e));
+        CHECK_FALSE(reg.all_of<StorageWflwRcvTag>(e));
+    }
+    CHECK(staged == 1u);
+    CHECK(read_verdict(reg) == doctest::Approx(static_cast<float>(WFLW_RES_PENDING)));
+}
+
+TEST_CASE("a request the frame-113 door files is staged the same way, without a released gate") {
+    // usecase:100329 - StorageEdgeWflwFwdRcvSystem files the request component marked received;
+    // the staging is the one the hub-row door feeds. A review target takes no gate tag.
+    Registry reg;
+    StorageWflwStgeSystem stge;
+    auto req_ent = reg.create();
+    auto& req = reg.emplace<StorageReqWflwTranComponent>(req_ent);
+    ase::utils::str_copy(req.path, MAX_PATH_LEN, kAsset);
+    ase::utils::str_copy(req.target_label, MAX_LABEL_LEN, EDGE_LABEL_REVIEW);
+    ase::utils::str_copy(req.requested_by, MAX_OWNER_ID, kOperator);
+    reg.emplace<StorageWflwRcvTag>(req_ent);
+    // A request already pending is no longer received and stays untouched.
+    const auto pending = stage_request(reg, EDGE_LABEL_APPROVED);
+
+    stge.tick(reg, 0.0f);
+
+    CHECK(reg.all_of<StorageWflwPendTag>(req_ent));
+    CHECK_FALSE(reg.all_of<StorageWflwRcvTag>(req_ent));
+    CHECK_FALSE(reg.all_of<StorageWflwGateTag>(req_ent));
+    CHECK(reg.all_of<StorageWflwPendTag>(pending));
+    CHECK(reg.view<StorageReqWflwTranComponent, StorageWflwPendTag>().size_hint() == 2u);
+    CHECK(read_verdict(reg) == doctest::Approx(static_cast<float>(WFLW_RES_PENDING)));
+}
+
+TEST_CASE("the drain refuses a promote row without its requester and releases it unstaged") {
+    // usecase:100329 - a row the contract of HUB_STG_WFLW_REQ forbids a plugin to file: the
+    // requester field is missing.
+    Registry reg;
+    StorageWflwDrnSystem drn;
+    stand_wflw_widths(reg);
+    const auto bridge = ase::hub::row_create(reg, "HUB_STG_WFLW_REQ"_hs);
+    const uint32_t row = static_cast<uint32_t>(bridge);
+    ase::hub::set_bytes(reg, row, "HUB_STG_WFLW_REQ_PATH"_hs, kAsset,
+                        ase::utils::str_len(kAsset, MAX_PATH_LEN));
+    ase::hub::set_bytes(reg, row, "HUB_STG_WFLW_REQ_TARGET_LABEL"_hs, EDGE_LABEL_REVIEW,
+                        ase::utils::str_len(EDGE_LABEL_REVIEW, MAX_LABEL_LEN));
+
+    drn.tick(reg, 0.0f);
+
+    CHECK(ase::hub::row_count(reg, "HUB_STG_WFLW_REQ"_hs) == 0u);
+    CHECK(reg.view<StorageReqWflwTranComponent>().size() == 0u);
+    CHECK_FALSE(ase::hub::is_measured(reg, entt::hashed_string(kAsset).value(), "STG_WFLW_RES"_hs));
+}
+
+TEST_CASE("the drain refuses a promote path longer than the contract's width and releases it unstaged") {
+    // usecase:100329 - STG_CONST_WFLW_PATH_BYTES is the contract's width; a row past it is one a
+    // plugin must refuse to file, and the owner refuses it the same way instead of cutting it.
+    Registry reg;
+    StorageWflwDrnSystem drn;
+    stand_wflw_widths(reg);
+    ase::hub::set(reg, ase::hub::GLOBAL, "STG_CONST_WFLW_PATH_BYTES"_hs, 8.0f);
+    file_promote(reg, kAsset, ase::utils::str_len(kAsset, MAX_PATH_LEN), EDGE_LABEL_REVIEW);
+
+    drn.tick(reg, 0.0f);
+
+    // RED when: a path past the contract's width is staged, cut or whole.
+    CHECK(ase::hub::row_count(reg, "HUB_STG_WFLW_REQ"_hs) == 0u);
+    CHECK(reg.view<StorageReqWflwTranComponent>().size() == 0u);
+}
+
+TEST_CASE("without the contract's widths the drain leaves every promote row waiting") {
+    // usecase:100329 - the widths come from hub_constants.json; without them no row can be judged
+    // against its bound, so nothing is drained, refused or staged until they stand.
+    Registry reg;
+    StorageWflwDrnSystem drn;
+    file_promote(reg, kAsset, ase::utils::str_len(kAsset, MAX_PATH_LEN), EDGE_LABEL_REVIEW);
+
+    drn.tick(reg, 0.0f);
+
+    // RED when: a row is judged against a bound that is not there.
+    CHECK(ase::hub::row_count(reg, "HUB_STG_WFLW_REQ"_hs) == 1u);
+    CHECK(reg.view<StorageReqWflwTranComponent>().size() == 0u);
+
+    // A width the request buffer cannot hold with its NUL is a broken contract: the rows still wait.
+    stand_wflw_widths(reg);
+    ase::hub::set(reg, ase::hub::GLOBAL, "STG_CONST_WFLW_LABEL_BYTES"_hs, static_cast<float>(MAX_LABEL_LEN));
+    drn.tick(reg, 0.0f);
+    CHECK(ase::hub::row_count(reg, "HUB_STG_WFLW_REQ"_hs) == 1u);
+
+    stand_wflw_widths(reg);
+    drn.tick(reg, 0.0f);
+    CHECK(ase::hub::row_count(reg, "HUB_STG_WFLW_REQ"_hs) == 0u);
+    CHECK(reg.view<StorageReqWflwTranComponent>().size() == 1u);
 }

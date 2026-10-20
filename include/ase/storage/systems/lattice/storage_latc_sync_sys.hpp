@@ -11,6 +11,13 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Preservation
+ * @parity      server_only
+ * @usecase     usecase:100265 - check access clearance
+ *
+ * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
+ *   Der Auftrag dieses Systems ist das Laden und Abgleichen der Lattice-Links mit dem
+ *   persistierten Bestand - Persistenz, also Server. Die Links selbst (StorageLatLnkComponent)
+ *   sind shared und erreichen den Client als Daten.
  * @created     2026-04-05
  * @modified    2026-04-05
  * @version     1.0.0
