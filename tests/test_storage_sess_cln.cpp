@@ -165,11 +165,11 @@ TEST_CASE("StorageKycdSessClnSystem ignores a dead session that never linked a k
     hub::row_adopt(reg, e, "HUB_SESS_LIFE"_hs);
     hub::row_tag(reg, e, "HUB_SESS_LIFE_GONE"_hs);
     uint32_t owner = static_cast<uint32_t>(e);
-    hub::set(reg, owner, "NET_CLAI_ID"_hs, 7.0f);
+    hub::set(reg, owner, "SES_EXP_AT"_hs, 1785000000.0f);
 
     sys.tick(reg, 1.0f);
 
-    CHECK(hub::exists(reg, owner, "NET_CLAI_ID"_hs) == true);
+    CHECK(hub::exists(reg, owner, "SES_EXP_AT"_hs) == true);
 }
 
 TEST_CASE("StorageKycdSessClnSystem is idempotent and survives an empty registry") {

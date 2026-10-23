@@ -1053,7 +1053,7 @@
                         "name": "op",
                         "type": "uint8",
                         "default": "0",
-                        "hub_key": "KYCD_PST_OP_UPSERT"
+                        "description": "KYCD_PST_OP_UPSERT or KYCD_PST_OP_REVOKE"
                     },
                     {
                         "name": "cwrd_count",
@@ -1401,7 +1401,7 @@
                         "name": "action",
                         "type": "uint8",
                         "default": "0",
-                        "hub_key": "CUR_ACT_"
+                        "description": "CUR_ACT_* from types.hpp"
                     },
                     {
                         "name": "user_id",
@@ -1426,7 +1426,7 @@
                         "name": "target_tag",
                         "type": "uint8",
                         "default": "0",
-                        "hub_key": "CUR_ST_"
+                        "description": "CUR_ST_* value \u2192 determines which Tag to emplace"
                     },
                     {
                         "name": "notes",
