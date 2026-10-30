@@ -179,6 +179,7 @@
                 "StorageKycdRevTag",
                 "StorageKycdRjctTag",
                 "StorageKycdVldTag",
+                "StorageLnkExpTag",
                 "StorageRelmActvTag",
                 "StorageRelmArcvTag",
                 "StorageRelmCncmTag",
@@ -211,6 +212,7 @@
                 "StorageKycdRevTag",
                 "StorageKycdRjctTag",
                 "StorageKycdVldTag",
+                "StorageLnkExpTag",
                 "StorageRelmActvTag",
                 "StorageRelmArcvTag",
                 "StorageRelmCncmTag",
@@ -463,6 +465,12 @@
                     }
                 ],
                 "file": "state/storage_lat_lnk_comp.hpp"
+            },
+            {
+                "name": "StorageLnkExpTag",
+                "description": "Marker for lattice link entities whose lifetime (expires_at) has elapsed",
+                "fields": [],
+                "file": "tag/storage_lnk_exp_tag.hpp"
             },
             {
                 "name": "StorageLnkIdnComponent",

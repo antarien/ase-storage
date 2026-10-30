@@ -2,36 +2,43 @@
  * ASE ECS SYSTEM IMPLEMENTATION
  *
  * @file        storage_latc_sync_sys.cpp
- * @brief       StorageLatcSyncSystem - Synchronizes lattice links from MongoDB
+ * @brief       StorageLatcSyncSystem - retires lattice links whose lifetime has elapsed
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Preservation
+ * @usecase     usecase:101533 - withdraw a lapsed lattice bond
+ * @actor       Horizontal Layer Steward (HLSTEWARD)
  * @created     2026-04-05
- * @modified    2026-06-24
- * @version     1.0.0
+ * @modified    2026-10-29
+ * @version     1.1.0
  *
  * CAUSAL CHAIN (Lattice Sync)
  *
- *   [MongoDB lattice_links collection]
+ *   [Lattice link entities: StorageLatLnkComponent + StorageLnkIdnComponent]
  *          │
- *          │ Preservation schedule loads at boot
+ *          │ Preservation, 1 Hz (ARCH_ASE_STORAGE 15)
  *          ▼
  *   ┌─────────────────────────────────────────────┐
  *   │  THIS SYSTEM: StorageLatcSyncSystem         │
  *   │                                             │
  *   │  READS:                                     │
- *   │    - StorageLatLnkComponent (link entities)  │
- *   │    - MongoDB lattice state at boot          │
+ *   │    - StorageLatLnkComponent (expires_at)    │
+ *   │    - StorageLnkIdnComponent (realm hashes)  │
+ *   │    - StorageResourceManager (wall clock)    │
  *   │                                             │
  *   │  WRITES:                                    │
- *   │    - Creates/removes lattice link entities   │
+ *   │    - StorageLnkExpTag on an ended link      │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Lattice links synchronized with DB
+ *          │ The ended link carries its state; the client sees it as data
  *          ▼
- *   Cross-realm access paths available for ACL checks
+ *   The ACL ladder (StorageAcssChkSystem) refuses it by the same clock
+ *
+ * A BOND GRANTED FOR A TIME ENDS ON ITS OWN. ARCH_ASE_STORAGE 8.3 grants the game-jam link
+ * for seven days; once the wall clock passes expires_at the bond is over. The link entity is
+ * not destroyed: it stays, tagged, as the record of the realms it once bridged.
  *
  * HUB Pattern (N/A - No Hub reads/writes)
  *
@@ -42,7 +49,7 @@
  *   (none)
  *
  * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
- *   Lattice sync loads cross-realm links from MongoDB at boot.
+ *   The wall clock comes from the resource manager, the same clock the ACL check reads.
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -140,6 +147,11 @@
 
 // Own header FIRST
 #include <ase/storage/systems/lattice/storage_latc_sync_sys.hpp>
+// Components
+#include <ase/storage/components/state/storage_lat_lnk_comp.hpp>
+#include <ase/storage/components/state/storage_lnk_idn_comp.hpp>
+#include <ase/storage/components/tag/storage_lnk_exp_tag.hpp>
+#include <ase/storage/storage_resource_manager.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
@@ -150,7 +162,7 @@ namespace ase::storage {
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 namespace {
 
-// No helper functions needed → lattice sync loads from MongoDB at boot
+// No helper functions: the expiry test is one comparison against the component field
 
 }  // anonymous namespace
 
@@ -161,8 +173,37 @@ void StorageLatcSyncSystem::on_start(ecs::Registry& /*registry*/) {
     log::debug("[StorageLatcSync] Started");
 }
 
-void StorageLatcSyncSystem::tick(ecs::Registry& /*registry*/, float /*dt*/) {
-    // Lattice link synchronization driven by MongoDB boot-load and API proposals
+void StorageLatcSyncSystem::tick(ecs::Registry& registry, float /*dt*/) {
+    auto& mgr = *registry.ctx().get<StorageResourceManager*>();
+
+    // No wall clock yet means no expiry can be judged; the ACL check waits for the same clock.
+    uint64_t now = mgr.get_wall_time_seconds();
+    if (!now) {
+        return;
+    }
+
+    // SINGLE-PASS over the links that still stand. Only the tag the view excludes is added,
+    // nothing is erased, so the iteration stays valid: the tagged link leaves the view behind us.
+    auto view = registry.view<StorageLatLnkComponent, StorageLnkIdnComponent>(
+        entt::exclude<StorageLnkExpTag>);
+    for (auto entity : view) {
+        auto& link = view.get<StorageLatLnkComponent>(entity);
+        auto& idn = view.get<StorageLnkIdnComponent>(entity);
+
+        // 0 = a permanent bond (ARCH_ASE_STORAGE 8.2)
+        if (!link.expires_at) {
+            continue;
+        }
+        if (now <= link.expires_at) {
+            continue;
+        }
+
+        registry.emplace<StorageLnkExpTag>(entity);
+        log::info("[StorageLatcSync] Lattice link ended: entity={} source={} target={} "
+                  "prefix={} expires_at={} now={}",
+                  static_cast<uint32_t>(entity), idn.source_realm_hash, idn.target_realm_hash,
+                  link.path_prefix, link.expires_at, now);
+    }
 }
 
 void StorageLatcSyncSystem::on_stop(ecs::Registry& /*registry*/) {

@@ -10,9 +10,11 @@
  *
  * @module      ase-storage
  * @layer       3 (Module)
+ * @usecase     usecase:101524 - register the module systems
+ * @actor       Module Registration Startup/Shutdown (MREG)
  * @created     2026-04-06
- * @modified    2026-08-15
- * @version     1.0.0
+ * @modified    2026-10-29
+ * @version     1.1.0
  *
  * USAGE:
  *   #include <ase/storage/storage.hpp>
@@ -47,6 +49,7 @@
 #include <ase/storage/components/tag/storage_mgr_tag.hpp>
 #include <ase/storage/components/tag/storage_kycd_vld_tag.hpp>
 #include <ase/storage/components/tag/storage_kycd_exp_tag.hpp>
+#include <ase/storage/components/tag/storage_lnk_exp_tag.hpp>
 #include <ase/storage/components/tag/storage_kycd_rjct_tag.hpp>
 #include <ase/storage/components/tag/storage_kycd_rev_tag.hpp>
 #include <ase/storage/components/tag/storage_kycd_pend_tag.hpp>
@@ -58,7 +61,7 @@
 #include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
 #include <ase/storage/components/tag/storage_vote_pend_tag.hpp>
 
-// Review-Marken (bis 2026-08-20 unter dem ungedeckten Stamm `cur`)
+// Review tags (the review states of a curated asset)
 #include <ase/storage/components/tag/storage_rvw_pend_tag.hpp>
 #include <ase/storage/components/tag/storage_rvw_acpt_tag.hpp>
 #include <ase/storage/components/tag/storage_rvw_rjct_tag.hpp>

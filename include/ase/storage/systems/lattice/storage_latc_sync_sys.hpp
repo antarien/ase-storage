@@ -4,23 +4,26 @@
  * ASE ECS SYSTEM HEADER
  *
  * @file        storage_latc_sync_sys.hpp
- * @brief       StorageLatcSyncSystem - Synchronizes lattice links
- * @description Loads and maintains cross-realm lattice connections
+ * @brief       StorageLatcSyncSystem - keeps the lattice links between realms current
+ * @description Retires every lattice link whose lifetime has elapsed, so a bridge granted for a
+ *              limited time (ARCH_ASE_STORAGE 8.3, the seven-day game-jam link) ends on its own
+ *              and the ACL ladder only ever sees links that still stand.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Preservation
  * @parity      server_only
- * @usecase     usecase:100265 - check access clearance
- *
- * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
- *   Der Auftrag dieses Systems ist das Laden und Abgleichen der Lattice-Links mit dem
- *   persistierten Bestand - Persistenz, also Server. Die Links selbst (StorageLatLnkComponent)
- *   sind shared und erreichen den Client als Daten.
+ * @usecase     usecase:101533 - withdraw a lapsed lattice bond
+ * @actor       Horizontal Layer Steward (HLSTEWARD)
  * @created     2026-04-05
- * @modified    2026-04-05
- * @version     1.0.0
+ * @modified    2026-10-29
+ * @version     1.1.0
+ *
+ * PARITY DECISION
+ *   The system reads the wall clock from StorageResourceManager in registry.ctx(), a server
+ *   resource. The links themselves (StorageLatLnkComponent) and the expiry tag are shared and
+ *   reach the client as data.
  *
  * ECS SYSTEM HEADER COMPLIANCE
  *
@@ -42,12 +45,13 @@
 namespace ase::storage {
 
 /**
- * @brief StorageLatcSyncSystem - Lattice link synchronization
+ * @brief StorageLatcSyncSystem - retires lattice links whose lifetime has elapsed
  *
- * @schedule Preservation - 1Hz sync of lattice connections
- * @reads    StorageLatLnkComponent entities
- * @writes   Creates/removes lattice link entities based on MongoDB state
- * @depends  Realm entities loaded at boot, API creates new lattice proposals
+ * @schedule Preservation - 1 Hz, the cadence ARCH_ASE_STORAGE 15 gives the lattice sync
+ * @reads    StorageLatLnkComponent (expires_at), StorageLnkIdnComponent (the realms it bridges),
+ *           StorageResourceManager (wall clock)
+ * @writes   StorageLnkExpTag
+ * @depends  StorageAcssChkSystem refuses the same link by the same clock (expires_at)
  */
 class StorageLatcSyncSystem : public ecs::System {
 public:

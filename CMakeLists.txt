@@ -144,6 +144,7 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/tag/storage_kycd_vld_tag.hpp
     include/ase/storage/components/tag/storage_kycd_lnk_cnt_tag.hpp
     include/ase/storage/components/tag/storage_kycd_exp_tag.hpp
+    include/ase/storage/components/tag/storage_lnk_exp_tag.hpp
     include/ase/storage/components/tag/storage_kycd_rjct_tag.hpp
     include/ase/storage/components/tag/storage_kycd_rev_tag.hpp
     include/ase/storage/components/tag/storage_kycd_pend_tag.hpp
