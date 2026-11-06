@@ -2,51 +2,56 @@
  * ASE ECS SYSTEM IMPLEMENTATION
  *
  * @file        storage_kycd_rev_sys.cpp
- * @brief       StorageKycdRevSystem - Tags revoked keycards
+ * @brief       StorageKycdRevSystem - files one durable revoke record per revoked keycard
+ * @description Turns StorageKycdRevTag into a persist record (StorageBufKycdComponent with
+ *              op = KYCD_PST_OP_REVOKE + StorageKycdPstPendTag) that StorageKycdPstEmitSystem
+ *              ships to the Replica on frame 35.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Preservation
+ * @design      DSGN_021
+ * @usecase     usecase:101599 - revoke customer keycard
+ * @actor       Account Protection Warden (ACCPROWARD)
  * @created     2026-04-05
- * @modified    2026-06-24
- * @version     1.0.0
+ * @modified    2026-11-05
+ * @version     2.0.0
  *
- * CAUSAL CHAIN (Keycard Revocation)
+ * CAUSAL CHAIN (CAUSA_ASE_STORAGE section 3: revocation rides frame 35)
  *
- *   [Admin revokes keycard via API]
+ *   [StorageKycdRevSynSystem sets StorageKycdRevTag on the keycard]
  *          │
- *          │ StorageStaKycdComponent entity flagged in ECS
+ *          │ StorageStaKycdComponent + StorageKycdRevTag
  *          ▼
  *   ┌─────────────────────────────────────────────┐
  *   │  THIS SYSTEM: StorageKycdRevSystem          │
  *   │                                             │
  *   │  READS:                                     │
- *   │    - StorageStaKycdComponent + KycdRevTag   │
- *   │    - SES_KYCD_PERSIST_SEQ (owner watermark) │
+ *   │    → StorageStaKycdComponent                │
+ *   │    → StorageKycdRevTag                      │
  *   │                                             │
  *   │  WRITES:                                    │
- *   │    - SES_KYCD_PERSIST_* (op=REVOKE, Hub)    │
- *   │    - StorageKycdRevPstTag (emit-once mark)  │
+ *   │    → StorageBufKycdComponent (record)       │
+ *   │    → StorageBufKycdAccComponent (record)    │
+ *   │    → StorageKycdPstPendTag (record)         │
+ *   │    → StorageKycdRevPstTag (emit-once mark)  │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Replica updates the durable keycard document (revoked)
+ *          │ record entity, op = KYCD_PST_OP_REVOKE
  *          ▼
- *   StorageAcssChkSystem rejects revoked keycards in-memory meanwhile
+ *   StorageKycdPstEmitSystem → frame 35 → Replica REPLACE-upsert on user_id (tombstone)
  *
- * HUB Pattern (Active - emits owner-keyed durable-revoke signal)
+ * HUB Pattern (READS/WRITES)
  *
- * READS (from Hub):
- *   SES_KYCD_PERSIST_SEQ - monotonic emit counter per owner (read-modify-write)
+ * READS:  none - the revocation is read from storage components only
+ * WRITES: none - the durable revoke leaves as DATA on frame 35, never as a hub key
  *
- * WRITES (to Hub):
- *   SES_KYCD_PERSIST_SEQ       - bumped once per revoked keycard
- *   SES_KYCD_PERSIST_OP        - KYCD_PST_OP_REVOKE for the revoked keycard
- *   SES_KYCD_PERSIST_KYCD_HASH - durable primary key (label = SHA-256 hex)
+ * STAR Pattern (Active - record entity as the hand-over point)
+ *   The keycard entity stays untouched apart from its emit-once mark; the revocation is handed
+ *   on as its own record entity, so the emit system walks records and never keycards.
  *
- * FLYWEIGHT PATTERN (N/A - no ResourceManager access)
- *   Revocation rides the SAME durable Hub path issuance uses, keyed by kycd_hash,
- *   so issuance and revoke address one durable store (Phase 12 H-3).
+ * FLYWEIGHT PATTERN (Active - none held here, the transport resource is read by the emit system)
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -146,18 +151,21 @@
 #include <ase/storage/systems/keycard/storage_kycd_rev_sys.hpp>
 // Components from same module
 #include <ase/storage/components/state/storage_sta_kycd_comp.hpp>
+#include <ase/storage/components/state/storage_buf_kycd_comp.hpp>
+#include <ase/storage/components/state/storage_buf_kycd_acc_comp.hpp>
 #include <ase/storage/components/tag/storage_kycd_rev_tag.hpp>
 #include <ase/storage/components/tag/storage_kycd_rev_pst_tag.hpp>
+#include <ase/storage/components/tag/storage_kycd_pst_pend_tag.hpp>
 // Module constants (KYCD_PST_OP_REVOKE)
 #include <ase/storage/types.hpp>
-// Hub API for owner-keyed durable-revoke signal
-#include <ase/hub/api.hpp>
-// Types (L0 — is_not_found sentinel check)
-#include <ase/types/types.hpp>
+// Bounded string copy
+#include <ase/utils/strops.hpp>
 // Logging
 #include <ase/log/log.hpp>
 
 #include <entt/core/hashed_string.hpp>
+
+#include <cstdint>
 
 using namespace entt::literals;
 
@@ -178,53 +186,36 @@ void StorageKycdRevSystem::on_start(ecs::Registry& /*registry*/) {
 }
 
 void StorageKycdRevSystem::tick(ecs::Registry& registry, float /*dt*/) {
-    // The HTTP revoke route (POST /api/realms/:rid/keycards/:id/revoke) emplaces
-    // StorageKycdRevTag on the keycard entity. The 10-step A/ACS check
-    // (ARCH_ASE_STORAGE.md 14.1 step 1) already denies any keycard carrying that
-    // tag in-memory. This system makes the revocation DURABLE: it emits an
-    // owner-keyed SES_KYCD_PERSIST_* signal with op=KYCD_PST_OP_REVOKE so the
-    // Replica updates the SAME keycard MongoDB document the mint upserted (keyed
-    // by kycd_hash) — issuance and revoke address one durable store, not a record
-    // the mint never wrote. StorageKycdRevPstTag makes the emit exactly-once.
+    // The A/ACS check already denies every keycard carrying StorageKycdRevTag in memory. This
+    // system makes the revocation durable: it files one record entity that the emit system
+    // ships on frame 35. The Replica REPLACE-upserts on user_id, so the record names the
+    // recipient; StorageKycdRevPstTag makes the filing exactly-once.
     auto view = registry.view<StorageStaKycdComponent, StorageKycdRevTag>(
         entt::exclude<StorageKycdRevPstTag>);
     for (auto [entity, kycd] : view.each()) {
-        // A keycard without a SHA-256 digest has no durable primary key — the
-        // Replica cannot locate its document to mark revoked. Mark done so it is
-        // not re-scanned, and log the malformed state as an error.
-        if (kycd.kycd_hash[0] == '\0') {
-            // RESOURCE_UNAVAIL und NICHT das neue WORK_PRECLUDED, obwohl dessen Name hier
-            // verlockend klingt: sein Hilfetext lautet "State noted - nothing is missing,
-            // unreachable or unset; the work does not apply here" und schliesst diesen Fall
-            // damit ausdruecklich AUS — hier fehlt sehr wohl etwas, naemlich der Digest.
-            // Ohne ihn hat das dauerhafte Dokument keinen Primaerschluessel, der Replica kann
-            // es nicht adressieren: die Ressource ist da und unbrauchbar, Punkt 5 des
-            // RESOURCE_UNAVAIL-Hilfetexts.
-            //
-            // owner traegt die Entity, value_id benennt das leere Feld — beide Angaben der
-            // alten Zeile bleiben erhalten.
+        // Without a recipient the durable document has no upsert key; the Replica cannot
+        // address it. The resource is present and unusable: RESOURCE_UNAVAIL.
+        if (kycd.issued_to[0] == '\0') {
             log::error(log::ERR::CAT::RESOURCE_UNAVAIL, "StorageKycdRev",
-                       static_cast<uint32_t>(entity), "STG_KYCD_kycd_hash");
+                       static_cast<uint32_t>(entity), "STG_KYCD_issued_to");
             registry.emplace<StorageKycdRevPstTag>(entity);
             continue;
         }
 
-        uint32_t owner = entt::hashed_string{kycd.issued_to}.value();
-        float seq_f = hub::get(registry, owner, "SES_KYCD_PERSIST_SEQ"_hs);
-        if (ase::types::is_not_found(seq_f)) {
-            seq_f = 0.0f;
-        }
-        uint32_t seq = static_cast<uint32_t>(seq_f) + 1;
-        hub::set(registry, owner, "SES_KYCD_PERSIST_SEQ"_hs, static_cast<float>(seq));
-        hub::set(registry, owner, "SES_KYCD_PERSIST_OP"_hs, static_cast<float>(KYCD_PST_OP_REVOKE));
-
-        uint32_t kycd_hash_id = entt::hashed_string{kycd.kycd_hash}.value();
-        hub::set(registry, owner, "SES_KYCD_PERSIST_KYCD_HASH"_hs, static_cast<float>(kycd_hash_id));
-        // keycard hash STRING is NOT registered via set_debug_label (a debug-only channel).
+        const auto record = registry.create();
+        auto& buf = registry.emplace<StorageBufKycdComponent>(record);
+        ase::utils::str_copy(buf.kycd_hash, sizeof(buf.kycd_hash), kycd.kycd_hash);
+        ase::utils::str_copy(buf.issued_to, sizeof(buf.issued_to), kycd.issued_to);
+        ase::utils::str_copy(buf.issued_by, sizeof(buf.issued_by), kycd.issued_by);
+        buf.op = KYCD_PST_OP_REVOKE;
+        auto& acc = registry.emplace<StorageBufKycdAccComponent>(record);
+        acc.relm_ref = kycd.relm_ref;
+        acc.proj_ref = kycd.proj_ref;
+        registry.emplace<StorageKycdPstPendTag>(record);
 
         registry.emplace<StorageKycdRevPstTag>(entity);
-        log::info("[StorageKycdRev] owner={} hash='{}' seq={} durable revoke → Replica",
-                  owner, kycd.kycd_hash, seq);
+        log::info("[StorageKycdRev] recipient='{}' hash='{}' durable revoke record filed",
+                  kycd.issued_to, kycd.kycd_hash);
     }
 }
 

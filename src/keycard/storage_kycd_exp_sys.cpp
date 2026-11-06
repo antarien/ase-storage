@@ -8,7 +8,9 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Preservation
+ * @design      DSGN_021
  * @usecase     usecase:100265 - check access clearance
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-04-05
  * @modified    2026-10-13
  * @version     1.2.0

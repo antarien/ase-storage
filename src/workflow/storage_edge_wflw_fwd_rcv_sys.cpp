@@ -3,52 +3,61 @@
  *
  * @file        storage_edge_wflw_fwd_rcv_sys.cpp
  * @brief       StorageEdgeWflwFwdRcvSystem - Replica-forwarded operator workflow command receiver
+ * @description Pops the operator workflow commands the Replica forwards on LANE_WFLW and files
+ *              each one as a StorageReqWflwFwdComponent marked promote, status or refused. A
+ *              promote also grants the Replica-verified operator and files the release-workflow
+ *              request StorageWflwStgeSystem stages. StorageEdgeWflwRplySystem answers every
+ *              filed command in the same tick. The frame code, the frame head width and the two
+ *              operation bytes are hub rows of their owners, read on GLOBAL in tick.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Reception
+ * @design      DSGN_021
  * @usecase     usecase:100317 - relay operator command
+ * @actor       Operator Command Dispatcher (OPERCOMDIS)
  * @created     2026-07-12
- * @modified    2026-10-12
- * @version     1.2.0
+ * @modified    2026-11-05
+ * @version     1.3.0
  *
- * CAUSAL CHAIN (EDGE_WFLW_FWD: Replica operator command → workflow drive / status read)
+ * CAUSAL CHAIN (EDGE_WFLW_FWD: Replica operator command → filed command + workflow drive)
  *
- *   [ReplicaEdgeWflwSystem verified the operator YK-JWT, ships BIN_MSG_EDGE_WFLW_FWD(113)]
+ *   [ReplicaEdgeWflwSystem verified the operator YK-JWT, ships frame BIN_MSG_EDGE_WFLW_FWD]
  *          │
- *          │ L2 KernelWbskDspcSystem routes id 113 → LANE_WFLW
+ *          │ L2 KernelWbskDspcSystem routes the frame code → LANE_WFLW
  *          ▼
  *   ┌───────────────────────────────────────────────────────────────┐
  *   │  THIS SYSTEM: StorageEdgeWflwFwdRcvSystem (dist tier)         │
  *   │                                                               │
+ *   │  ROUTE:   frame code from the hub onto LANE_WFLW              │
  *   │  POP:     drain LANE_WFLW frames                              │
- *   │  PROMOTE: StorageReqWflwTranComponent + StorageWflwRcvTag     │
- *   │           (the request StorageWflwStgeSystem stages)          │
- *   │  STATUS:  read owner-scoped STG_WFLW_STAGE / STG_WFLW_RES     │
- *   │  REPLY:   BIN_MSG_EDGE_WFLW_RES(114) onto the outbound queue  │
+ *   │  FILE:    StorageReqWflwFwdComponent + Prom / Stat / Rjct     │
+ *   │  PROMOTE: operator grant + StorageReqWflwTranComponent        │
+ *   │           + StorageWflwRcvTag (the request Stge stages)       │
  *   └───────────────────────────────────────────────────────────────┘
  *          │
- *          │ promote: StorageWflwStge/Gate/Tran/Pst drive the transition this tick
- *          │ reply: the Replica relays the 114 verdict to the ase-cli connection
+ *          │ StorageEdgeWflwRplySystem answers every filed command this tick
+ *          │ promote: StorageWflwStge/Gate/Tran/Pst drive the transition
  *          ▼
- *   [ase-cli prints the machine-parseable verdict line]
+ *   [the Replica relays the verdict to the ase-cli connection]
  *
- * HUB Pattern (Active - reads the workflow verdict, grants the operator session)
+ * HUB Pattern (Active - reads the forward contract, grants the operator session)
  *
  * READS (from Hub):
- *   STG_WFLW_RES   (owner = hashed_string(path)) - workflow verdict (status op)
- *   STG_WFLW_STAGE (owner = hashed_string(path)) - workflow stage ordinal (status op)
+ *   NET_CONST_BIN_MSG_EDGE_WFLW_FWD   (GLOBAL) - frame code of the forwarded command
+ *   REP_CONST_EDGE_WFLW_FWD_HDR       (GLOBAL) - fixed head of the frame in bytes
+ *   REP_CONST_EDGE_WFLW_OP_PROMOTE    (GLOBAL) - operation byte of a promote
+ *   REP_CONST_EDGE_WFLW_OP_STATUS     (GLOBAL) - operation byte of a status read
  *   SES_KYCD_PERM, SES_CLEARANCE (owner = hashed_string(by)) - before the promote grant
  *
  * WRITES (to Hub):
  *   SES_KYCD_PERM, SES_CLEARANCE (owner = hashed_string(by)) - the Replica-verified operator
- *   grant the transition gate reads; the promote request itself is a module component
+ *   grant the transition gate reads; the commands themselves are module components
  *
- * FLYWEIGHT Pattern (inbound + outbound lane)
+ * FLYWEIGHT Pattern (inbound lane)
  *   The forward frame is popped from the L1 transport InboundQueueResourceManager
- *   (LANE_WFLW, via ctx) into a bounded stack buffer; the verdict frame is pushed onto
- *   the L1 OutboundQueueResourceManager. The dist host links NO data client.
+ *   (LANE_WFLW, via ctx) into a bounded stack buffer. The dist host links NO data client.
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -146,19 +155,23 @@
 
 // Own header FIRST
 #include <ase/storage/systems/workflow/storage_edge_wflw_fwd_rcv_sys.hpp>
-// Module constants (EDGE_WFLW_* frame layout, WFLW_RES/STAGE ordinals, labels, MAX_*)
+// Module constants (PERM_PROMOTE, EDGE_CLEARANCE_OPERATOR, MAX_*)
 #include <ase/storage/types.hpp>
+// The filed command and the three marks of what it is
+#include <ase/storage/components/request/storage_req_wflw_fwd_comp.hpp>
+#include <ase/storage/components/tag/storage_wflw_prom_tag.hpp>
+#include <ase/storage/components/tag/storage_wflw_stat_tag.hpp>
+#include <ase/storage/components/tag/storage_wflw_rjct_tag.hpp>
 // The promote request this receiver files, marked received for StorageWflwStgeSystem
 #include <ase/storage/components/request/storage_req_wflw_tran_comp.hpp>
 #include <ase/storage/components/tag/storage_wflw_rcv_tag.hpp>
-// Hub API ONLY (header isolation): the workflow verdict reads and the operator session grant go
+// Hub API ONLY (header isolation): the forward contract and the operator session grant go
 // through api.hpp; NEVER a direct include.
 #include <ase/hub/api.hpp>
-// Types SSOT (is_not_found / is_in_rng_i32 sentinel + range checks on hub::get reads)
+// Types SSOT (is_not_found / is_in_rng sentinel + range checks on hub::get reads)
 #include <ase/types/types.hpp>
 // Transport lanes (L1 via ctx - the L2 demux fills LANE_WFLW; this module NEVER touches the socket)
 #include <ase/transport/inbound_queue_resource_manager.hpp>
-#include <ase/transport/outbound_queue_resource_manager.hpp>
 #include <ase/transport/types.hpp>
 // Utils (L0 - safe C-string operations)
 #include <ase/utils/strops.hpp>
@@ -169,29 +182,12 @@
 
 #include <entt/core/hashed_string.hpp>
 
-using namespace entt::literals;
-
 namespace ase::storage {
+using namespace entt::literals;  // For "_hs hashed strings (Hub)
 
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 // NO STRUCTS HERE! NO View/Query operations in helpers! Only pure byte/char math!
 namespace {
-
-// Append a small unsigned decimal to a bounded C-string (JSON numeric fields). Pure math.
-void append_num(char* out, uint32_t max, uint32_t v) {
-    char rev[12] = {};
-    uint32_t r = 0;
-    if (v == 0u) {
-        rev[r++] = '0';
-    } else {
-        while (v > 0u && r < sizeof(rev)) { rev[r++] = static_cast<char>('0' + (v % 10u)); v /= 10u; }
-    }
-    char tmp[12] = {};
-    uint32_t n = 0;
-    while (r > 0u && n + 1u < sizeof(tmp)) { tmp[n++] = rev[--r]; }
-    tmp[n] = '\0';
-    ase::utils::str_append(out, max, tmp);
-}
 
 // Read a u16-length-prefixed string at `off` in [buf, buf+len). Copies at most out_size-1
 // bytes into out (NUL-terminated) and advances off past the field. Returns false on a
@@ -211,202 +207,174 @@ bool read_lp_str(const char* buf, uint32_t len, uint32_t& off, char* out, uint32
     return true;
 }
 
-// WFLW_RES_* / WFLW_STAGE_* names (bounded lookup tables; the ordinals' SSOT is ase-storage
-// types.hpp). The /admin/workflow/status route these once mirrored no longer exists — this reply
-// is the only place the names are spoken. Index range-checked via the types SSOT; out-of-range
-// collapses to the safe floor. Data-driven lookup, not an if-chain of hardcoded ordinals.
-const char* wflw_res_name(int32_t i) {
-    const char* names[6] = {"pending", "applied", "denied_edge",
-                            "denied_gate", "denied_perm", "not_found"};
-    if (!ase::types::is_in_rng_i32(i, 0, 5)) i = 0;
-    return names[i];
-}
-
-const char* wflw_stage_name(int32_t i) {
-    const char* names[5] = {"draft", "review", "approved", "released", "retired"};
-    if (!ase::types::is_in_rng_i32(i, 0, 4)) i = 0;
-    return names[i];
-}
-
 }  // anonymous namespace
 
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
 void StorageEdgeWflwFwdRcvSystem::on_start(ecs::Registry& registry) {
-    log::debug("[StorageEdgeWflwFwdRcv] Started");
+    log::debug("[StorageEdgeWflwFwdRcvSystem] Started");
 
-    // Register the operator-workflow forward wire-type onto the shared inbound lane so the
-    // L2 demux routes it here. Emplace the queue if the demux on_start has not run yet
-    // (order-independent, mirror StorageEdgeKycdResDrnSystem).
+    // Emplace the inbound queue if the demux on_start has not run yet (order-independent). The
+    // route itself is written in tick, where the frame code of its owner can be read.
     if (registry.ctx().find<transport::InboundQueueResourceManager>() == nullptr) {
         registry.ctx().emplace<transport::InboundQueueResourceManager>();
     }
-    auto& queue = registry.ctx().get<transport::InboundQueueResourceManager>();
-    queue.register_route(EDGE_WFLW_BIN_MSG_FWD, transport::LANE_WFLW);
 }
 
 void StorageEdgeWflwFwdRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
     auto* queue = registry.ctx().find<transport::InboundQueueResourceManager>();
-    if (queue == nullptr || !queue->has_inbound(transport::LANE_WFLW)) return;
+    if (queue == nullptr) return;
 
-    auto* outq = registry.ctx().find<transport::OutboundQueueResourceManager>();
+    const float byte_max = static_cast<float>(UINT8_MAX);
+    const float code_f = hub::get(registry, hub::GLOBAL, "NET_CONST_BIN_MSG_EDGE_WFLW_FWD"_hs);
+    if (ase::types::is_not_found(code_f)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageEdgeWflwFwdRcvSystem", "NET_CONST_BIN_MSG_EDGE_WFLW_FWD");
+        return;
+    }
+    if (!ase::types::is_in_rng_f(code_f, 0.0f, byte_max)) {
+        log::warn(log::WRN::CAT::VALUE_OUT_OF_RANGE, "StorageEdgeWflwFwdRcvSystem", hub::GLOBAL,
+                  "NET_CONST_BIN_MSG_EDGE_WFLW_FWD", code_f, 0.0f, byte_max);
+        return;
+    }
+    const uint8_t code = static_cast<uint8_t>(code_f);
+    // Writing the same route again is a map assignment and changes nothing once it stands.
+    queue->register_route(code, transport::LANE_WFLW);
+    if (!queue->has_inbound(transport::LANE_WFLW)) return;
+
+    // The frame head carries code and cli_conn; the operation byte follows it inside the lane.
+    const float fields = static_cast<float>(sizeof(uint8_t) + sizeof(uint32_t));
+    const float lane = static_cast<float>(transport::LANE_BUF_SZ);
+    const float hdr_f = hub::get(registry, hub::GLOBAL, "REP_CONST_EDGE_WFLW_FWD_HDR"_hs);
+    if (ase::types::is_not_found(hdr_f)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageEdgeWflwFwdRcvSystem", "REP_CONST_EDGE_WFLW_FWD_HDR");
+        return;
+    }
+    if (!ase::types::is_in_rng_f(hdr_f, fields, lane - 1.0f)) {
+        log::warn(log::WRN::CAT::VALUE_OUT_OF_RANGE, "StorageEdgeWflwFwdRcvSystem", hub::GLOBAL,
+                  "REP_CONST_EDGE_WFLW_FWD_HDR", hdr_f, fields, lane - 1.0f);
+        return;
+    }
+    const float promote_f = hub::get(registry, hub::GLOBAL, "REP_CONST_EDGE_WFLW_OP_PROMOTE"_hs);
+    if (ase::types::is_not_found(promote_f)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageEdgeWflwFwdRcvSystem", "REP_CONST_EDGE_WFLW_OP_PROMOTE");
+        return;
+    }
+    if (!ase::types::is_in_rng_f(promote_f, 0.0f, byte_max)) {
+        log::warn(log::WRN::CAT::VALUE_OUT_OF_RANGE, "StorageEdgeWflwFwdRcvSystem", hub::GLOBAL,
+                  "REP_CONST_EDGE_WFLW_OP_PROMOTE", promote_f, 0.0f, byte_max);
+        return;
+    }
+    const float status_f = hub::get(registry, hub::GLOBAL, "REP_CONST_EDGE_WFLW_OP_STATUS"_hs);
+    if (ase::types::is_not_found(status_f)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageEdgeWflwFwdRcvSystem", "REP_CONST_EDGE_WFLW_OP_STATUS");
+        return;
+    }
+    if (!ase::types::is_in_rng_f(status_f, 0.0f, byte_max)) {
+        log::warn(log::WRN::CAT::VALUE_OUT_OF_RANGE, "StorageEdgeWflwFwdRcvSystem", hub::GLOBAL,
+                  "REP_CONST_EDGE_WFLW_OP_STATUS", status_f, 0.0f, byte_max);
+        return;
+    }
+    const uint32_t hdr = static_cast<uint32_t>(hdr_f);
+    const uint8_t op_promote = static_cast<uint8_t>(promote_f);
+    const uint8_t op_status = static_cast<uint8_t>(status_f);
 
     char buf[transport::LANE_BUF_SZ] = {};
     uint32_t msg_len = 0;
 
     while (queue->pop_inbound(transport::LANE_WFLW, buf, transport::LANE_BUF_SZ, msg_len)) {
-        if (msg_len < EDGE_WFLW_FWD_HDR + 1u) {
-            // INPUT_REJECTED (WRN::CAT, SSOT core/ase-log/data/log_categories.json — die
-            // Kategorie IST ihr Name, eine Nummer gibt es seit dem Hash-Umbau nicht mehr),
-            // Dreier-Form ohne owner: der Frame kommt von aussen und
-            // wird verworfen. Die drei aelteren WRN-Kategorien sagen eine Korrektur zu, die
-            // hier nicht stattfindet; ERR hat fuer einen Wire-Frame keinen Namen.
-            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeWflwFwdRcv",
-                      "EDGE_WFLW_FWD_frame_len");
+        if (msg_len < hdr + 1u) {
+            // The frame comes from outside and is dropped; nothing corrects it later.
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeWflwFwdRcvSystem", "EDGE_WFLW_FWD_frame_len");
             msg_len = 0;
             continue;
         }
-        uint8_t msg_type = static_cast<uint8_t>(buf[0]);
-        if (msg_type != EDGE_WFLW_BIN_MSG_FWD) {
-            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeWflwFwdRcv",
-                      "EDGE_WFLW_FWD_msg_type");
+        if (static_cast<uint8_t>(buf[0]) != code) {
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeWflwFwdRcvSystem", "EDGE_WFLW_FWD_msg_type");
             msg_len = 0;
             continue;
         }
 
         uint32_t cli_conn = 0;
-        std::memcpy(&cli_conn, buf + 1, 4);
-        uint8_t op = static_cast<uint8_t>(buf[EDGE_WFLW_FWD_HDR]);
-        uint32_t off = EDGE_WFLW_FWD_HDR + 1u;
+        std::memcpy(&cli_conn, buf + sizeof(uint8_t), sizeof(uint32_t));
+        const uint8_t op = static_cast<uint8_t>(buf[hdr]);
+        uint32_t off = hdr + 1u;
 
         char path[MAX_PATH_LEN] = {};
         char label[MAX_LABEL_LEN] = {};
         char by[MAX_OWNER_ID] = {};
-        bool ok = read_lp_str(buf, msg_len, off, path, sizeof(path))
-                  && read_lp_str(buf, msg_len, off, label, sizeof(label))
-                  && read_lp_str(buf, msg_len, off, by, sizeof(by));
+        const bool ok = read_lp_str(buf, msg_len, off, path, sizeof(path))
+                        && read_lp_str(buf, msg_len, off, label, sizeof(label))
+                        && read_lp_str(buf, msg_len, off, by, sizeof(by));
 
-        // Build the verdict JSON + status byte per op.
-        char json[EDGE_WFLW_JSON_MAX] = {};
-        uint8_t status = EDGE_WFLW_STATUS_OK;
+        // Every frame becomes one filed command; its mark says what the reply answers.
+        const ecs::Entity cmd = registry.create();
+        auto& fwd = registry.emplace<StorageReqWflwFwdComponent>(cmd);
+        fwd.cli_conn = cli_conn;
+        ase::utils::str_copy(fwd.path, MAX_PATH_LEN, path);
+        ase::utils::str_copy(fwd.target_label, MAX_LABEL_LEN, label);
 
-        if (!ok || path[0] == '\0') {
-            status = EDGE_WFLW_STATUS_BAD_REQUEST;
-            ase::utils::str_copy(json, sizeof(json), "{\"error\":\"malformed_forward_frame\"}");
-        } else if (op == EDGE_WFLW_OP_PROMOTE) {
-            if (label[0] == '\0' || by[0] == '\0') {
-                status = EDGE_WFLW_STATUS_BAD_REQUEST;
-                ase::utils::str_copy(json, sizeof(json), "{\"error\":\"missing_target_or_attribution\"}");
-            } else {
-                // Replica-verified operator authority grant. The Replica already verified THIS
-                // operator's YubiKey ES256 JWT (ReplicaEdgeWflwSystem via vault->jwt_login, edge
-                // role) BEFORE forwarding frame 113, so `by` is a trusted operator identity and the
-                // Replica IS the trust boundary. The dist keeps NO operator keycard (ASE_EDGE_OPERATOR
-                // unset), so StorageWflwTranSystem would deny this promote for lack of PERM_PROMOTE.
-                // Publish the release-workflow session that PERM gate reads, owner-scoped by
-                // hashed_string(by) which is the SAME owner the tran system derives from
-                // requested_by: SES_KYCD_PERM with PERM_PROMOTE, SES_CLEARANCE at the operator tier.
-                // Read-OR / max so a real live keycard session on this dist is never downgraded. This
-                // grants NO more than the Replica already verified; it does not bypass that gate.
-                const uint32_t op_owner = entt::hashed_string(by).value();
-                float cur_perm_f = hub::get(registry, op_owner, "SES_KYCD_PERM"_hs);
-                if (ase::types::is_not_found(cur_perm_f) || cur_perm_f < 0.0f) { cur_perm_f = 0.0f; }
-                const uint16_t granted_perm =
-                    static_cast<uint16_t>(static_cast<uint16_t>(cur_perm_f) | PERM_PROMOTE);
-                hub::set(registry, op_owner, "SES_KYCD_PERM"_hs, static_cast<float>(granted_perm));
-                float cur_clr_f = hub::get(registry, op_owner, "SES_CLEARANCE"_hs);
-                if (ase::types::is_not_found(cur_clr_f) ||
-                    cur_clr_f < static_cast<float>(EDGE_CLEARANCE_OPERATOR)) {
-                    hub::set(registry, op_owner, "SES_CLEARANCE"_hs,
-                             static_cast<float>(EDGE_CLEARANCE_OPERATOR));
-                }
-                log::info("[StorageEdgeWflwFwdRcv] operator authority granted (Replica-verified YK-JWT): owner={} by={} perm={} clearance={}",
-                          op_owner, by, static_cast<uint32_t>(granted_perm),
-                          static_cast<uint32_t>(EDGE_CLEARANCE_OPERATOR));
+        const bool malformed = !ok || path[0] == '\0';
+        const bool promote = !malformed && op == op_promote;
+        const bool status = !malformed && op == op_status;
+        const bool attributed = label[0] != '\0' && by[0] != '\0';
 
-                // File the promote request in the module's own form: the request component with
-                // the three strings, marked received. StorageWflwStgeSystem stages it in Ingestion
-                // (pending tag, released gate, verdict), the same staging the hub-row door
-                // StorageWflwDrnSystem feeds, so the staging stands once for both doors and this
-                // receiver reaches no other module than the hub.
-                const ecs::Entity req_ent = registry.create();
-                auto& req = registry.emplace<StorageReqWflwTranComponent>(req_ent);
-                ase::utils::str_copy_json_safe(req.path, MAX_PATH_LEN, path);
-                ase::utils::str_copy_json_safe(req.target_label, MAX_LABEL_LEN, label);
-                ase::utils::str_copy_json_safe(req.requested_by, MAX_OWNER_ID, by);
-                registry.emplace<StorageWflwRcvTag>(req_ent);
-
-                ase::utils::str_copy(json, sizeof(json), "{\"status\":\"promote_requested\",\"path\":\"");
-                ase::utils::str_append(json, sizeof(json), path);
-                ase::utils::str_append(json, sizeof(json), "\",\"target_label\":\"");
-                ase::utils::str_append(json, sizeof(json), label);
-                ase::utils::str_append(json, sizeof(json), "\"}");
-                log::info("[StorageEdgeWflwFwdRcv] promote received: {} to {} (by {}, cli_conn={})",
-                          path, label, by, cli_conn);
-            }
-        } else {
-            // EDGE_WFLW_OP_STATUS: read the live owner-scoped verdict the workflow systems published.
-            uint32_t owner = entt::hashed_string(path).value();
-            float res_f = hub::get(registry, owner, "STG_WFLW_RES"_hs, hub::NOT_FOUND);
-            if (ase::types::is_not_found(res_f)) {
-                status = EDGE_WFLW_STATUS_NOT_FOUND;
-                ase::utils::str_copy(json, sizeof(json), "{\"error\":\"no_workflow_state\",\"path\":\"");
-                ase::utils::str_append(json, sizeof(json), path);
-                ase::utils::str_append(json, sizeof(json), "\"}");
-            } else {
-                int32_t res_i = static_cast<int32_t>(res_f);
-                if (!ase::types::is_in_rng_i32(res_i, 0, 5)) res_i = 0;
-                ase::utils::str_copy(json, sizeof(json), "{\"path\":\"");
-                ase::utils::str_append(json, sizeof(json), path);
-                ase::utils::str_append(json, sizeof(json), "\",\"result\":");
-                append_num(json, sizeof(json), static_cast<uint32_t>(res_i));
-                ase::utils::str_append(json, sizeof(json), ",\"result_name\":\"");
-                ase::utils::str_append(json, sizeof(json), wflw_res_name(res_i));
-                ase::utils::str_append(json, sizeof(json), "\"");
-                float stage_f = hub::get(registry, owner, "STG_WFLW_STAGE"_hs, hub::NOT_FOUND);
-                if (!ase::types::is_not_found(stage_f)) {
-                    int32_t stage_i = static_cast<int32_t>(stage_f);
-                    if (!ase::types::is_in_rng_i32(stage_i, 0, 4)) stage_i = 0;
-                    ase::utils::str_append(json, sizeof(json), ",\"stage\":");
-                    append_num(json, sizeof(json), static_cast<uint32_t>(stage_i));
-                    ase::utils::str_append(json, sizeof(json), ",\"stage_name\":\"");
-                    ase::utils::str_append(json, sizeof(json), wflw_stage_name(stage_i));
-                    ase::utils::str_append(json, sizeof(json), "\"");
-                }
-                ase::utils::str_append(json, sizeof(json), "}");
-            }
+        if (malformed) {
+            ase::utils::str_copy(fwd.reason, MAX_REASON_LEN, "malformed_forward_frame");
+            registry.emplace<StorageWflwRjctTag>(cmd);
         }
-
-        // Reply frame [114][cli_conn:u32][status:u8][json_len:u32][json] onto the outbound queue;
-        // the Replica relays it VERBATIM to the ase-cli connection.
-        if (outq == nullptr) {
-            log::error(log::ERR::CAT::RESOURCE_UNAVAIL, "StorageEdgeWflwFwdRcv", cli_conn,
-                       "EDGE_WFLW_outbound_queue");
-            msg_len = 0;
-            continue;
+        if (promote && !attributed) {
+            ase::utils::str_copy(fwd.reason, MAX_REASON_LEN, "missing_target_or_attribution");
+            registry.emplace<StorageWflwRjctTag>(cmd);
         }
-        char frame[EDGE_WFLW_RES_HDR + EDGE_WFLW_JSON_MAX] = {};
-        uint32_t jl = ase::utils::str_len(json, EDGE_WFLW_JSON_MAX);
-        frame[0] = static_cast<char>(EDGE_WFLW_BIN_MSG_RES);
-        std::memcpy(frame + 1, &cli_conn, 4);
-        frame[5] = static_cast<char>(status);
-        std::memcpy(frame + 6, &jl, 4);
-        for (uint32_t k = 0; k < jl; ++k) frame[EDGE_WFLW_RES_HDR + k] = json[k];
-        if (!outq->push_outbound(frame, EDGE_WFLW_RES_HDR + jl)) {
-            // KATEGORIE: CAPACITY_REACHED, nicht RESOURCE_UNAVAIL. Der `outq == nullptr`-Zweig
-            // weiter oben hat den Fall "Queue fehlt" schon abgefangen; wer hier ankommt, hat
-            // eine Queue, die DA ist und ARBEITET — ihr fehlt nur der Platz. Genau so trennt
-            // die Abgrenzung an der Konstanten die beiden: dort ist die Ressource nicht zu
-            // belegen, hier ist sie belegt. Dass beide Zweige dieselbe Wirkung haben (das
-            // Verdikt ist weg), macht sie nicht zur selben Ursache — und der Leser bekommt
-            // zwei verschiedene naechste Schritte.
-            //
-            // EBENE: ERR und nicht die WRN-Haelfte. Der Unterschied ist nicht die Schwere,
-            // sondern ob danach noch etwas passiert: dieses Verdikt wird von keinem spaeteren
-            // Durchlauf nachgeholt, der Aufrufer wartet auf eine Antwort, die nie kommt.
-            log::error(log::ERR::CAT::CAPACITY_REACHED, "StorageEdgeWflwFwdRcv", cli_conn,
-                       "EDGE_WFLW_outbound_capacity");
+        if (promote && attributed) {
+            // Replica-verified operator authority grant. The Replica already verified THIS
+            // operator's YubiKey ES256 JWT (ReplicaEdgeWflwSystem via vault->jwt_login, edge
+            // role) BEFORE forwarding the frame, so `by` is a trusted operator identity and the
+            // Replica IS the trust boundary. The dist keeps NO operator keycard (ASE_EDGE_OPERATOR
+            // unset), so StorageWflwTranSystem would deny this promote for lack of PERM_PROMOTE.
+            // Publish the release-workflow session that PERM gate reads, owner-scoped by
+            // hashed_string(by) which is the SAME owner the tran system derives from
+            // requested_by: SES_KYCD_PERM with PERM_PROMOTE, SES_CLEARANCE at the operator tier.
+            // Read-OR / max so a real live keycard session on this dist is never downgraded. This
+            // grants NO more than the Replica already verified; it does not bypass that gate.
+            const uint32_t op_owner = entt::hashed_string(by).value();
+            float cur_perm_f = hub::get(registry, op_owner, "SES_KYCD_PERM"_hs);
+            if (ase::types::is_not_found(cur_perm_f) || cur_perm_f < 0.0f) { cur_perm_f = 0.0f; }
+            const uint16_t granted_perm =
+                static_cast<uint16_t>(static_cast<uint16_t>(cur_perm_f) | PERM_PROMOTE);
+            hub::set(registry, op_owner, "SES_KYCD_PERM"_hs, static_cast<float>(granted_perm));
+            float cur_clr_f = hub::get(registry, op_owner, "SES_CLEARANCE"_hs);
+            if (ase::types::is_not_found(cur_clr_f) ||
+                cur_clr_f < static_cast<float>(EDGE_CLEARANCE_OPERATOR)) {
+                hub::set(registry, op_owner, "SES_CLEARANCE"_hs,
+                         static_cast<float>(EDGE_CLEARANCE_OPERATOR));
+            }
+            log::info("[StorageEdgeWflwFwdRcvSystem] operator authority granted (Replica-verified YK-JWT): owner={} by={} perm={} clearance={}",
+                      op_owner, by, static_cast<uint32_t>(granted_perm),
+                      static_cast<uint32_t>(EDGE_CLEARANCE_OPERATOR));
+
+            // File the promote request in the module's own form: the request component with
+            // the three strings, marked received. StorageWflwStgeSystem stages it in Ingestion
+            // (pending tag, released gate, verdict), the same staging the hub-row door
+            // StorageWflwDrnSystem feeds, so the staging stands once for both doors and this
+            // receiver reaches no other module than the hub.
+            const ecs::Entity req_ent = registry.create();
+            auto& req = registry.emplace<StorageReqWflwTranComponent>(req_ent);
+            ase::utils::str_copy_json_safe(req.path, MAX_PATH_LEN, path);
+            ase::utils::str_copy_json_safe(req.target_label, MAX_LABEL_LEN, label);
+            ase::utils::str_copy_json_safe(req.requested_by, MAX_OWNER_ID, by);
+            registry.emplace<StorageWflwRcvTag>(req_ent);
+            registry.emplace<StorageWflwPromTag>(cmd);
+            log::info("[StorageEdgeWflwFwdRcvSystem] promote received: {} to {} (by {}, cli_conn={})",
+                      path, label, by, cli_conn);
+        }
+        if (status) {
+            registry.emplace<StorageWflwStatTag>(cmd);
+        }
+        if (!malformed && !promote && !status) {
+            ase::utils::str_copy(fwd.reason, MAX_REASON_LEN, "unknown_operation");
+            registry.emplace<StorageWflwRjctTag>(cmd);
         }
 
         msg_len = 0;
@@ -414,7 +382,7 @@ void StorageEdgeWflwFwdRcvSystem::tick(ecs::Registry& registry, float /*dt*/) {
 }
 
 void StorageEdgeWflwFwdRcvSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::debug("[StorageEdgeWflwFwdRcv] Stopped");
+    log::debug("[StorageEdgeWflwFwdRcvSystem] Stopped");
 }
 
 }  // namespace ase::storage

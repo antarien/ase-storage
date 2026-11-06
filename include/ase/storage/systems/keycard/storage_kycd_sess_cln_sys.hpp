@@ -18,7 +18,9 @@
  * @layer       3 (Modules)
  * @category    action/maintenance/cleanup
  * @schedule    Preservation
+ * @design      DSGN_021
  * @usecase     usecase:100265 - check access clearance
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-07-28
  * @modified    2026-10-10
  * @version     1.1.0

@@ -3,24 +3,33 @@
  *
  * @file        storage_edge_kycd_res_drn_sys.cpp
  * @brief       StorageEdgeKycdResDrnSystem - Parses Replica keycard documents into the gate session
+ * @description Drains the keycard answer frames of the Replica from LANE_KYC, checks the envelope
+ *              against the owners' widths and publishes clearance, permission and the four codeword
+ *              hold verdicts on the owner of the recovered user_id. Frame code, envelope width,
+ *              payload width and the OK status are the hub rows of their owners, read on GLOBAL in
+ *              tick; the lane route is registered there with the read code.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Reception
+ * @design      DSGN_021
+ * @usecase     usecase:100049 - publish a hub value
+ * @actor       Protocol Channel Steward (PROTCHASTE)
  * @created     2026-06-24
- * @modified    2026-06-24
- * @version     1.0.0
+ * @modified    2026-11-05
+ * @version     1.1.0
  *
  * CAUSAL CHAIN (EDGE_KYCD_RES_DRN: Replica keycard document → gate session)
  *
- *   [Replica ReplicaEdgeKycdSystem ships BIN_MSG_EDGE_KYCD_RES over Binary WS]
+ *   [Replica ReplicaEdgeKycdSystem ships frame 34 over Binary WS]
  *          │
- *          │ L2 KernelWbskDspcSystem routes id 34 → LANE_KYC
+ *          │ L2 KernelWbskDspcSystem routes the code → LANE_KYC
  *          ▼
  *   ┌───────────────────────────────────────────────────────────────┐
  *   │  THIS SYSTEM: StorageEdgeKycdResDrnSystem (dist tier)         │
  *   │                                                               │
+ *   │  ROUTE:   register the hub frame code onto LANE_KYC           │
  *   │  POP:     drain LANE_KYC frames                               │
  *   │  PARSE:   STATUS_OK → scan the keycard document (user_id,     │
  *   │           clearance, permission, revoked, codewords[])        │
@@ -34,10 +43,13 @@
  *          ▼
  *   [ase-pl-edge-webserver acl_gate enforces clearance + codeword + permission]
  *
- * HUB Pattern (Active - publishes the gate session)
+ * HUB Pattern (Active - reads the frame contract, publishes the gate session)
  *
  * READS (from Hub):
- *   (none)
+ *   REP_CONST_BIN_MSG_EDGE_KYCD_RES      (GLOBAL) - frame code of the keycard answer
+ *   NET_CONST_RSN_MEM_READ_RES_PREFIX_SZ (GLOBAL) - envelope width in bytes
+ *   NET_CONST_RSN_MEM_READ_PAYLOAD_MAX   (GLOBAL) - largest keycard document in bytes
+ *   NET_CONST_RSN_MEM_STATUS_OK          (GLOBAL) - status byte of a found keycard
  *
  * WRITES (to Hub):
  *   SES_CLEARANCE         - keycard clearance, owner = hashed_string(user_id)
@@ -148,17 +160,18 @@
 
 // Own header FIRST
 #include <ase/storage/systems/keycard/storage_edge_kycd_res_drn_sys.hpp>
-// Module constants (EDGE_KYCD_* frame layout, codeword key buffers)
+// Module constants (codeword hashes, codeword and owner buffers)
 #include <ase/storage/types.hpp>
-// Bounded field extraction out of the JSON payload (module-internal, pure byte scans;
-// a separate concern from draining the lane and publishing the session)
+// Bounded field extraction out of the JSON payload (module-internal, pure byte scans)
 #include <ase/storage/storage_kycd_payload.hpp>
-// Hub API for owner-keyed session publication
+// Hub API for the frame contract on GLOBAL and the owner-keyed session publication
 #include <ase/hub/api.hpp>
+// Types (L0 - sentinel and range predicates)
+#include <ase/types/types.hpp>
 // Utils (L0 — safe C-string operations)
 #include <ase/utils/strops.hpp>
 // Transport inbound lane (L1 via ctx — the L2 demux fills LANE_KYC; this module
-// NEVER touches the socket). L3→L1 erlaubt.
+// never touches the socket). L3 to L1 is allowed.
 #include <ase/transport/inbound_queue_resource_manager.hpp>
 #include <ase/transport/types.hpp>
 // Logging
@@ -169,18 +182,13 @@
 
 #include <entt/core/hashed_string.hpp>
 
-using namespace entt::literals;
-
 namespace ase::storage {
+using namespace entt::literals;  // For "_hs hashed strings (Hub)
 
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 // NO STRUCTS HERE! NO View/Query operations in helpers! Only pure byte/char math!
-//
-// EMPTY ON PURPOSE. The three payload scans that used to sit here - find_token,
-// parse_num_field, parse_str_field - moved to storage_kycd_payload.hpp. They were never
-// the concern of this file: this system drains a transport lane, validates a frame and
-// publishes a session, and pulling fields out of a JSON blob is a different job. As long
-// as both lived in one file that boundary existed but had no name.
+// The payload scans of this system live in storage_kycd_payload.hpp: pulling fields out of a
+// JSON document is a concern of its own beside draining a lane and publishing a session.
 namespace {
 
 }  // anonymous namespace
@@ -189,105 +197,148 @@ namespace {
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
 void StorageEdgeKycdResDrnSystem::on_start(ecs::Registry& registry) {
-    log::debug("[StorageEdgeKycdResDrn] Started");
+    log::debug("[StorageEdgeKycdResDrnSystem] Started");
 
-    // Register the edge keycard-authz response wire-type onto the shared inbound
-    // lane so the L2 demux routes it here. Emplace the queue if the demux on_start
-    // has not run yet (order-independent: whoever runs first creates it).
+    // The shared inbound lane is emplaced here when the L2 demux on_start has not run yet
+    // (order-independent: whoever runs first creates it). The route itself needs the frame
+    // code, a hub row that stands only from the Initialization tick on, so tick registers it.
     if (registry.ctx().find<transport::InboundQueueResourceManager>() == nullptr) {
         registry.ctx().emplace<transport::InboundQueueResourceManager>();
     }
-    auto& queue = registry.ctx().get<transport::InboundQueueResourceManager>();
-    queue.register_route(EDGE_KYCD_BIN_MSG_RES, transport::LANE_KYC);
 }
 
-void StorageEdgeKycdResDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
+void StorageEdgeKycdResDrnSystem::tick(ecs::Registry& registry, float dt) {
+    (void)dt;
+
     auto* queue = registry.ctx().find<transport::InboundQueueResourceManager>();
-    if (queue == nullptr || !queue->has_inbound(transport::LANE_KYC)) return;
+    if (queue == nullptr) return;
+
+    const float code_f = hub::get(registry, hub::GLOBAL, "REP_CONST_BIN_MSG_EDGE_KYCD_RES"_hs);
+    if (ase::types::is_not_found(code_f)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageEdgeKycdResDrnSystem",
+                   "REP_CONST_BIN_MSG_EDGE_KYCD_RES");
+        return;
+    }
+    if (!ase::types::is_in_rng_f(code_f, 0.0f, static_cast<float>(UINT8_MAX))) {
+        log::warn(log::WRN::CAT::VALUE_OUT_OF_RANGE, "StorageEdgeKycdResDrnSystem", hub::GLOBAL,
+                  "REP_CONST_BIN_MSG_EDGE_KYCD_RES", code_f, 0.0f, static_cast<float>(UINT8_MAX));
+        return;
+    }
+    const uint8_t code = static_cast<uint8_t>(code_f);
+    // Writing the same route again is a map assignment and changes nothing once it stands.
+    queue->register_route(code, transport::LANE_KYC);
+    if (!queue->has_inbound(transport::LANE_KYC)) return;
+
+    // The envelope carries code, req_id, status and payload_len; a stated width below their sum
+    // or above the lane cannot frame an answer.
+    const float fields = static_cast<float>(sizeof(uint8_t) + sizeof(uint64_t) + sizeof(uint8_t) +
+                                            sizeof(uint32_t));
+    const float hdr_f = hub::get(registry, hub::GLOBAL, "NET_CONST_RSN_MEM_READ_RES_PREFIX_SZ"_hs);
+    if (ase::types::is_not_found(hdr_f)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageEdgeKycdResDrnSystem",
+                   "NET_CONST_RSN_MEM_READ_RES_PREFIX_SZ");
+        return;
+    }
+    if (!ase::types::is_in_rng_f(hdr_f, fields, static_cast<float>(transport::LANE_BUF_SZ))) {
+        log::warn(log::WRN::CAT::VALUE_OUT_OF_RANGE, "StorageEdgeKycdResDrnSystem", hub::GLOBAL,
+                  "NET_CONST_RSN_MEM_READ_RES_PREFIX_SZ", hdr_f, fields,
+                  static_cast<float>(transport::LANE_BUF_SZ));
+        return;
+    }
+    const uint32_t hdr = static_cast<uint32_t>(hdr_f);
+
+    const float payload_max_f = hub::get(registry, hub::GLOBAL, "NET_CONST_RSN_MEM_READ_PAYLOAD_MAX"_hs);
+    if (ase::types::is_not_found(payload_max_f)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageEdgeKycdResDrnSystem",
+                   "NET_CONST_RSN_MEM_READ_PAYLOAD_MAX");
+        return;
+    }
+    if (!ase::types::is_in_rng_f(payload_max_f, 1.0f, static_cast<float>(transport::LANE_BUF_SZ - hdr))) {
+        log::warn(log::WRN::CAT::VALUE_OUT_OF_RANGE, "StorageEdgeKycdResDrnSystem", hub::GLOBAL,
+                  "NET_CONST_RSN_MEM_READ_PAYLOAD_MAX", payload_max_f, 1.0f,
+                  static_cast<float>(transport::LANE_BUF_SZ - hdr));
+        return;
+    }
+    const uint32_t payload_max = static_cast<uint32_t>(payload_max_f);
+
+    const float status_ok_f = hub::get(registry, hub::GLOBAL, "NET_CONST_RSN_MEM_STATUS_OK"_hs);
+    if (ase::types::is_not_found(status_ok_f)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageEdgeKycdResDrnSystem",
+                   "NET_CONST_RSN_MEM_STATUS_OK");
+        return;
+    }
+    if (!ase::types::is_in_rng_f(status_ok_f, 0.0f, static_cast<float>(UINT8_MAX))) {
+        log::warn(log::WRN::CAT::VALUE_OUT_OF_RANGE, "StorageEdgeKycdResDrnSystem", hub::GLOBAL,
+                  "NET_CONST_RSN_MEM_STATUS_OK", status_ok_f, 0.0f, static_cast<float>(UINT8_MAX));
+        return;
+    }
+    const uint8_t status_ok = static_cast<uint8_t>(status_ok_f);
 
     char buf[transport::LANE_BUF_SZ] = {};
     uint32_t msg_len = 0;
 
     while (queue->pop_inbound(transport::LANE_KYC, buf, transport::LANE_BUF_SZ, msg_len)) {
-        // DIE FRAME-PRUEFUNGEN TRAGEN INPUT_REJECTED, und dieser Block sagt warum — inklusive
-        // der beiden Kandidaten, die hier NICHT passen.
-        //
-        // Massgeblich ist nicht die Semantik allein, sondern der Hilfetext, den log.hpp bei
-        // JEDEM Aufruf mitgibt. Die drei aelteren WRN-Kategorien sagen eine KORREKTUR zu:
-        //
-        //     VALUE_OUT_OF_RANGE  "Fix: Value will be clamped to valid range"
-        //     VALUE_NEGATIVE      "Fix: Value will be set to 0"
-        //     VALUE_INVALID       "Fix: Value will be set to default"
-        //
-        // Jede dieser Pruefungen macht das Gegenteil: `msg_len = 0; continue;` — der Frame wird
-        // VERWORFEN, nichts geklemmt, nichts auf einen Vorgabewert gesetzt. Alle drei schrieben
-        // hier eine Unwahrheit in jede einzelne Logzeile.
-        //
-        //     INPUT_REJECTED       "Fix: Request rejected, caller must correct it -
-        //                           not an engine fault"
-        //
-        // (Hier stand frueher eine Nummer hinter dem Namen. Sie ist entfernt und NICHT durch
-        //  eine neue ersetzt: seit dem Hash-Umbau IST die Kategorie ihr Name, und der Bestand
-        //  steht in core/ase-log/data/log_categories.json. Eine Zahl im Kommentar altert beim
-        //  naechsten Generatorlauf still — kein Tor liest Prosa.)
-        //
-        // Der sagt genau das Richtige und verspricht nichts: der Aufrufer hat etwas Unbedienbares
-        // geschickt, der Motor arbeitet korrekt. Die Dreier-Form ohne `owner` ist die dafuer
-        // gebaute — der Ausloeser ist ein fremder Aufrufer, kein Hub-Owner.
-        //
-        // WAS DABEI VERLOREN GEHT, und es ist bewusst: die ZAHLEN. Der freie String trug
-        // `msg_len` beziehungsweise das Typ-Byte; keine kategorisierte Ueberladung nimmt einen
-        // freien Text oder eine Zahl ohne `owner`. Der value_id benennt deshalb, WELCHE Zusage
-        // des Kontrakts gebrochen wurde, statt mit welchem Wert. Das ist der Tausch, den
-        // kategorisiertes Logging hier macht: Struktur gegen Detail.
-        if (msg_len < EDGE_KYCD_RES_HDR) {
-            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeKycdResDrn",
+        // THE FRAME CHECKS CARRY INPUT_REJECTED. Every one of them discards the frame
+        // (`msg_len = 0; continue;`): nothing is clamped and nothing falls back to a default, so
+        // the three correcting categories (VALUE_OUT_OF_RANGE, VALUE_NEGATIVE, VALUE_INVALID)
+        // would state a repair that never happens. INPUT_REJECTED says what does happen: the
+        // caller sent something unserviceable and the engine works correctly. The form without
+        // `owner` fits, because the trigger is a foreign caller and not a hub owner. The value_id
+        // names WHICH promise of the contract broke; the raw numbers have no categorized
+        // overload without an owner.
+        if (msg_len < hdr) {
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeKycdResDrnSystem",
                       "EDGE_KYCD_RES_frame_len");
             msg_len = 0;
             continue;
         }
 
-        uint8_t msg_type = static_cast<uint8_t>(buf[0]);
-        if (msg_type != EDGE_KYCD_BIN_MSG_RES) {
-            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeKycdResDrn",
+        const uint8_t msg_type = static_cast<uint8_t>(buf[0]);
+        if (msg_type != code) {
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeKycdResDrnSystem",
                       "EDGE_KYCD_RES_msg_type");
             msg_len = 0;
             continue;
         }
 
         uint64_t req_id = 0;
-        std::memcpy(&req_id, buf + 1, 8);
-        uint8_t status = static_cast<uint8_t>(buf[9]);
+        std::memcpy(&req_id, buf + sizeof(uint8_t), sizeof(uint64_t));
+        const uint8_t status = static_cast<uint8_t>(buf[sizeof(uint8_t) + sizeof(uint64_t)]);
         uint32_t payload_len = 0;
-        std::memcpy(&payload_len, buf + 10, 4);
+        std::memcpy(&payload_len, buf + sizeof(uint8_t) + sizeof(uint64_t) + sizeof(uint8_t),
+                    sizeof(uint32_t));
 
         // A NOT_FOUND / ERROR response publishes NOTHING: the gate stays 401 so a
         // missing or backend-failed keycard never silently grants a download. Each
         // guard is a single comparison (bounds checks, not a value range test).
-        if (status != EDGE_KYCD_STATUS_OK) {
-            log::info("[StorageEdgeKycdResDrn] EDGE_KYCD_RES status={} req_id={} — no session published",
+        if (status != status_ok) {
+            log::info("[StorageEdgeKycdResDrnSystem] EDGE_KYCD_RES status={} req_id={} — no session published",
                       static_cast<uint32_t>(status), req_id);
             msg_len = 0;
             continue;
         }
         if (payload_len < 1u) {
-            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeKycdResDrn",
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeKycdResDrnSystem",
                       "EDGE_KYCD_RES_payload_len");
             msg_len = 0;
             continue;
         }
-        uint32_t payload_end = EDGE_KYCD_RES_HDR + payload_len;
-        if (payload_end > msg_len) {
-            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeKycdResDrn",
+        if (hdr + payload_len > msg_len) {
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeKycdResDrnSystem",
                       "EDGE_KYCD_RES_payload_end");
             msg_len = 0;
             continue;
         }
-        if (payload_len > EDGE_KYCD_PAYLOAD_MAX) {
-            payload_len = EDGE_KYCD_PAYLOAD_MAX;
+        // A document above the owner's width is dropped whole: a cut JSON document could lose
+        // the revoked flag or a codeword and publish a grant the Replica never stated.
+        if (payload_len > payload_max) {
+            log::warn(log::WRN::CAT::INPUT_REJECTED, "StorageEdgeKycdResDrnSystem",
+                      "EDGE_KYCD_RES_payload_max");
+            msg_len = 0;
+            continue;
         }
 
-        const char* doc = buf + EDGE_KYCD_RES_HDR;
+        const char* doc = buf + hdr;
 
         // The Replica FIND returns a JSON array '[{...}]'; the keycard document is
         // the first (single) object. All field lookups scan the whole payload, so
@@ -298,51 +349,24 @@ void StorageEdgeKycdResDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // Without it there is no owner to publish against (no silent default).
         char user_id[MAX_OWNER_ID] = {};
         if (!parse_str_field(doc, payload_len, "\"user_id\"", user_id, sizeof(user_id))) {
-            // DIESE DREI DOKUMENTFELDER BLEIBEN log::error MIT FREIEM STRING, UND HIER IST DER
-            // GRUND EIN ANDERER ALS OBEN — er ist betrieblich, nicht formal.
-            //
-            // Fehlt user_id, clearance oder permission, bleibt das Tor auf 401 beziehungsweise
-            // faellt auf den verweigernden Boden. Das ist ein SICHERHEITSEREIGNIS.
-            //
-            // BIS 2026-08-23 STAND HIER EIN FREIER STRING, und die Begruendung war richtig: die
-            // einzige kategorisierte Form fuer diesen Fall war eine WARNUNG, und die haette die
-            // Zeile aus dem ERR-Filter geworfen — Filterbarkeit gewonnen, Sichtbarkeit verloren
-            // (Betreiber-Entscheid 2026-08-22).
-            //
-            // GEMESSEN am 2026-08-23: ACCESS_DENIED (ERR::CAT; die Nummer, die hier stand, ist
-            // entfernt und nicht ersetzt — Bestand in core/ase-log/data/log_categories.json,
-            // die Kategorie IST ihr Name) ist eine FEHLER-Kategorie, und
-            // ihr Hilfetext sagt ausdruecklich "Decision belongs in the error stream, not as a
-            // warning". Die PRAEMISSE des Entscheids — Kategorie hiesse Abstieg auf WRN —
-            // trifft damit nicht mehr zu.
-            //
-            // WAS DARAUS FOLGT, IST EINE ABWAEGUNG UND KEINE MESSUNG, und sie steht hier als
-            // solche: dass eine weggefallene Praemisse den Entscheid aufhebt, ist meine
-            // Schlussfolgerung, kein nachgeschlagener Grundsatz — im Wissensbestand ist dazu
-            // nichts zu finden. Die Umstellung wurde dem Auftraggeber am 2026-08-23 mit genau
-            // dieser Kennzeichnung zum Widerruf vorgelegt. Wer sie zurueckdreht, dreht eine
-            // Abwaegung zurueck und keinen Messfehler.
-            //
-            // WAS DER UMBAU KOSTET, damit es niemand suchen muss: req_id faellt aus der Zeile.
-            // Es ist ein uint64_t, und die kategorisierten Formen fuehren uint32_t owner — eine
-            // abgeschnittene 64-Bit-Kennung waere eine ANDERE Kennung und damit eine
-            // Falschaussage in der strukturierten Form. Dieselbe Abwaegung wie bei den
-            // Frame-Pruefungen oben.
-            //
-            // OHNE owner, und das ist hier kein Mangel: user_id ist GENAU DAS, was fehlt. Die
-            // Zeile sagt damit wahrheitsgemaess, dass die Identitaet nicht aufgeloest werden
-            // konnte — Punkt 1 des Hilfetexts.
-            log::error(log::ERR::CAT::ACCESS_DENIED, "StorageEdgeKycdResDrn",
+            // THE THREE DOCUMENT FIELDS LOG ACCESS_DENIED AT ERROR LEVEL. A missing user_id,
+            // clearance or permission keeps the gate at 401 or on the denying floor, which is a
+            // security event; ACCESS_DENIED is an error category whose help text places the
+            // decision in the error stream. req_id stays out of the line: it is a uint64_t and
+            // the categorized forms carry a uint32_t owner, so a cut 64-bit identifier would be a
+            // different identifier. Without owner here, because user_id is exactly what is
+            // missing: the line states truthfully that the identity could not be resolved.
+            log::error(log::ERR::CAT::ACCESS_DENIED, "StorageEdgeKycdResDrnSystem",
                        "EDGE_KYCD_RES_user_id");
             msg_len = 0;
             continue;
         }
-        uint32_t owner = entt::hashed_string{user_id}.value();
+        const uint32_t owner = entt::hashed_string{user_id}.value();
 
         // A revoked keycard never grants: publish NOTHING so the gate stays 401.
         uint32_t revoked = 0;
         if (parse_num_field(doc, payload_len, "\"revoked\"", revoked) && revoked != 0u) {
-            log::info("[StorageEdgeKycdResDrn] keycard revoked owner={} user='{}' — no session published",
+            log::info("[StorageEdgeKycdResDrnSystem] keycard revoked owner={} user='{}' — no session published",
                       owner, user_id);
             msg_len = 0;
             continue;
@@ -350,20 +374,17 @@ void StorageEdgeKycdResDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
         // Clearance + permission axes (gate steps 4 + 6). A missing axis is corrupt
         // state — log it and default to the denying floor so the gate refuses
-        // rather than grants on partial data.
+        // rather than grants on partial data. From here on the identity is resolved,
+        // and it is the axis the category asks for, so the line carries the owner.
         uint32_t clearance = 0;
         if (!parse_num_field(doc, payload_len, "\"clearance\"", clearance)) {
-            // MIT owner, anders als der user_id-Fall oben: ab Zeile 383 ist die Identitaet
-            // aufgeloest, und sie ist genau die Achse, nach der die Kategorie fragt
-            // ("Required clearance/permission recorded for that identity"). req_id faellt aus
-            // demselben Grund wie oben weg (uint64_t gegen uint32_t owner).
-            log::error(log::ERR::CAT::ACCESS_DENIED, "StorageEdgeKycdResDrn", owner,
+            log::error(log::ERR::CAT::ACCESS_DENIED, "StorageEdgeKycdResDrnSystem", owner,
                        "EDGE_KYCD_RES_clearance");
             clearance = 0;
         }
         uint32_t permission = 0;
         if (!parse_num_field(doc, payload_len, "\"permission\"", permission)) {
-            log::error(log::ERR::CAT::ACCESS_DENIED, "StorageEdgeKycdResDrn", owner,
+            log::error(log::ERR::CAT::ACCESS_DENIED, "StorageEdgeKycdResDrnSystem", owner,
                        "EDGE_KYCD_RES_permission");
             permission = 0;
         }
@@ -382,10 +403,10 @@ void StorageEdgeKycdResDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // after the array open-bracket and compare it EXACTLY (server-internal) against the fixed
         // edge codewords, setting the matching owner-scoped hold-verdict boolean.
         uint32_t count = 0;
-        int32_t arr_at = find_token(doc, payload_len, "\"codewords\"");
+        const int32_t arr_at = find_token(doc, payload_len, "\"codewords\"");
         if (arr_at >= 0) {
             uint32_t i = static_cast<uint32_t>(arr_at) +
-                         ase::utils::str_len("\"codewords\"", EDGE_KYCD_PAYLOAD_MAX);
+                         ase::utils::str_len("\"codewords\"", payload_len);
             // advance to the array open-bracket
             while (i < payload_len && doc[i] != '[' && doc[i] != ']') ++i;
             if (i < payload_len && doc[i] == '[') {
@@ -415,8 +436,7 @@ void StorageEdgeKycdResDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
                             //
                             // The comparison is on HASHES, against the compile-time constants
                             // in types.hpp. Identity is a lookup, and a lookup compares hashes,
-                            // never characters (WRFL_ASE_STRING_HANDLING Section 3). Nothing is
-                            // re-derived: the hash is the one computed one line above.
+                            // never characters (WRFL_ASE_STRING_HANDLING Section 3).
                             //
                             // FOUR INDEPENDENT ifs, not an else-chain: a codeword set is a SET,
                             // the four axes are orthogonal grants, and an else would make them
@@ -442,7 +462,7 @@ void StorageEdgeKycdResDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
             }
         }
 
-        log::info("[StorageEdgeKycdResDrn] session published owner={} user='{}' clrn={} perm={} cwrds={} (req_id={})",
+        log::info("[StorageEdgeKycdResDrnSystem] session published owner={} user='{}' clrn={} perm={} cwrds={} (req_id={})",
                   owner, user_id, clearance, permission, count, req_id);
 
         msg_len = 0;
@@ -450,7 +470,7 @@ void StorageEdgeKycdResDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
 }
 
 void StorageEdgeKycdResDrnSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::debug("[StorageEdgeKycdResDrn] Stopped");
+    log::debug("[StorageEdgeKycdResDrnSystem] Stopped");
 }
 
 }  // namespace ase::storage

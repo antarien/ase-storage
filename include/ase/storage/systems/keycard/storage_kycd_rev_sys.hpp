@@ -4,16 +4,24 @@
  * ASE ECS SYSTEM HEADER
  *
  * @file        storage_kycd_rev_sys.hpp
- * @brief       StorageKycdRevSystem - Tags revoked keycards
- * @description Checks revocation list, replaces VldTag with RevTag
+ * @brief       StorageKycdRevSystem - files the durable revoke record of a revoked keycard
+ * @description Walks keycards marked StorageKycdRevTag that carry no StorageKycdRevPstTag yet,
+ *              files one record entity (StorageBufKycdComponent with op KYCD_PST_OP_REVOKE,
+ *              StorageBufKycdAccComponent, StorageKycdPstPendTag) and marks the keycard
+ *              StorageKycdRevPstTag so the record is filed once. StorageKycdPstEmitSystem
+ *              ships the record on frame 35.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Preservation
+ * @parity      server_only
+ * @design      DSGN_021
+ * @usecase     usecase:101599 - revoke customer keycard
+ * @actor       Account Protection Warden (ACCPROWARD)
  * @created     2026-04-05
- * @modified    2026-04-05
- * @version     1.0.0
+ * @modified    2026-11-05
+ * @version     2.0.0
  *
  * ECS SYSTEM HEADER COMPLIANCE
  *
@@ -35,12 +43,12 @@
 namespace ase::storage {
 
 /**
- * @brief StorageKycdRevSystem - Checks keycard revocation at 1Hz
+ * @brief StorageKycdRevSystem - revoke record filing at 1Hz
  *
  * @schedule Preservation - run_after StorageKycdExpSystem
- * @reads    StorageKycdVldTag + StorageStaKycdComponent (revoked flag in ECS)
- * @writes   StorageKycdRevTag (replaces StorageKycdVldTag)
- * @depends  Revocation data loaded from MongoDB at boot, updated via API
+ * @reads    StorageStaKycdComponent + StorageKycdRevTag, excluding StorageKycdRevPstTag
+ * @writes   record entity (StorageBufKycdComponent + StorageBufKycdAccComponent +
+ *           StorageKycdPstPendTag), StorageKycdRevPstTag on the keycard
  */
 class StorageKycdRevSystem : public ecs::System {
 public:

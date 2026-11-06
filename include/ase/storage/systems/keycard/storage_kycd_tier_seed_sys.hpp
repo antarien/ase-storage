@@ -14,7 +14,9 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Configuration
+ * @design      DSGN_021
  * @usecase     usecase:100403 - seed tier keycards
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-09-14
  * @modified    2026-10-12
  * @version     1.1.0

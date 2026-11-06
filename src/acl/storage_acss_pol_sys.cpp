@@ -2,49 +2,48 @@
  * ASE ECS SYSTEM IMPLEMENTATION
  *
  * @file        storage_acss_pol_sys.cpp
- * @brief       StorageAcssPolSystem - die Politik-Tore der A/ACS-Leiter (Step 7-10)
+ * @brief       StorageAcssPolSystem - the policy gates of the A/ACS ladder (steps 7-10)
+ * @description Weighs the SUBJECT of a request whose key gates held (StorageAcssPassTag): the
+ *              workflow label, the running need-to-know task and the realm quota of a write.
+ *              The license tier codes the quota step compares against are the hub rows
+ *              ENG_CONST_TIER_PRO and ENG_CONST_TIER_ENTERPRISE, read on GLOBAL in tick.
+ *              Grants exactly here, on step 10, and files one audit row per request.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Integration
+ * @design      DSGN_021
+ * @usecase     usecase:100265 - check access clearance
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-08-31
- * @modified    2026-08-31
- * @version     1.0.0
+ * @modified    2026-11-05
+ * @version     1.1.0
  *
- * TRENNUNG 2026-08-31 — DER ANRUFER UND DER GEGENSTAND WAREN EINE tick()
+ * TWO QUESTIONS, TWO FILES
  *
- * Die Torleiter wog beides in derselben Funktion: WER DARF (Ausweis, Revier, Gitter, Schutzstufe,
- * Codewort, Recht) und WAS GILT FUER DIESEN GEGENSTAND (Label, laufende Aufgabe, Kontingent). Die
- * erste Frage haengt am ANRUFER und aendert sich mit seiner Keycard; die zweite haengt am GUT und
- * aendert sich mit dem Arbeitsstand. Zwei Fragen, zwei Fehlerbilder, zwei Dateien — dieselbe
- * Trennung, die am 2026-08-29 schon Aufloesung und Torleiter geschieden hat.
+ * The gate ladder weighs two things. WHO MAY (credential, realm, lattice, protection level,
+ * codeword, permission) hangs on the CALLER and changes with his keycard; StorageAcssChkSystem
+ * answers it. WHAT HOLDS FOR THIS SUBJECT (label, running task, quota) hangs on the ASSET and
+ * changes with the state of work; this system answers it. A change to the quota tariff, such as
+ * a new tier, therefore never touches the file that holds the codeword check.
  *
- * WAS DIE TRENNUNG WERT IST: eine Aenderung am Kontingent-Tarif - etwa eine neue Stufe - war
- * vorher eine Aenderung an derselben Datei, in der auch die Codewort-Pruefung steht. Das ist die
- * teuerste Nachbarschaft, die es in einer Zugriffsentscheidung geben kann.
+ * THE LADDER STAYS STRICTLY ORDERED AND GRANTS ONLY ON STEP 10. What arrives here held steps 1
+ * to 6 and carries StorageAcssPassTag.
  *
- * DER ANLASS WAR EIN VERSTECKTER HELFER, und das gehoert hierher, weil es sonst wie eine
- * Zeilenoptimierung aussieht: `emit_audit(ecs::Registry&, ...)` stellte die Pruefspur-Zeile aus
- * einem storage_acss_ladder-Header heraus - eine freie Funktion mit der Registry im Argument, also
- * ECS-Arbeit hinter einem Namen. Ausgeschrieben traegt jede der zehn Ausgangsstellen sie selbst,
- * und der Rumpf fiel damit in das GOD_SYSTEM_UNSPLIT_BAND. Die ZAHL war der Anlass, die NAHT war
- * schon vorher da.
+ * WHAT THIS SYSTEM DERIVES ITSELF. It needs four values of the caller side: the owner preset,
+ * the effective clearance, the user hash and the prefix hashes of the path. It derives them from
+ * the same inputs with the same pure forms (storage_acss_ladder.hpp). `required_perm` and the
+ * effective permissions are NOT derived: they belong to the key gates and no gate here reads them.
  *
- * DIE LEITER BLEIBT STRENG GEORDNET UND ERTEILT AUSSCHLIESSLICH AUF SPROSSE 10. Der Schnitt
- * aendert daran nichts: er verlegt die Sprossen 7 bis 10 in eine eigene Datei, nicht ihre
- * Reihenfolge. Was hier ankommt, hat die Sprossen 1 bis 6 gehalten und traegt StorageAcssPassTag.
+ * WHY THE TIER CODES COME FROM THE HUB. The license tier is an engine-wide value with one owner,
+ * the hub rows ENG_CONST_TIER_*; a module-local constant with the same number would be a second
+ * place where it can be wrong. When a row is missing or out of range, the quota step cannot tell
+ * the tariff of the realm, so a write is refused fail-closed with "tier_constant_missing".
  *
- * WAS DIESES SYSTEM SELBST ABLEITET UND WARUM NICHT MEHR. Es braucht vier Groessen aus dem
- * Anrufer-Teil - die Eigentuemer-Vorgabe, die wirksame Freigabestufe, den Nutzer-Hash und die
- * Praefix-Hashes des Pfades - und leitet sie aus DENSELBEN Eingaben mit DENSELBEN reinen Formen
- * neu ab. `required_perm` und die wirksamen Rechte leitet es NICHT ab: die gehoeren den
- * Schluessel-Toren und werden hier von keinem Tor gelesen. Ein Wert, der an zwei Orten steht, ist
- * ein Wert, der an einem davon falsch sein kann.
+ * CAUSAL CHAIN (CHAIN_STORAGE_ACSS_POL: key gates held → grant or deny)
  *
- * CAUSAL CHAIN (CHAIN_STORAGE_ACSS_POL: Key gates held → Grant or Deny)
- *
- *   StorageAcssChkSystem (Sprossen 1-6 gehalten)
+ *   StorageAcssChkSystem (steps 1-6 held)
  *          │
  *          │ StorageAcssPassTag
  *          ▼
@@ -52,37 +51,40 @@
  *   │  THIS SYSTEM: StorageAcssPolSystem                          │
  *   │                                                             │
  *   │  READS:                                                     │
- *   │    StorageStaAcssRslvComponent (Etikett, Schutzstufe)       │
- *   │    StorageAcssOwnrTag (Eigentuemer-Vorgabe)                 │
+ *   │    StorageStaAcssRslvComponent (label, protection level)    │
+ *   │    StorageAcssOwnrTag (owner preset)                        │
  *   │    StorageReqAcssComponent + StorageReqCredComponent        │
- *   │    StorageStaRelmComponent (Revier-Kennung und Tarifstufe)  │
+ *   │    StorageStaRelmComponent (realm id and license tier)      │
  *   │    StorageStaTaskComponent + StorageTaskIdnComponent        │
+ *   │    ENG_CONST_TIER_PRO / _ENTERPRISE (Hub, GLOBAL)           │
  *   │                                                             │
  *   │  WRITES:                                                    │
- *   │    StorageAcssGrntTag oder StorageAcssDenyTag               │
- *   │    Pruefspur je Ausgang (StorageBufAudtComponent)           │
+ *   │    StorageAcssGrntTag or StorageAcssDenyTag                 │
+ *   │    one audit row per request (StorageBufAudtComponent)      │
  *   └─────────────────────────────────────────────────────────────┘
  *          │
- *          │ Request entity tagged with grant or deny
+ *          │ request entity tagged with grant or deny
  *          ▼
  *   StorageFileWritSystem processes granted requests
  *
- * WER NACH DIESEM SYSTEM LAEUFT, LIEF FRUEHER NACH StorageAcssChkSystem. Die Gewaehrungsmarke
- * entsteht seit dem 2026-08-31 hier; StorageFileWritSystem, StorageCncmFltSystem und
- * StorageCurPrcSystem tragen ihre Kante deshalb auf dieses System. Eine Kante, die auf der halben
- * Leiter stehen bliebe, saehe NULL Gewaehrungen und taete still gar nichts — kein Absturz, keine
- * Meldung, nur ein Dateischreiber, der nie schreibt.
+ * Every edge that waits for the result of the ladder points at THIS system
+ * (StorageFileWritSystem, StorageCncmFltSystem, StorageCurPrcSystem): an edge that stopped at
+ * StorageAcssChkSystem would see zero grants and silently do nothing.
  *
  * HUB Pattern (ARCH_ASE_HUB)
  *
+ * READS (Hub, GLOBAL):
+ *   ENG_CONST_TIER_PRO          → the license tier code of the paid tariff
+ *   ENG_CONST_TIER_ENTERPRISE   → the license tier code of the dedicated tariff
+ *
  * READS (from ase-storage internal):
- *   StorageStaAcssRslvComponent → Etikett und Schutzstufe der aufgeloesten Regel
- *   StorageReqCredComponent     → die Keycard des Anrufers, sofern die Eigentuemer-Vorgabe nicht greift
- *   StorageStaRelmComponent     → Revier-Kennung und Tarifstufe fuer die Kontingent-Grenze
+ *   StorageStaAcssRslvComponent → label and protection level of the resolved rule
+ *   StorageReqCredComponent     → the caller's keycard, unless the owner preset applies
+ *   StorageStaRelmComponent     → realm id and license tier for the quota limit
  *
  * WRITES (to ase-storage internal):
- *   StorageAcssGrntTag / StorageAcssDenyTag → die Entscheidung, genau eine je Anfrage
- *   StorageBufAudtComponent                 → die Pruefspur-Zeile dieser Entscheidung
+ *   StorageAcssGrntTag / StorageAcssDenyTag → the decision, exactly one per request
+ *   StorageBufAudtComponent                 → the audit row of this decision
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -187,7 +189,7 @@
 #include <ase/storage/components/state/storage_sta_acss_rslv_comp.hpp>
 #include <ase/storage/components/state/storage_sta_task_comp.hpp>
 #include <ase/storage/components/state/storage_task_idn_comp.hpp>
-// Die Pruefspur-Zeile wird in DIESEM Rumpf gestellt, nicht von einem Helfer mit ecs::Registry&.
+// The audit row is filed in THIS body, not by a helper that takes ecs::Registry&.
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
 #include <ase/storage/components/state/storage_audt_outc_comp.hpp>
 #include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
@@ -199,6 +201,10 @@
 #include <ase/storage/storage_acss_index_resource_manager.hpp>
 #include <ase/storage/storage_acss_ladder.hpp>
 #include <ase/storage/types.hpp>
+// Hub (ENG_CONST_TIER_* on GLOBAL)
+#include <ase/hub/api.hpp>
+// Types SSOT (is_not_found / is_in_rng_f on hub::get reads)
+#include <ase/types/types.hpp>
 #include <ase/utils/strops.hpp>
 // Logging
 #include <ase/log/log.hpp>
@@ -234,21 +240,48 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
     auto* idx_ptr = registry.ctx().find<StorageAcssIndexResourceManager*>();
     if (!idx_ptr || !(*idx_ptr)) {
-        // SCHEDULE_ORDER: der Erzeuger (StorageAcssIdxSystem) hat den ctx-Halter noch nicht angelegt.
+        // SCHEDULE_ORDER: the producer (StorageAcssIdxSystem) has not laid the ctx holder yet.
         log::error(log::ERR::CAT::SCHEDULE_ORDER, "StorageAcssPolSystem",
                    "StorageAcssIndexResourceManager");
         return;
     }
     auto& idx = **idx_ptr;
 
-    // Die Eigentuemer-Klassifikation als Tag-gefilterte View, EINMAL gebaut. Die Zugehoerigkeit
-    // ist dann ein O(1)-Test auf der gefilterten Menge - nie ein all_of<Tag> im Rumpf
-    // (WRFL_ASE_TAGGED_VIEWS), und dieselbe Form, die die Schluessel-Tore davor nutzen.
+    // The license tier codes of the two paid tariffs, read once per tick. A tier is a byte on
+    // the realm record, so a code outside 0..UINT8_MAX could never match one.
+    const float byte_max = static_cast<float>(UINT8_MAX);
+    bool tier_ready = true;
+    const float tier_pro_f = hub::get(registry, hub::GLOBAL, "ENG_CONST_TIER_PRO"_hs);
+    if (ase::types::is_not_found(tier_pro_f)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageAcssPolSystem", "ENG_CONST_TIER_PRO");
+        tier_ready = false;
+    }
+    if (tier_ready && !ase::types::is_in_rng_f(tier_pro_f, 0.0f, byte_max)) {
+        log::warn(log::WRN::CAT::VALUE_OUT_OF_RANGE, "StorageAcssPolSystem", hub::GLOBAL,
+                  "ENG_CONST_TIER_PRO", tier_pro_f, 0.0f, byte_max);
+        tier_ready = false;
+    }
+    const float tier_ent_f = hub::get(registry, hub::GLOBAL, "ENG_CONST_TIER_ENTERPRISE"_hs);
+    if (ase::types::is_not_found(tier_ent_f)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageAcssPolSystem", "ENG_CONST_TIER_ENTERPRISE");
+        tier_ready = false;
+    }
+    if (tier_ready && !ase::types::is_in_rng_f(tier_ent_f, 0.0f, byte_max)) {
+        log::warn(log::WRN::CAT::VALUE_OUT_OF_RANGE, "StorageAcssPolSystem", hub::GLOBAL,
+                  "ENG_CONST_TIER_ENTERPRISE", tier_ent_f, 0.0f, byte_max);
+        tier_ready = false;
+    }
+    const uint8_t tier_pro = tier_ready ? static_cast<uint8_t>(tier_pro_f) : 0u;
+    const uint8_t tier_ent = tier_ready ? static_cast<uint8_t>(tier_ent_f) : 0u;
+
+    // The owner classification as a tag-filtered view, built ONCE. Membership is then an O(1)
+    // test on the filtered set, never an all_of<Tag> in the body (WRFL_ASE_TAGGED_VIEWS), the
+    // same form the key gates before it use.
     auto own_view = registry.view<StorageAcssOwnrTag>();
 
-    // Nur Anfragen, deren SCHLUESSEL-Tore gehalten haben und die noch unentschieden sind. Die
-    // Marke laesst nichts anderes herein: was an Sprosse 1 bis 6 gescheitert ist, traegt
-    // StorageAcssDenyTag und faellt schon an der Ausschlussliste heraus.
+    // Only requests whose KEY gates held and which are still undecided. The tag lets nothing
+    // else in: what failed on steps 1 to 6 carries StorageAcssDenyTag and drops out at the
+    // exclude list.
     auto req_view = registry.view<StorageReqAcssComponent, StorageReqCredComponent,
                                   StorageStaAcssRslvComponent, StorageAcssPassTag>(
         entt::exclude<StorageAcssGrntTag, StorageAcssDenyTag>);
@@ -261,15 +294,12 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
         // Effective clearance. The owner preset is the in-ladder model of former realm_owner
         // power: clearance 9. Without the preset, the auth-header value is used verbatim.
-        // DIE WIRKSAMEN RECHTE WERDEN HIER NICHT ABGELEITET: kein Tor dieses Durchgangs liest
-        // sie, und ein ungenutzter Wert an einem zweiten Ort ist eine Stelle, an der er falsch
-        // sein kann, ohne dass es je auffaellt.
+        // The effective permissions are NOT derived here: no gate of this pass reads them.
         const uint8_t eff_clrn = owner_preset ? ACSS_OWNER_CLEARANCE : cred.clrn;
 
-        // Die Revier-Kennung und die Tarifstufe stehen auf dem Revier-Datensatz, nicht in der
-        // Aufloesungs-Komponente: ein zweiter Ort waere ein zweiter Ort, an dem sie falsch sein
-        // koennen. Verschwindet die Zeile zwischen den Systemen, faellt der Zugriff fail-closed -
-        // und sagt dabei nicht mehr, als er weiss.
+        // Realm id and license tier stand on the realm record, not in the resolution component.
+        // When the row vanishes between the systems, access falls fail-closed and says no more
+        // than it knows.
         const auto relm_ent = static_cast<ecs::Entity>(req.relm_ref);
         auto* relm_ptr = registry.try_get<StorageStaRelmComponent>(relm_ent);
         if (relm_ptr == nullptr) {
@@ -298,19 +328,16 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // (WRFL_ASE_STRING_HANDLING Section 3). Hashed ONCE per request, like in the key gates.
         const uint32_t user_hash = entt::hashed_string(cred.user_id).value();
 
-        // Die Praefix-Hashes des Pfades, einmal je Anfrage: der Kenntnisnahme-Bereich unten fragt
-        // "liegt dieser Pfad unter X" und liest dieselben Zahlen (storage_acss_ladder.hpp).
+        // The prefix hashes of the path, once per request: the need-to-know step below asks
+        // "does this path lie under X" and reads the same numbers (storage_acss_ladder.hpp).
         uint32_t pfx_hash[MAX_PATH_LEN + 1] = {};
         const uint32_t path_len = ase::utils::str_len(req.path, MAX_PATH_LEN);
         path_prefix_hashes(req.path, path_len, pfx_hash);
 
-        // DIE PRUEFSPUR-ZEILE ENTSTEHT EINMAL JE ANFRAGE, NICHT EINMAL JE AUSGANG. Ihre
-        // anfrageabgeleitete Haelfte - Revier, Projekt, Nutzer, Pfad, Zeitstempel - ist an JEDEM
-        // Ausgang dieselbe; nur Ergebnis und Grund unterscheiden sich. Jede Anfrage dieses
-        // Durchgangs erreicht genau einen Ausgang, also entsteht genau eine Zeile. Der frueher
-        // benutzte Helfer stellte sie an jeder Stelle neu und wiederholte dabei fuenf Felder
-        // fuenfmal - genau die Stelle, an der ein kuenftiges sechstes Feld in vier von fuenf
-        // Faellen gefehlt haette.
+        // THE AUDIT ROW IS FILED ONCE PER REQUEST, NOT ONCE PER EXIT. Its request-derived half -
+        // realm, project, user, path, timestamp - is the same at EVERY exit; only result and
+        // reason differ. Every request of this pass reaches exactly one exit, so exactly one row
+        // is filed, and a future sixth field cannot be missing at four of five exits.
         auto aud_ent = registry.create();
         auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
         aud.relm_ref = req.relm_ref;
@@ -389,11 +416,21 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
         }
 
         //Step 9: QUOTA ─ realm storage budget gate (WRITE only).
-        // A write is refused when the realm's measured usage already meets its tier limit.
+        // A write is refused when the realm's measured usage already meets its tier limit. Without
+        // the tier codes of the hub the tariff of the realm is unknown, and the write is refused.
+        if (req.action == AUD_WRITE && !tier_ready) {
+            registry.emplace<StorageAcssDenyTag>(entity);
+            auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+            outc.action = req.action;
+            outc.result = AUD_DENIED;
+            ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "tier_constant_missing");
+            registry.emplace<StorageAudtPendTag>(aud_ent);
+            continue;
+        }
         if (req.action == AUD_WRITE) {
             uint64_t tier_limit = QUOTA_INDIE_STORAGE;
-            if (target_tier == TIER_PRO)        { tier_limit = QUOTA_PRO_STORAGE; }
-            if (target_tier == TIER_ENTERPRISE) { tier_limit = QUOTA_ENT_STORAGE; }
+            if (target_tier == tier_pro) { tier_limit = QUOTA_PRO_STORAGE; }
+            if (target_tier == tier_ent) { tier_limit = QUOTA_ENT_STORAGE; }
             uint64_t used = mgr.get_realm_usage(target_id);
             if (used >= tier_limit) {
                 registry.emplace<StorageAcssDenyTag>(entity);

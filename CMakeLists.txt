@@ -11,7 +11,7 @@ ASE MODULE BUILD CONFIGURATION
 @module      ase-storage
 @layer       3 (Module)
 @created     2026-05-11
-@modified    2026-09-08
+@modified    2026-11-05
 @version     00.00.35.00035 [core]
 
 CMAKE MODULE COMPLIANCE
@@ -135,6 +135,7 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/request/storage_req_kycd_cwrd_comp.hpp
     include/ase/storage/components/request/storage_req_kycd_tkn_comp.hpp
     include/ase/storage/components/request/storage_req_wflw_tran_comp.hpp
+    include/ase/storage/components/request/storage_req_wflw_fwd_comp.hpp
 
     #[[
     COMPONENTS - TAG
@@ -155,6 +156,9 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/tag/storage_acss_deny_tag.hpp
     include/ase/storage/components/tag/storage_audt_pend_tag.hpp
     include/ase/storage/components/tag/storage_wflw_rcv_tag.hpp
+    include/ase/storage/components/tag/storage_wflw_prom_tag.hpp
+    include/ase/storage/components/tag/storage_wflw_stat_tag.hpp
+    include/ase/storage/components/tag/storage_wflw_rjct_tag.hpp
     include/ase/storage/components/tag/storage_wflw_pend_tag.hpp
     include/ase/storage/components/tag/storage_wflw_gate_tag.hpp
     include/ase/storage/components/tag/storage_wflw_pst_pend_tag.hpp
@@ -198,6 +202,8 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/systems/keycard/storage_edge_kycd_res_drn_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_exp_sys.hpp
     include/ase/storage/systems/keycard/storage_kycd_rev_sys.hpp
+    include/ase/storage/systems/keycard/storage_kycd_rev_syn_sys.hpp
+    include/ase/storage/systems/keycard/storage_kycd_pst_emit_sys.hpp
 
     #[[
     SYSTEMS - ACL + CONCEALMENT
@@ -234,14 +240,18 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/systems/workflow/storage_wflw_edge_ini_sys.hpp
     include/ase/storage/systems/workflow/storage_wflw_pst_sys.hpp
     include/ase/storage/systems/workflow/storage_wflw_cln_sys.hpp
+    include/ase/storage/systems/workflow/storage_edge_wflw_fwd_rcv_sys.hpp
+    include/ase/storage/systems/workflow/storage_edge_wflw_rply_sys.hpp
 
     #[[
     SYSTEMS - EDGE DISTRIBUTION
     Phase 12 edge_binaries realm seeding. The realm ONLY - its directory tree,
     entity and identity tag. The ACL rules live under acl/ (StorageAcssEdgeIni),
     the release-pipeline transition graph under workflow/ (StorageWflwEdgeIni).
+    The realm's license tier is written from the hub in Integration (StorageEdgeTier).
     ]]
     include/ase/storage/systems/edge/storage_edge_ini_sys.hpp
+    include/ase/storage/systems/edge/storage_edge_tier_sys.hpp
 
     #[[
     SYSTEMS - AUDIT + SURVEILLANCE
@@ -277,7 +287,6 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/tag/storage_kycd_pst_done_tag.hpp
     include/ase/storage/components/tag/storage_kycd_pst_pend_tag.hpp
     include/ase/storage/components/tag/storage_kycd_rev_pst_tag.hpp
-    include/ase/storage/systems/workflow/storage_edge_wflw_fwd_rcv_sys.hpp
     include/ase/storage/systems/curator/storage_cur_prc_sys.hpp
 
     #[[
@@ -303,6 +312,8 @@ add_library(${PROJECT_NAME} SHARED
     src/keycard/storage_edge_kycd_res_drn_sys.cpp
     src/keycard/storage_kycd_exp_sys.cpp
     src/keycard/storage_kycd_rev_sys.cpp
+    src/keycard/storage_kycd_rev_syn_sys.cpp
+    src/keycard/storage_kycd_pst_emit_sys.cpp
 
     #[[
     SYSTEM IMPLEMENTATIONS - ACL + CONCEALMENT
@@ -330,6 +341,7 @@ add_library(${PROJECT_NAME} SHARED
     src/workflow/storage_wflw_drn_sys.cpp
     src/workflow/storage_wflw_stge_sys.cpp
     src/workflow/storage_edge_wflw_fwd_rcv_sys.cpp
+    src/workflow/storage_edge_wflw_rply_sys.cpp
     src/workflow/storage_wflw_gate_sys.cpp
     src/workflow/storage_wflw_tran_sys.cpp
     src/workflow/storage_wflw_perm_sys.cpp
@@ -341,6 +353,7 @@ add_library(${PROJECT_NAME} SHARED
     SYSTEM IMPLEMENTATIONS - EDGE DISTRIBUTION
     ]]
     src/edge/storage_edge_ini_sys.cpp
+    src/edge/storage_edge_tier_sys.cpp
 
     #[[
     SYSTEM IMPLEMENTATIONS - AUDIT + SURVEILLANCE

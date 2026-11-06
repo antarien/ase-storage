@@ -7,7 +7,9 @@
  * @brief       StorageIdnIdxSystem - indexes the identities the frame resolves by key
  * @description Realms by their id hash, open sessions by the client id of their HUB_CLAI_IDNT row
  *
+ * @design      DSGN_021
  * @usecase     usecase:100265 - check access clearance
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  *
  * @module      ase-storage
  * @layer       3 (Modules)

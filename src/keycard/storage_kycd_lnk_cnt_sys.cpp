@@ -6,7 +6,9 @@
  * @description Nur Rechnung. Die Zahl entsteht hier aus den Marken des Bindungsschritts und wird
  *              von StorageKycdStatPubSystem angesagt.
  *
+ * @design      DSGN_021
  * @usecase     usecase:100265 - check access clearance
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  *
  * @module      ase-storage
  * @layer       3 (Modules)

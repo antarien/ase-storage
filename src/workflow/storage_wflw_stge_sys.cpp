@@ -8,7 +8,9 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Ingestion
+ * @design      DSGN_021
  * @usecase     usecase:100329 - stage workflow promotion
+ * @actor       Operator Command Dispatcher (OPERCOMDIS)
  * @created     2026-10-12
  * @modified    2026-10-12
  * @version     1.0.0

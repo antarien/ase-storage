@@ -5,15 +5,13 @@
  *
  * @file        storage_edge_wflw_fwd_rcv_sys.hpp
  * @brief       StorageEdgeWflwFwdRcvSystem - Replica-forwarded operator workflow command receiver
- * @description Dist-tier receiver for the operator release-workflow WS console lane.
- *              Pops BIN_MSG_EDGE_WFLW_FWD(113) off the transport workflow lane (the
- *              Replica already verified the operator YK-JWT), and for a promote files
- *              the module's own promote request (StorageReqWflwTranComponent marked
- *              StorageWflwRcvTag; StorageWflwStge/Gate/Tran/Pst then drive it), or for a
- *              status reads the live STG_WFLW_STAGE/RES the workflow systems published.
- *              It replies BIN_MSG_EDGE_WFLW_RES(114) on the transport outbound queue,
- *              which the Replica relays to the originating ase-cli connection. Mirror of
- *              StorageEdgeKycdResDrnSystem (the customer-auth inbound lane).
+ * @description Dist-tier receiver for the operator release-workflow WS console lane. Pops the
+ *              forwarded command frame off the transport workflow lane (the Replica already
+ *              verified the operator YK-JWT) and files each one as a StorageReqWflwFwdComponent
+ *              marked promote, status or refused. For a promote it also grants the operator and
+ *              files the module's own promote request (StorageReqWflwTranComponent marked
+ *              StorageWflwRcvTag; StorageWflwStge/Gate/Tran/Pst then drive it).
+ *              StorageEdgeWflwRplySystem answers every filed command in the same tick.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
@@ -21,8 +19,8 @@
  * @schedule    Reception
  * @usecase     usecase:100317 - relay operator command
  * @created     2026-07-12
- * @modified    2026-10-12
- * @version     1.1.0
+ * @modified    2026-11-05
+ * @version     1.2.0
  *
  * ECS SYSTEM HEADER COMPLIANCE
  *
@@ -46,22 +44,23 @@ namespace ase::storage {
 /**
  * @brief StorageEdgeWflwFwdRcvSystem - Replica → dist operator workflow command receiver
  *
- * Registers BIN_MSG_EDGE_WFLW_FWD(113) onto the transport workflow lane (LANE_WFLW) at
- * on_start so the L2 KernelWbskDspcSystem routes it here. Each tick it pops every queued
- * forward frame [113][cli_conn:u32][op:u8][path][label][by]; for EDGE_WFLW_OP_PROMOTE it
- * files a StorageReqWflwTranComponent request marked StorageWflwRcvTag, which
- * StorageWflwStgeSystem stages in Ingestion as it stages a request from a hub row, and for
- * EDGE_WFLW_OP_STATUS it reads the owner-scoped STG_WFLW_STAGE/RES the workflow published.
- * It then ships BIN_MSG_EDGE_WFLW_RES(114) (cli_conn echoed) onto the transport outbound
- * queue for the Replica to relay to the CLI.
+ * Each tick it reads the frame code NET_CONST_BIN_MSG_EDGE_WFLW_FWD and writes its route onto
+ * the transport workflow lane (LANE_WFLW), so the L2 KernelWbskDspcSystem routes it here. It
+ * pops every queued forward frame [code][cli_conn:u32][op:u8][path][label][by], parsed at the
+ * head width REP_CONST_EDGE_WFLW_FWD_HDR; the operation byte is compared with
+ * REP_CONST_EDGE_WFLW_OP_PROMOTE and REP_CONST_EDGE_WFLW_OP_STATUS. Every frame becomes one
+ * StorageReqWflwFwdComponent marked StorageWflwPromTag, StorageWflwStatTag or
+ * StorageWflwRjctTag.
  *
- * @schedule Reception - alongside the kernel WS inbound demux (mirror StorageEdgeKycdResDrnSystem)
- * @reads    transport::InboundQueueResourceManager LANE_WFLW (BIN_MSG_EDGE_WFLW_FWD),
- *           STG_WFLW_STAGE / STG_WFLW_RES (Hub, owner-keyed, for status)
- * @writes   StorageReqWflwTranComponent + StorageWflwRcvTag (promote request),
- *           SES_KYCD_PERM / SES_CLEARANCE (Hub, the Replica-verified operator grant),
- *           transport::OutboundQueueResourceManager (BIN_MSG_EDGE_WFLW_RES verdict)
- * @depends  the dist links NO data client; promote drives the local workflow, status reads the Hub
+ * @schedule Reception - alongside the kernel WS inbound demux, before StorageEdgeWflwRplySystem
+ * @reads    transport::InboundQueueResourceManager LANE_WFLW (forwarded command frame),
+ *           NET_CONST_BIN_MSG_EDGE_WFLW_FWD and REP_CONST_EDGE_WFLW_FWD_HDR / _OP_* (Hub, GLOBAL),
+ *           SES_KYCD_PERM / SES_CLEARANCE (Hub, operator-keyed, before the grant)
+ * @writes   StorageReqWflwFwdComponent + StorageWflwPromTag / StorageWflwStatTag /
+ *           StorageWflwRjctTag (filed command), StorageReqWflwTranComponent +
+ *           StorageWflwRcvTag (promote request), SES_KYCD_PERM / SES_CLEARANCE (Hub, the
+ *           Replica-verified operator grant)
+ * @depends  the dist links NO data client; promote drives the local workflow, the reply system answers
  */
 class StorageEdgeWflwFwdRcvSystem : public ecs::System {
 public:

@@ -6,14 +6,17 @@
  * @file        types.hpp
  * @brief       Single Source of Truth for ase-storage constants and types
  * @description All compile-time constants, type aliases, and enumeration values.
- *              A/ACS patterns applied to real-world engine asset management.
+ *              A/ACS patterns applied to real-world engine asset management. License tier
+ *              codes and the frame codes, envelopes and bounds of the edge wire frames are
+ *              hub rows (hub_constants.json), read with hub::get in the systems that use them.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @usecase     usecase:100265 - check access clearance
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-04-04
- * @modified    2026-10-07
- * @version     1.0.0
+ * @modified    2026-11-05
+ * @version     1.1.0
  *
  * ECS TYPES COMPLIANCE
  *
@@ -77,13 +80,7 @@ constexpr uint8_t REALM_ACTIVE        = 0;    // Normal read-write operation mod
 constexpr uint8_t REALM_SUSPENDED     = 1;    // Disabled by admin (no read or write)
 constexpr uint8_t REALM_ARCHIVED      = 2;    // Read-only before deletion
 
-// TIER LEVELS (license tiers control quotas and max protection)
-
-constexpr uint8_t TIER_INDIE          = 0;    // Small team with limited features and storage
-constexpr uint8_t TIER_PRO            = 1;    // Professional studio with expanded limits
-constexpr uint8_t TIER_ENTERPRISE     = 2;    // Full control with unlimited resources
-
-// PROTECTION LEVELS — Schutzstufen (vertical content classification)
+// PROTECTION LEVELS (vertical content classification)
 
 constexpr uint8_t PROTECTION_PUBLIC       = 0;  // Showcase and marketing material visible to all
 constexpr uint8_t PROTECTION_VISIBLE      = 1;  // Released assets and docs for realm members
@@ -120,16 +117,16 @@ constexpr uint8_t KCD_GUEST      = 2;    // Limited access for publishers or fre
 constexpr uint8_t KCD_DELEGATE   = 3;    // Transferred keycard from an existing member
 constexpr uint8_t KCD_SERVICE    = 4;    // Automated access for CI/CD build servers
 
-// SERVICE-KEYCARD DER TIER-DIENSTE (KCD_SERVICE, beim Start gepraegt)
+// SERVICE KEYCARDS OF THE TIER SERVICES (KCD_SERVICE, minted at start)
 //
-// WARUM ES DIESE KARTEN GIBT. Die A/ACS-Leiter kennt nur TEILNEHMER (DSGN_109, 83/PSHARE).
-// Ein Tier-Dienst, der ueber den Replica ein Kunden-Geheimnis anfassen will, ist ein
-// Teilnehmer wie jeder andere und braucht dieselbe Karte — sonst bleibt seine user_id leer
-// und StorageCredAcssRcvSystem verweigert bei Schritt 1 (fail-closed).
+// WHY THESE CARDS EXIST. The A/ACS ladder knows only PARTICIPANTS (DSGN_109, 83/PSHARE).
+// A tier service that wants to touch a customer secret through the Replica is a
+// participant like any other and needs the same card; otherwise its user_id stays empty
+// and StorageCredAcssRcvSystem refuses at step 1 (fail-closed).
 
-constexpr uint8_t  KYCD_TIER_CLEARANCE = PROTECTION_PROTECTED;  // Stufe der Klasse, die geoeffnet werden soll ("API keys and service credentials"); im eigenen Realm hebt der Owner-Preset ohnehin auf ACSS_OWNER_CLEARANCE, diese Zahl traegt nur die Faelle ausserhalb — hoeher setzen hiesse alles darueber gleich mit oeffnen
-constexpr uint16_t KYCD_TIER_PERMS = PERM_READ | PERM_WRITE | PERM_DELETE;  // genau die drei Aktionen der Anmeldedaten-Verwaltung (CRED_ACSS_ACTION_READ/WRITE/DELETE: list, put/rotate, delete); kein PERM_MANAGE/PERM_INVITE, denn ein Dienst, der Geheimnisse dreht, stellt keine Keycards aus
-constexpr uint64_t KYCD_TIER_EXP_AT = 0u;  // Unix-Sekunden, 0 = keine eigene Frist: ARCH_ASE_STORAGE 5.2 gibt der Service-Keycard "per Deployment-Zyklus", und die Praegung liegt in einer Lifecycle-Schedule — ein Prozessstart IST der Zyklus, die Karte kann nicht aelter werden als ihr Halter. Eine zweite Uhr daneben laesst eine Flotte an einem abgelaufenen Geheimnis sterben, waehrend alles laeuft
+constexpr uint8_t  KYCD_TIER_CLEARANCE = PROTECTION_PROTECTED;  // level of the class to be opened ("API keys and service credentials"); in its own realm the owner preset lifts it to ACSS_OWNER_CLEARANCE anyway, this number only carries the cases outside it; setting it higher would open everything above as well
+constexpr uint16_t KYCD_TIER_PERMS = PERM_READ | PERM_WRITE | PERM_DELETE;  // exactly the three actions of credential management (CRED_ACSS_ACTION_READ/WRITE/DELETE: list, put/rotate, delete); no PERM_MANAGE/PERM_INVITE, because a service that rotates secrets issues no keycards
+constexpr uint64_t KYCD_TIER_EXP_AT = 0u;  // unix seconds, 0 = no deadline of its own: ARCH_ASE_STORAGE 5.2 gives the service keycard "per deployment cycle", and minting lies in a lifecycle schedule; a process start IS the cycle, the card cannot grow older than its holder. A second clock beside it lets a fleet die on an expired secret while everything runs
 
 // AUDIT ACTIONS (recorded platform operations)
 
@@ -357,30 +354,24 @@ constexpr const char* WFLW_ART_SBOM  = ".spdx.json";  // SPDX SBOM document
 constexpr const char* WFLW_ART_SMOKE = ".smoke";      // Operator smoke-test marker (health-check passed)
 
 // Durable persist — every APPLIED transition ships as a workflow-label document to
-// the Replica (REPLACE-upsert into storage_workflow_labels keyed {realm,path}). The
-// BIN_MSG id + frame layout are mirrored from modules/ase-replication/include/ase/replication/types/workflow/types.hpp
-// (SSOT registration: ase-network types.hpp); changing either side requires changing
-// both (single contract, same envelope as the keycard persist frame 35).
-constexpr uint8_t  EDGE_WFLW_BIN_MSG_PERSIST = 112;   // dist → Replica: [112][req_id:u64][doc_len:u32][doc]
-constexpr uint32_t WFLW_PST_DOC_BUF          = 1024;  // workflow-label persist document scratch bytes (mirror EDGE_WFLW_PERSIST_DOC_MAX)
+// the Replica (REPLACE-upsert into storage_workflow_labels keyed {realm,path}).
+// StorageWflwPstSystem builds the frame; its code, envelope and document bound are
+// the hub rows NET_CONST_BIN_MSG_EDGE_WFLW_PERSIST and REP_CONST_EDGE_WFLW_PERSIST_*.
 constexpr uint32_t WFLW_REQ_BATCH            = 16;    // max workflow entities drained/denied/persisted per tick (deferred-destroy batch bound)
 
-// A/ACS ACCESS-DECISION DURABLE PERSIST (frame 122)
+// A/ACS ACCESS-DECISION DURABLE PERSIST
 // Every GRANT and every DENY of the ladder (StorageAcssChkSystem,
 // StorageWflwTranSystem, StorageWflwGateSystem, StorageWflwClnSystem,
 // StorageEdgeAudtDrnSystem) produces one StorageBufAudtComponent. Measured
 // 2026-08-16: those five producers had ZERO consumers and ZERO destroys, so the
 // forensic trail accumulated in dist RAM and never reached durable storage —
 // the decision record the whole ACL ladder exists for was the one thing nobody
-// kept. StorageAudtWritSystem ships them on this frame and RETIRES the entity,
-// which makes it the single owner of that lifetime: it runs in Preservation
-// (71), so anything that wants to READ a decision must run BEFORE it, never
-// after (Observation is 72 — this is why StorageSrvlLogSystem was moved).
-// Envelope and id mirror modules/ase-replication/include/ase/replication/types/workflow/types.hpp; SSOT
-// registration is ase-network types.hpp. Changing one side requires the other.
-constexpr uint8_t  EDGE_AUDT_BIN_MSG_PERSIST = 132;   // dist → Replica: [132][req_id:u64][doc_len:u32][doc] (relocated from 122 on 2026-08-16 - 122 is BIN_MSG_GIS_CELL_ZONE, region_wire.hpp)
-constexpr uint32_t AUDT_PST_HDR              = 13;    // frame envelope: 1 id + 8 req_id + 4 doc_len (mirror EDGE_AUDT_PERSIST_HDR)
-constexpr uint32_t AUDT_PST_DOC_BUF          = 1024;  // access-decision document scratch bytes (mirror EDGE_AUDT_PERSIST_DOC_MAX)
+// kept. StorageAudtWritSystem ships them and RETIRES the entity, which makes it
+// the single owner of that lifetime: it runs in Preservation (71), so anything
+// that wants to READ a decision must run BEFORE it, never after (Observation is
+// 72 — this is why StorageSrvlLogSystem was moved). The frame code, envelope and
+// document bound are the hub rows NET_CONST_BIN_MSG_EDGE_AUDT_PERSIST and
+// REP_CONST_EDGE_AUDT_PERSIST_*.
 // 16, not 32: the Replica's whole MongoDB seam delivers ~32 staged operations
 // per second (pool ring 64, drain cap 32, 1 Hz Preservation). A 32-entry audit
 // batch would consume the entire seam on its own and starve chunk, player and
@@ -404,19 +395,14 @@ constexpr uint64_t QUOTA_SCAN_INTERVAL_S    = 60;              // seconds betwee
 constexpr uint64_t WFLW_RETIRED_RETENTION_S = 7776000;         // 90 days: retired builds older than this are deleted
 
 // KEYCARD DURABLE-PERSIST ROUND-TRIP (Phase 12 H-3 — Replica MongoDB)
-// A minted keycard is shipped owner-keyed over the Hub WS lane to the Replica,
-// which drains the SES_KYCD_PERSIST_* signals and upserts the keycard document.
-// op distinguishes a fresh/updated keycard from a revocation so issuance and
-// revoke write the SAME durable store keyed by kycd_hash.
+// A minted or revoked keycard becomes a pending persist record (StorageBufKycdComponent
+// + StorageKycdPstPendTag); StorageKycdPstEmitSystem builds its document and ships it on
+// frame 35 to the Replica, which upserts the keycard document. op distinguishes a
+// fresh/updated keycard from a revocation so issuance and revoke write the SAME durable
+// store keyed by kycd_hash.
 
 constexpr uint8_t KYCD_PST_OP_UPSERT = 0;   // Insert or update the durable keycard document
 constexpr uint8_t KYCD_PST_OP_REVOKE = 1;   // Mark the durable keycard document revoked
-
-// Per-index Hub key construction for durable-persist codeword projection.
-// "SES_KYCD_PERSIST_CWRD_<owner>_<index>" debug-labels carry each codeword
-// string; the owner is hashed_string(issued_to) so records never collide
-// across users (mirrors the SES_KYCD_CWRD_ owner-scoped key scheme).
-constexpr uint32_t PST_KEY_BUF_LEN = 64;    // SES_KYCD_PERSIST_CWRD_<owner>_<i> key scratch chars
 
 // EDGE KEYCARD-AUTHZ FETCH LANE (Phase 12 — customer-auth edge download)
 // The dist tier (ase-server-dist) validates NOTHING itself: when a customer
@@ -429,47 +415,13 @@ constexpr uint32_t PST_KEY_BUF_LEN = 64;    // SES_KYCD_PERSIST_CWRD_<owner>_<i>
 // parses the document and publishes the SES_CLEARANCE + SES_KYCD_PERM +
 // SES_KYCD_HOLDS_* session the gate reads. The dist host links NO data client — the
 // SAME split as the edge-daemon connection-token check (ReplicaEdgeRegSystem). The
-// RES BIN_MSG id + frame layout are mirrored from
-// modules/ase-replication/include/ase/replication/types/keycard/types.hpp; changing either side
-// requires changing both (single contract).
-
-constexpr uint8_t EDGE_KYCD_BIN_MSG_RES = 34;  // Replica → dist: [34][req_id:u64][status:u8][payload_len:u32][payload]
-
-// RES frame layout (mirrors ase-replication types/memory RSN_MEM_READ_RES_HDR/PAYLOAD_MAX).
-constexpr uint32_t EDGE_KYCD_RES_HDR     = 14;    // 1 id + 8 req_id + 1 status + 4 payload_len
-constexpr uint32_t EDGE_KYCD_PAYLOAD_MAX = 8192;  // Max keycard-document payload returned per fetch
-
-// RES status enum (mirrors ase-replication types/memory RSN_MEM_STATUS_*).
-constexpr uint8_t EDGE_KYCD_STATUS_OK        = 0;  // Keycard found, document payload follows
-constexpr uint8_t EDGE_KYCD_STATUS_NOT_FOUND = 1;  // No matching keycard, payload empty
-constexpr uint8_t EDGE_KYCD_STATUS_ERROR     = 2;  // Backend/serialization error
+// answer's frame code, envelope, payload bound and status bytes are the hub rows
+// REP_CONST_BIN_MSG_EDGE_KYCD_RES and NET_CONST_RSN_MEM_*.
 
 // Max codewords parsed out of a recovered keycard document (bounds the dist decode loop).
 // Each parsed codeword is compared EXACTLY, server-internal, against the fixed edge codewords
 // and projected only as an owner-scoped SES_KYCD_HOLDS_<cw> boolean verdict — never a string
 // or per-index key over the Hub.
 constexpr uint32_t KYCD_DECODE_CWRD_MAX   = 64;  // max codewords parsed out of a recovered keycard document
-
-// Operator release-workflow WS console forward (Phase 12)
-// The operator drives promote/status from `ase edge` over the ase-cli WS console to
-// the Replica; the Replica verifies the operator YK-JWT and forwards the command here
-// as BIN_MSG_EDGE_WFLW_FWD(113). StorageEdgeWflwFwdRcvSystem pops LANE_WFLW, and for a
-// promote files the promote request (StorageWflwStge/Gate/Tran/Pst then drive it), or for a
-// status reads the
-// live STG_WFLW_STAGE/RES, then replies BIN_MSG_EDGE_WFLW_RES(114) to the Replica which
-// relays it to the CLI. Mirror of ase-network / ase-replication types.hpp (SSOT there);
-// changing either side requires changing both (single wire contract).
-constexpr uint8_t  EDGE_WFLW_BIN_MSG_FWD = 113;  // Replica → dist: [113][cli_conn:u32][op:u8][path_len:u16][path][label_len:u16][label][by_len:u16][by]
-constexpr uint8_t  EDGE_WFLW_BIN_MSG_RES = 114;  // dist → Replica → CLI: [114][cli_conn:u32][status:u8][json_len:u32][json]
-constexpr uint32_t EDGE_WFLW_FWD_HDR = 5u;   // [113] + cli_conn(4)
-constexpr uint32_t EDGE_WFLW_RES_HDR = 10u;  // [114] + cli_conn(4) + status(1) + json_len(4)
-constexpr uint8_t  EDGE_WFLW_OP_PROMOTE = 0u;  // op byte: drive the release-workflow promote
-constexpr uint8_t  EDGE_WFLW_OP_STATUS  = 1u;  // op byte: read the live workflow stage/result
-constexpr uint8_t  EDGE_WFLW_STATUS_OK          = 0u;  // verdict shipped / promote staged / status found
-constexpr uint8_t  EDGE_WFLW_STATUS_NOT_AUTHED  = 1u;  // (Replica-side only; the dist never emits it)
-constexpr uint8_t  EDGE_WFLW_STATUS_NO_DIST     = 2u;  // (Replica-side only)
-constexpr uint8_t  EDGE_WFLW_STATUS_BAD_REQUEST = 3u;  // malformed forward frame (missing path/target)
-constexpr uint8_t  EDGE_WFLW_STATUS_NOT_FOUND   = 4u;  // status: no workflow state staged for this path
-constexpr uint32_t EDGE_WFLW_JSON_MAX  = 512u;  // verdict JSON payload bytes
 
 }  // namespace ase::storage

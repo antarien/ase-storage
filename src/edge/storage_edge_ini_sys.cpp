@@ -3,14 +3,19 @@
  *
  * @file        storage_edge_ini_sys.cpp
  * @brief       StorageEdgeIniSystem - Seeds the edge_binaries distribution realm
+ * @description Lays the edge_binaries realm the one-line installer downloads the edge daemon
+ *              from: its directory tree, its realm entity and its identity tag.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Initialization
+ * @design      DSGN_021
+ * @usecase     usecase:100292 - install edge daemon
+ * @actor       Edge Release Conductor (EDGERELCON)
  * @created     2026-06-24
- * @modified    2026-08-31
- * @version     1.0.0
+ * @modified    2026-11-05
+ * @version     1.1.0
  *
  * CAUSAL CHAIN (Edge-Distribution Realm Seeding)
  *
@@ -22,19 +27,20 @@
  *   │  THIS SYSTEM: StorageEdgeIniSystem          │
  *   │                                             │
  *   │  READS:                                     │
- *   │    - StorageResourceManager* from ctx()      │
+ *   │    - StorageResourceManager* from ctx()     │
  *   │                                             │
  *   │  WRITES:                                    │
  *   │    - edge_binaries realm directory tree     │
  *   │    - StorageStaRelmComponent (edge realm)   │
  *   │    - StorageRelmIdnComponent (id hash)      │
  *   │    - StorageRelmQuotComponent (quota)       │
- *   │    - StorageRelmGlobTag + RelmActiveTag    │
+ *   │    - StorageRelmGlobTag + RelmActiveTag     │
  *   │    - StorageRelmEdgeTag (realm identity)    │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Realm entity + its identity tag ready
+ *          │ Realm entity + its identity tag ready, tier zero-initialised
  *          ▼
+ *   StorageEdgeTierSystem writes the tier from the hub in Integration
  *   StorageAcssEdgeIniSystem scopes the edge ACL rules to it
  *   StorageWflwTranSystem, WflwGateSystem, WflwClnSystem read the tag as identity
  *
@@ -51,11 +57,10 @@
  *
  * DEDICATION
  *   The REALM and nothing else: its directory tree, its entity, its identity tag.
- *   This file used to carry three objects and said so itself, in three log lines -
- *   they are now three systems. The ACL rules moved to StorageAcssEdgeIniSystem
- *   (src/acl/), the release-pipeline transition graph to StorageWflwEdgeIniSystem
- *   (src/workflow/). Nothing was dropped in the move: six rules, six codewords, four
- *   transition edges and both Hub publishes exist unchanged in their new homes.
+ *   The ACL rules of the realm are StorageAcssEdgeIniSystem (src/acl/), the
+ *   release-pipeline transition graph is StorageWflwEdgeIniSystem (src/workflow/),
+ *   and the license tier is StorageEdgeTierSystem (src/edge/), which reads it from the
+ *   hub once the hub constants exist.
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -168,9 +173,9 @@
 
 #include <entt/core/hashed_string.hpp>
 
-using namespace entt::literals;
-
 namespace ase::storage {
+
+using namespace entt::literals;
 
 // Anonymous namespace for helper FUNCTIONS (NOT static!)
 // IMPORTANT: Use anonymous namespace, NOT static keyword!
@@ -188,9 +193,8 @@ void StorageEdgeIniSystem::on_start(ecs::Registry& registry) {
 
     auto* mgr_ptr = registry.ctx().find<StorageResourceManager*>();
     if (!mgr_ptr || !(*mgr_ptr)) {
-        // SCHEDULE_ORDER: "System runs before its dependency". Der Erzeuger steht
-        // im freien String, die Kategorie macht daraus etwas Zaehlbares. Das `return` darunter ist
-        // unbedenklich — ERR-Hilfetexte sind Checklisten und sagen keine Wertkorrektur zu.
+        // SCHEDULE_ORDER: the system ran before StorageIniSystem placed the manager in ctx.
+        // The producer stands in the detail string, the category makes the case countable.
         log::error(log::ERR::CAT::SCHEDULE_ORDER, "StorageEdgeIniSystem", "StorageResourceManager");
         return;
     }
@@ -206,9 +210,11 @@ void StorageEdgeIniSystem::on_start(ecs::Registry& registry) {
     mgr.ensure_dir(dir);
     log::info("[StorageEdgeIni] edge_binaries realm directory ready");
 
-    // Realm entity: public platform realm, Enterprise tier, no concealment.
+    // Realm entity: public platform realm, no concealment. Its license tier is a hub
+    // constant that does not exist in Initialization; StorageEdgeTierSystem writes it in
+    // Integration from ENG_CONST_TIER_ENTERPRISE, so tier stays zero-initialised here.
     // quota_bytes = the MEASURED 10 GB ceiling (types.hpp EDGE_REALM_QUOTA_BYTES,
-    // R14 sizing) — the retired-cleanup keeps the realm small, not the ceiling.
+    // R14 sizing) - the retired-cleanup keeps the realm small, not the ceiling.
     auto realm_ent = registry.create();
     auto& relm = registry.emplace<StorageStaRelmComponent>(realm_ent);
     ase::utils::str_copy(relm.id, MAX_REALM_ID, EDGE_REALM_ID);
@@ -218,7 +224,6 @@ void StorageEdgeIniSystem::on_start(ecs::Registry& registry) {
     auto& relm_idn = registry.emplace<StorageRelmIdnComponent>(realm_ent);
     relm_idn.id_hash = EDGE_REALM_HASH;
     relm.default_protection = PROTECTION_PUBLIC;
-    relm.tier = TIER_ENTERPRISE;
     auto& relm_quot = registry.emplace<StorageRelmQuotComponent>(realm_ent);
     relm_quot.quota_bytes = EDGE_REALM_QUOTA_BYTES;
     registry.emplace<StorageRelmGlobTag>(realm_ent);
@@ -227,7 +232,7 @@ void StorageEdgeIniSystem::on_start(ecs::Registry& registry) {
     // tag is the SSOT for "which entity is EDGE_REALM_ID". The workflow systems
     // read it instead of scanning every realm and comparing the id string.
     registry.emplace<StorageRelmEdgeTag>(realm_ent);
-    log::info("[StorageEdgeIni] edge_binaries realm entity registered (tier=Enterprise, public, quota={} bytes)",
+    log::info("[StorageEdgeIni] edge_binaries realm entity registered (tier from hub in Integration, public, quota={} bytes)",
               relm_quot.quota_bytes);
 }
 

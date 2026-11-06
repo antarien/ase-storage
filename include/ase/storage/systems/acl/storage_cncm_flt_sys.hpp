@@ -12,7 +12,9 @@
  * @category    process
  * @schedule    Integration
  * @parity      shared
+ * @design      DSGN_021
  * @usecase     usecase:100265 - check access clearance
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  *
  * PARITAETS-ENTSCHEIDUNG (WS-0.4, ausdruecklich getroffen)
  *   Reine Tag-Rechnung auf StorageStaRelmComponent und den Realm-Tags, die alle shared sind;

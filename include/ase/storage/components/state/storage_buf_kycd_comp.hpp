@@ -6,13 +6,13 @@
  * @file        storage_buf_kycd_comp.hpp
  * @brief       StorageBufKycdComponent - Durable keycard-issuance identity record
  * @description One entity per minted (or revoked) keycard, queued for durable
- *              round-trip to the Replica MongoDB authority. Mirrors
+ *              round-trip to the Replica MongoDB authority. Built on the pattern of
  *              StorageBufAudtComponent: the dist host NEVER links a data client,
- *              so the record is shipped owner-keyed over the Hub WS lane and the
- *              Replica drains then persists it (ARCH_ASE_STORAGE.md line 91 —
+ *              so the record is shipped as a frame on the binary wire and the
+ *              Replica persists it (ARCH_ASE_STORAGE.md line 91 —
  *              "ase-mongodb → Persistierung (ACL, Keycards, Audit, Realms)").
  *              The accreditation axes (clearance, permission, expiry, realm)
- *              ride on a sibling StorageBufKycdAccrComponent on the same entity;
+ *              ride on StorageBufKycdAccComponent on the same record entity;
  *              codewords ride as Entity-per-Item StorageBufKycdCwrdComponent.
  *
  * @module      ase-storage
@@ -21,8 +21,8 @@
  * @parity      server_only
  * @usecase     usecase:100264 - issue customer keycard
  * @created     2026-06-24
- * @modified    2026-06-24
- * @version     1.0.0
+ * @modified    2026-11-05
+ * @version     1.0.1
  *
  * ECS COMPONENT COMPLIANCE
  *
@@ -43,7 +43,7 @@
  * [ ] Pointer components in codegen.json components.server_only
  * [ ] Strings < 64 bytes use char[N] fixed arrays
  * [ ] Strings 64-256 bytes use appropriately sized char[N]
- * [ ] Strings > 256 bytes use registry.ctx() mit Lookup-ID?
+ * [ ] Strings > 256 bytes use registry.ctx() with lookup ID?
  * [ ] NO Entity-per-Character (strings are single attributes, not N-Items!)
  * [ ] Lookup-only strings use uint32_t hash (entt::hashed_string)
  * [ ] NO std::shared_ptr in components (use Flyweight Pattern via ctx!)
@@ -61,14 +61,14 @@ namespace ase::storage {
 /**
  * @brief StorageBufKycdComponent - Keycard durable-persist identity record
  *
- * Created by StorageKycdPstEmitSystem from a minted StorageStaKycdComponent
- * (or from a revocation). Tagged StorageKycdPstPendTag until the durable
- * round-trip emits the owner-keyed SES_KYCD_PERSIST_* signals. The `op` field
- * distinguishes upsert (KYCD_PST_OP_UPSERT) from revoke (KYCD_PST_OP_REVOKE)
- * so issuance and revoke write the SAME durable store keyed by kycd_hash.
+ * Filed by StorageKycdRevSystem for a revocation and tagged StorageKycdPstPendTag;
+ * StorageKycdPstEmitSystem ships it on frame 35 (REP_CONST_BIN_MSG_EDGE_KYCD_PERSIST)
+ * and swaps the tag for StorageKycdPstDoneTag. The `op` field distinguishes upsert
+ * (KYCD_PST_OP_UPSERT) from revoke (KYCD_PST_OP_REVOKE), so issuance and revoke write
+ * the SAME durable store, which the Replica keys by the user_id of the document.
  *
  * @hub_reads  none
- * @hub_writes SES_KYCD_PERSIST_* (owner-keyed, drained by the Replica)
+ * @hub_writes none - the record leaves as a frame, the document is string DATA
  */
 struct StorageBufKycdComponent {
     char kycd_hash[MAX_KEYCARD_HASH] = {};    // SHA-256 hex digest — durable primary key

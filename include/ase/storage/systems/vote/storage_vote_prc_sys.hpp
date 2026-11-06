@@ -11,7 +11,9 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Observation
+ * @design      DSGN_021
  * @usecase     usecase:100402 - grant keycard by vote
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-04-05
  * @modified    2026-10-12
  * @version     1.1.0

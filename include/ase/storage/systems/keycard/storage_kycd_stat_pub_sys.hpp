@@ -17,7 +17,9 @@
  *              WRFL_ASE_SYN_PATTERN: wer rechnet, rechnet auf Components; wer den Stern
  *              beschreibt, tut sonst nichts.
  *
+ * @design      DSGN_021
  * @usecase     usecase:100264 - issue customer keycard
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  *
  * @module      ase-storage
  * @layer       3 (Modules)

@@ -6,7 +6,9 @@
  * @description Hub WRITE only. Die Zahlen entstehen in den Systemen der einzelnen Stufen, hier
  *              werden sie ausschliesslich weitergereicht.
  *
+ * @design      DSGN_021
  * @usecase     usecase:100264 - issue customer keycard
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  *
  * @module      ase-storage
  * @layer       3 (Modules)

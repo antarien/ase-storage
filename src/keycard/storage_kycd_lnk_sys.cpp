@@ -8,7 +8,9 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Ingestion
+ * @design      DSGN_021
  * @usecase     usecase:100265 - check access clearance
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-04-05
  * @modified    2026-10-13
  * @version     1.4.0
@@ -278,8 +280,7 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
             hub::set(registry, owner, "SES_IS_AUTHENTICATED"_hs, 1.0f);
 
             // The hash travels in two exact-carry halves — each below 2^16 and
-            // therefore lossless in a float32 hub value. Same split as
-            // SES_KYCD_NTF_USER_ID_HI/_LO; useSessionStore.ts
+            // therefore lossless in a float32 hub value. useSessionStore.ts
             // reassembles (HI << 16) | LO, and NetworkHubSyncSystem reassembles it the
             // same way into the u32 field HUB_CLAI_IDNT_USER_HASH of the session row,
             // which the server-side readers take as the exact number.

@@ -195,7 +195,7 @@ TEST_CASE("SES_USER_ID halves survive the float32 hub value that one whole hash 
 
     // An FNV-1a32 hash routinely exceeds 2^24, where float32 stops being able
     // to represent consecutive integers — the reason the value is split at all
-    // (ARCH_ASE_HUB_API.md, same pattern as SES_KYCD_NTF_USER_ID_HI/_LO).
+    // (ARCH_ASE_HUB_API.md).
     uint32_t user_hash = entt::hashed_string{"6992dde284692622bc147084"}.value();
     REQUIRE(user_hash > (1u << 24));
 

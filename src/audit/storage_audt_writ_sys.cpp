@@ -2,15 +2,22 @@
  * ASE ECS SYSTEM IMPLEMENTATION
  *
  * @file        storage_audt_writ_sys.cpp
- * @brief       StorageAudtWritSystem - Batch-writes audit entries to MongoDB
+ * @brief       StorageAudtWritSystem - ships every access decision on frame 132 and retires it
+ * @description Builds the access-decision document of every pending audit entity, pushes it as
+ *              [code][req_id:u64][doc_len:u32][doc] onto the outbound queue and destroys the entity.
+ *              Frame code, envelope width and document width are the hub rows of their owners,
+ *              read on GLOBAL in tick.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Preservation
+ * @design      DSGN_021
+ * @usecase     usecase:100049 - publish a hub value
+ * @actor       Protocol Channel Steward (PROTCHASTE)
  * @created     2026-04-05
- * @modified    2026-06-24
- * @version     1.0.0
+ * @modified    2026-11-05
+ * @version     1.1.0
  *
  * CAUSAL CHAIN (Audit Persistence)
  *
@@ -24,12 +31,13 @@
  *   │  THIS SYSTEM: StorageAudtWritSystem         │
  *   │                                             │
  *   │  READS:                                     │
- *   │    - StorageBufAudtComponent (audit data)   │
- *   │    - StorageAudtPendTag (pending entries)   │
+ *   │    → StorageBufAudtComponent (audit data)   │
+ *   │    → StorageAudtOutcComponent (verdict)     │
+ *   │    → StorageAudtPendTag (pending entries)   │
  *   │                                             │
  *   │  WRITES:                                    │
- *   │    - frame 122 onto the outbound queue      │
- *   │    - destroys the audit entity (sole owner) │
+ *   │    → frame 132 onto the outbound queue      │
+ *   │    → destroys the audit entity (sole owner) │
  *   └─────────────────────────────────────────────┘
  *          │
  *          │ Replica REPLACE-upserts into storage_access_audit
@@ -37,28 +45,26 @@
  *   Durable forensic trail, dist RAM returned
  *
  * WHY THIS SYSTEM RETIRES THE ENTITY
- *   Measured 2026-08-16: five producers, ZERO consumers, ZERO destroys. Every
- *   grant and every deny leaked an entity for the lifetime of the process, and
- *   no decision ever reached durable storage. Both halves are the same missing
- *   drain, so both are fixed here - shipping without retiring would only move
- *   the leak, and retiring without shipping would destroy the evidence.
+ *   Five producers write audit entities and this system is their only drain: it
+ *   ships every decision and destroys it in the same pass. Shipping without
+ *   retiring would keep every decision in dist RAM for the lifetime of the
+ *   process, and retiring without shipping would destroy the evidence.
  *
- * ORDER AGAINST StorageSrvlLogSystem (this cost a redesign, do not undo it)
- *   The header used to promise "tags removed, entities available for
- *   surveillance scanning". That promise cannot hold: Preservation is schedule
- *   71 and Observation is 72, so THIS system runs FIRST inside the frame and
- *   whatever it retires is gone before an Observation reader looks. The fix is
- *   the order, not a retention flag - StorageSrvlLogSystem was moved into
- *   Preservation with run_after on nothing, and this system now runs after it.
- *   Anything that needs to read an access decision must join that ordering.
+ * ORDER AGAINST StorageSrvlLogSystem
+ *   Preservation is schedule 71 and Observation is 72, so whatever this system
+ *   retires is gone before an Observation reader looks. StorageSrvlLogSystem
+ *   therefore runs in Preservation and this system runs after it. Anything that
+ *   needs to read an access decision joins that ordering.
  *
- * HUB Pattern (N/A - No Hub reads/writes)
+ * HUB Pattern (READS/WRITES)
  *
  * READS (from Hub):
- *   (none)
+ *   NET_CONST_BIN_MSG_EDGE_AUDT_PERSIST (GLOBAL) - frame code of the access-decision frame
+ *   REP_CONST_EDGE_AUDT_PERSIST_HDR     (GLOBAL) - envelope width in bytes
+ *   REP_CONST_EDGE_AUDT_PERSIST_DOC_MAX (GLOBAL) - largest access-decision document in bytes
  *
  * WRITES (to Hub):
- *   (none)
+ *   none - the document rides the binary wire as string DATA, never the hub
  *
  * FLYWEIGHT PATTERN (Active - transport::OutboundQueueResourceManager via ctx)
  *   The dist tier has no MongoDB client and never gets one: durability belongs
@@ -167,30 +173,37 @@
 #include <ase/storage/components/state/storage_audt_outc_comp.hpp>
 #include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
 #include <ase/storage/types.hpp>
-// Transport (L1 via ctx — outbound frame staging, mirror StorageWflwPstSystem)
+// Hub API (frame code and widths on GLOBAL)
+#include <ase/hub/api.hpp>
+// Types (L0 - sentinel and range predicates)
+#include <ase/types/types.hpp>
+// Transport (L1 via ctx - outbound frame staging; LANE_BUF_SZ bounds every frame)
 #include <ase/transport/outbound_queue_resource_manager.hpp>
+#include <ase/transport/types.hpp>
 // String ops (L0)
 #include <ase/utils/strops.hpp>
-
-#include <entt/core/hashed_string.hpp>
 // Logging
 #include <ase/log/log.hpp>
+
+#include <entt/core/hashed_string.hpp>
 
 #include <cstdint>
 #include <cstring>
 
-using namespace entt::literals;
-
 namespace ase::storage {
+using namespace entt::literals;  // For "_hs hashed strings (Hub)
 
-// Anonymous namespace for helper FUNCTIONS (pure doc build, no View/Query).
+/**
+ * Anonymous namespace for helper FUNCTIONS (NOT static!)
+ * NO STRUCTS HERE! Structs = Data = Components!
+ */
 namespace {
 
-// Serialize one access-decision document. Field order mirrors the frame-122
+// Serialize one access-decision document in the field order of the frame-132
 // contract registered in ase-network types.hpp: {"relm_ref","proj_ref",
 // "user_id","action","path","result","reason","timestamp"}. Worst case is
-// 64 + 256 + 64 chars of payload plus keys and decimals, well inside
-// AUDT_PST_DOC_BUF, so the bounded appends never truncate a field away.
+// 64 + 256 + 64 chars of payload plus keys and decimals, well inside the
+// owner's document width, so the bounded appends never truncate a field away.
 //
 // The three string fields go through str_append_json_safe rather than plain
 // concatenation: the audit buffer is filled at five production sites straight
@@ -226,7 +239,7 @@ void build_audt_doc(char* doc, uint32_t doc_size, uint32_t relm_ref, uint32_t pr
 // ALL THREE METHODS MUST BE IMPLEMENTED - NO EXCEPTIONS!
 
 void StorageAudtWritSystem::on_start(ecs::Registry& /*registry*/) {
-    log::debug("[StorageAudtWrit] Started");
+    log::debug("[StorageAudtWritSystem] Started");
 }
 
 void StorageAudtWritSystem::tick(ecs::Registry& registry, float dt) {
@@ -235,9 +248,54 @@ void StorageAudtWritSystem::tick(ecs::Registry& registry, float dt) {
     auto* out = registry.ctx().find<transport::OutboundQueueResourceManager>();
     if (out == nullptr) return;  // no outbound lane on this tier → entries stay pending
 
+    const float code_f = hub::get(registry, hub::GLOBAL, "NET_CONST_BIN_MSG_EDGE_AUDT_PERSIST"_hs);
+    if (ase::types::is_not_found(code_f)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageAudtWritSystem",
+                   "NET_CONST_BIN_MSG_EDGE_AUDT_PERSIST");
+        return;
+    }
+    if (!ase::types::is_in_rng_f(code_f, 0.0f, static_cast<float>(UINT8_MAX))) {
+        log::warn(log::WRN::CAT::VALUE_OUT_OF_RANGE, "StorageAudtWritSystem", hub::GLOBAL,
+                  "NET_CONST_BIN_MSG_EDGE_AUDT_PERSIST", code_f, 0.0f, static_cast<float>(UINT8_MAX));
+        return;
+    }
+
+    // The envelope carries code, req_id and doc_len; a stated width below their sum or above the
+    // lane cannot frame a decision.
+    const float fields = static_cast<float>(sizeof(uint8_t) + sizeof(uint64_t) + sizeof(uint32_t));
+    const float hdr_f = hub::get(registry, hub::GLOBAL, "REP_CONST_EDGE_AUDT_PERSIST_HDR"_hs);
+    if (ase::types::is_not_found(hdr_f)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageAudtWritSystem",
+                   "REP_CONST_EDGE_AUDT_PERSIST_HDR");
+        return;
+    }
+    if (!ase::types::is_in_rng_f(hdr_f, fields, static_cast<float>(transport::LANE_BUF_SZ))) {
+        log::warn(log::WRN::CAT::VALUE_OUT_OF_RANGE, "StorageAudtWritSystem", hub::GLOBAL,
+                  "REP_CONST_EDGE_AUDT_PERSIST_HDR", hdr_f, fields,
+                  static_cast<float>(transport::LANE_BUF_SZ));
+        return;
+    }
+    const uint32_t hdr = static_cast<uint32_t>(hdr_f);
+
+    const float doc_max_f = hub::get(registry, hub::GLOBAL, "REP_CONST_EDGE_AUDT_PERSIST_DOC_MAX"_hs);
+    if (ase::types::is_not_found(doc_max_f)) {
+        log::error(log::ERR::CAT::HUB_GLOBAL_MISSING, "StorageAudtWritSystem",
+                   "REP_CONST_EDGE_AUDT_PERSIST_DOC_MAX");
+        return;
+    }
+    if (!ase::types::is_in_rng_f(doc_max_f, 1.0f, static_cast<float>(transport::LANE_BUF_SZ - hdr))) {
+        log::warn(log::WRN::CAT::VALUE_OUT_OF_RANGE, "StorageAudtWritSystem", hub::GLOBAL,
+                  "REP_CONST_EDGE_AUDT_PERSIST_DOC_MAX", doc_max_f, 1.0f,
+                  static_cast<float>(transport::LANE_BUF_SZ - hdr));
+        return;
+    }
+    const uint8_t code = static_cast<uint8_t>(code_f);
+    const uint32_t doc_max = static_cast<uint32_t>(doc_max_f);
+
     // Deferred deletion: collect shipped decisions, retire them after the pass.
     ecs::Entity done[AUDT_WRIT_BATCH];
     uint32_t done_n = 0;
+    char frame[transport::LANE_BUF_SZ] = {};
 
     // Both halves of the audit row in ONE view - the verdict is a component on the
     // same entity, so naming it here costs a pointer per row and never a lookup.
@@ -246,32 +304,38 @@ void StorageAudtWritSystem::tick(ecs::Registry& registry, float dt) {
     for (auto [aud_ent, aud, outc] : aud_view.each()) {
         if (done_n >= AUDT_WRIT_BATCH) break;  // bound ships to what we can also retire
 
-        char doc[AUDT_PST_DOC_BUF] = {};
-        build_audt_doc(doc, AUDT_PST_DOC_BUF, aud.relm_ref, aud.proj_ref, aud.user_id,
+        // The document is built in place behind the envelope, bounded by the owner's width.
+        char* doc = frame + hdr;
+        build_audt_doc(doc, doc_max, aud.relm_ref, aud.proj_ref, aud.user_id,
                        outc.action, aud.path, outc.result, outc.reason, aud.timestamp);
-        const uint32_t doc_len = ase::utils::str_len(doc, AUDT_PST_DOC_BUF);
+        const uint32_t doc_len = ase::utils::str_len(doc, doc_max);
+        done[done_n] = aud_ent;
+        ++done_n;
+        if (doc_len == 0u || doc[doc_len - 1u] != '}') {
+            // A decision cut at the owner's width is never shipped: the Replica would store a
+            // record that parses as garbage. The entity leaves with the report.
+            log::warn(log::WRN::CAT::INPUT_TRUNCATED, "StorageAudtWritSystem",
+                      static_cast<uint32_t>(aud_ent), "REP_CONST_EDGE_AUDT_PERSIST_DOC_MAX",
+                      "the access-decision document exceeds the owner's width and is not shipped");
+            continue;
+        }
 
-        // [122][req_id:u64][doc_len:u32][doc]. req_id is a correlation token only -
+        // [code][req_id:u64][doc_len:u32][doc]. req_id is a correlation token only -
         // the Replica REPLACE-upserts on the parsed {user_id, path, timestamp}, so
-        // a wire retry overwrites its own row instead of duplicating the decision.
+        // a wire retry overwrites its own row and never adds a second one.
         // Path hash in the high half, decision second in the low half: two denials
         // on the same path in different seconds stay distinguishable in a trace.
-        char frame[AUDT_PST_HDR + AUDT_PST_DOC_BUF] = {};
-        frame[0] = static_cast<char>(EDGE_AUDT_BIN_MSG_PERSIST);
+        frame[0] = static_cast<char>(code);
         const uint64_t req_id =
             (static_cast<uint64_t>(entt::hashed_string(aud.path).value()) << 32) |
             (aud.timestamp & 0xFFFFFFFFull);
-        std::memcpy(frame + 1, &req_id, 8);
-        std::memcpy(frame + 9, &doc_len, 4);
-        std::memcpy(frame + AUDT_PST_HDR, doc, doc_len);
-        out->push_outbound(frame, AUDT_PST_HDR + doc_len);
+        std::memcpy(frame + sizeof(uint8_t), &req_id, sizeof(uint64_t));
+        std::memcpy(frame + sizeof(uint8_t) + sizeof(uint64_t), &doc_len, sizeof(uint32_t));
+        out->push_outbound(frame, hdr + doc_len);
 
-        log::info("[StorageAudtWrit] persisted access decision user={} path={} action={} result={} (frame 122, {} bytes)",
+        log::info("[StorageAudtWritSystem] persisted access decision user={} path={} action={} result={} (frame {}, {} bytes)",
                   aud.user_id, aud.path, static_cast<uint32_t>(outc.action),
-                  static_cast<uint32_t>(outc.result), AUDT_PST_HDR + doc_len);
-
-        done[done_n] = aud_ent;
-        ++done_n;
+                  static_cast<uint32_t>(outc.result), code, hdr + doc_len);
     }
 
     for (uint32_t i = 0; i < done_n; ++i) {
@@ -280,7 +344,7 @@ void StorageAudtWritSystem::tick(ecs::Registry& registry, float dt) {
 }
 
 void StorageAudtWritSystem::on_stop(ecs::Registry& /*registry*/) {
-    log::debug("[StorageAudtWrit] Stopped");
+    log::debug("[StorageAudtWritSystem] Stopped");
 }
 
 }  // namespace ase::storage

@@ -11,7 +11,9 @@
  *              Stern und darf deshalb nicht rechnen (WRFL_ASE_SYN_PATTERN), und
  *              StorageKycdStatPubSystem sagt die Zahl an.
  *
+ * @design      DSGN_021
  * @usecase     usecase:100265 - check access clearance
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  *
  * @module      ase-storage
  * @layer       3 (Modules)

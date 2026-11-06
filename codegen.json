@@ -10,6 +10,72 @@
     "hub_input_manager_tag": "StorageMgrTag",
     "hub_reads": [
         {
+            "key": "ENG_CONST_TIER_ENTERPRISE"
+        },
+        {
+            "key": "ENG_CONST_TIER_PRO"
+        },
+        {
+            "key": "NET_CONST_BIN_MSG_EDGE_AUDT_PERSIST"
+        },
+        {
+            "key": "NET_CONST_BIN_MSG_EDGE_WFLW_FWD"
+        },
+        {
+            "key": "NET_CONST_BIN_MSG_EDGE_WFLW_PERSIST"
+        },
+        {
+            "key": "NET_CONST_BIN_MSG_EDGE_WFLW_RES"
+        },
+        {
+            "key": "NET_CONST_RSN_MEM_READ_PAYLOAD_MAX"
+        },
+        {
+            "key": "NET_CONST_RSN_MEM_READ_RES_PREFIX_SZ"
+        },
+        {
+            "key": "NET_CONST_RSN_MEM_STATUS_OK"
+        },
+        {
+            "key": "REP_CONST_BIN_MSG_EDGE_KYCD_PERSIST"
+        },
+        {
+            "key": "REP_CONST_BIN_MSG_EDGE_KYCD_RES"
+        },
+        {
+            "key": "REP_CONST_EDGE_AUDT_PERSIST_DOC_MAX"
+        },
+        {
+            "key": "REP_CONST_EDGE_AUDT_PERSIST_HDR"
+        },
+        {
+            "key": "REP_CONST_EDGE_WFLW_FWD_HDR"
+        },
+        {
+            "key": "REP_CONST_EDGE_WFLW_JSON_MAX"
+        },
+        {
+            "key": "REP_CONST_EDGE_WFLW_OP_PROMOTE"
+        },
+        {
+            "key": "REP_CONST_EDGE_WFLW_OP_STATUS"
+        },
+        {
+            "key": "REP_CONST_EDGE_WFLW_PERSIST_DOC_MAX"
+        },
+        {
+            "key": "REP_CONST_EDGE_WFLW_RES_HDR"
+        },
+        {
+            "key": "REP_CONST_EDGE_WFLW_STATUS_BAD_REQUEST"
+        },
+        {
+            "key": "REP_CONST_EDGE_WFLW_STATUS_NOT_FOUND"
+        },
+        {
+            "key": "REP_CONST_EDGE_WFLW_STATUS_OK"
+        },
+        {
             "key": "SES_EDGE_AUDIT_ACTION"
         },
         {
@@ -20,6 +86,9 @@
         },
         {
             "key": "SES_EDGE_AUDIT_SEQ"
+        },
+        {
+            "key": "STG_CONST_KYCD_HASH_BYTES"
         },
         {
             "key": "STG_CONST_WFLW_LABEL_BYTES"
@@ -67,15 +136,6 @@
         },
         {
             "key": "SES_KYCD_PERM"
-        },
-        {
-            "key": "SES_KYCD_PERSIST_KYCD_HASH"
-        },
-        {
-            "key": "SES_KYCD_PERSIST_OP"
-        },
-        {
-            "key": "SES_KYCD_PERSIST_SEQ"
         },
         {
             "key": "SES_REALM_ID_HI"
@@ -1534,6 +1594,37 @@
                 "file": "request/storage_req_kycd_tkn_comp.hpp"
             },
             {
+                "name": "StorageReqWflwFwdComponent",
+                "description": "StorageReqWflwFwdComponent - one Replica-forwarded operator command awaiting its reply",
+                "fields": [
+                    {
+                        "name": "cli_conn",
+                        "type": "uint32",
+                        "default": "0",
+                        "description": "Replica-side ase-cli connection the reply is relayed to"
+                    },
+                    {
+                        "name": "path",
+                        "type": "string",
+                        "default": "{}",
+                        "description": "Realm-relative asset path the command names"
+                    },
+                    {
+                        "name": "target_label",
+                        "type": "string",
+                        "default": "{}",
+                        "description": "Requested workflow label of a promote"
+                    },
+                    {
+                        "name": "reason",
+                        "type": "string",
+                        "default": "{}",
+                        "description": "Why a rejected frame was refused (reply error text)"
+                    }
+                ],
+                "file": "request/storage_req_wflw_fwd_comp.hpp"
+            },
+            {
                 "name": "StorageReqWflwTranComponent",
                 "description": "StorageReqWflwTranComponent - Workflow label-transition request",
                 "fields": [
@@ -1734,6 +1825,12 @@
                 "file": "tag/storage_wflw_pend_tag.hpp"
             },
             {
+                "name": "StorageWflwPromTag",
+                "description": "StorageWflwPromTag - forwarded operator command filed a promote",
+                "fields": [],
+                "file": "tag/storage_wflw_prom_tag.hpp"
+            },
+            {
                 "name": "StorageWflwPstPendTag",
                 "description": "StorageWflwPstPendTag - applied transition not yet durably persisted",
                 "fields": [],
@@ -1775,6 +1872,18 @@
                 "description": "StorageWflwRetrTag - retired build inside the retention window",
                 "fields": [],
                 "file": "tag/storage_wflw_retr_tag.hpp"
+            },
+            {
+                "name": "StorageWflwRjctTag",
+                "description": "StorageWflwRjctTag - forwarded operator command was refused",
+                "fields": [],
+                "file": "tag/storage_wflw_rjct_tag.hpp"
+            },
+            {
+                "name": "StorageWflwStatTag",
+                "description": "StorageWflwStatTag - forwarded operator command asks for the workflow status",
+                "fields": [],
+                "file": "tag/storage_wflw_stat_tag.hpp"
             }
         ]
     },
@@ -1835,8 +1944,16 @@
                 "file": "keycard/storage_edge_kycd_res_drn_sys.hpp"
             },
             {
+                "name": "StorageEdgeTierSystem",
+                "file": "edge/storage_edge_tier_sys.hpp"
+            },
+            {
                 "name": "StorageEdgeWflwFwdRcvSystem",
                 "file": "workflow/storage_edge_wflw_fwd_rcv_sys.hpp"
+            },
+            {
+                "name": "StorageEdgeWflwRplySystem",
+                "file": "workflow/storage_edge_wflw_rply_sys.hpp"
             },
             {
                 "name": "StorageFileWritSystem",
@@ -1879,8 +1996,16 @@
                 "file": "keycard/storage_kycd_ntfy_syn_sys.hpp"
             },
             {
+                "name": "StorageKycdPstEmitSystem",
+                "file": "keycard/storage_kycd_pst_emit_sys.hpp"
+            },
+            {
                 "name": "StorageKycdReqDrnSystem",
                 "file": "keycard/storage_kycd_req_drn_sys.hpp"
+            },
+            {
+                "name": "StorageKycdRevSynSystem",
+                "file": "keycard/storage_kycd_rev_syn_sys.hpp"
             },
             {
                 "name": "StorageKycdRevSystem",

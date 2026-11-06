@@ -12,8 +12,8 @@
  * @layer       3 (Modules)
  * @usecase     usecase:100265 - check access clearance
  * @created     2026-04-05
- * @modified    2026-10-12
- * @version     1.0.1
+ * @modified    2026-11-05
+ * @version     1.0.3
  *
  * Systems by schedule:
  *
@@ -26,6 +26,7 @@
  *     run_after: StorageKycdDrnSystem
  *   StorageKycdLnkSystem (links validated developer keycards to client entities)
  *     run_after: StorageKycdVldSystem
+ *   StorageKycdRevSynSystem (marks the keycard a revocation hub row names)
  *
  * Integration (ACL + Storage):
  *   StorageAcssChkSystem (10-step Mandatory Access Control)
@@ -38,10 +39,17 @@
  *
  * Preservation:
  *   StorageKycdExpSystem (checks keycard expiration)
- *   StorageKycdRevSystem (emits durable revoke signal to the Replica)
+ *   StorageKycdRevSystem (files the durable revoke record)
  *     run_after: StorageKycdExpSystem
+ *   StorageKycdPstEmitSystem (ships keycard persist records on frame 35)
+ *     run_after: StorageKycdRevSystem
  *   StorageAudtWritSystem (batch-writes audit entries to MongoDB)
  *   StorageLatcSyncSystem (synchronizes lattice links)
+ *
+ * Reception (operator workflow console):
+ *   StorageEdgeWflwFwdRcvSystem (files the forwarded operator commands)
+ *   StorageEdgeWflwRplySystem (answers every filed command)
+ *     run_after: StorageEdgeWflwFwdRcvSystem
  *
  * Observation:
  *   StorageQuotChkSystem (quota monitoring per realm)
@@ -79,6 +87,7 @@
 #include <ase/storage/systems/keycard/storage_kycd_lnk_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_lnk_cnt_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_sess_cln_sys.hpp>
+#include <ase/storage/systems/keycard/storage_kycd_rev_syn_sys.hpp>
 // Keycard-keyed gate projection (replaces the session-keyed cwrd_pub): projects a
 // minted keycard's A/ACS axes (clearance + permission + codewords) to the edge gate
 // owner = hashed_string(issued_to) WITHOUT requiring a live validated session.
@@ -101,6 +110,7 @@
 #include <ase/storage/systems/workflow/storage_wflw_drn_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_stge_sys.hpp>
 #include <ase/storage/systems/workflow/storage_edge_wflw_fwd_rcv_sys.hpp>
+#include <ase/storage/systems/workflow/storage_edge_wflw_rply_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_gate_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_tran_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_perm_sys.hpp>
@@ -109,14 +119,17 @@
 #include <ase/storage/systems/workflow/storage_wflw_cln_sys.hpp>
 
 // Initialization (Edge Distribution) - three objects, three systems: the realm,
-// the ACL rules scoped to it, and the release-pipeline transition graph.
+// the ACL rules scoped to it, and the release-pipeline transition graph. The realm's
+// license tier is written in Integration, once the hub constants exist.
 #include <ase/storage/systems/edge/storage_edge_ini_sys.hpp>
+#include <ase/storage/systems/edge/storage_edge_tier_sys.hpp>
 #include <ase/storage/systems/acl/storage_acss_edge_ini_sys.hpp>
 #include <ase/storage/systems/workflow/storage_wflw_edge_ini_sys.hpp>
 
 // Preservation
 #include <ase/storage/systems/keycard/storage_kycd_exp_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_rev_sys.hpp>
+#include <ase/storage/systems/keycard/storage_kycd_pst_emit_sys.hpp>
 #include <ase/storage/systems/audit/storage_audt_writ_sys.hpp>
 #include <ase/storage/systems/lattice/storage_latc_sync_sys.hpp>
 
@@ -154,18 +167,18 @@ struct StorageModule {
         // would claim a dependency that does not exist.
         app.add_system<StorageWflwEdgeIniSystem>(ecs::Schedule::Initialization);
 
-        // Configuration: die Service-Keycards der Tier-Dienste (KCD_SERVICE).
+        // Configuration: the service keycards of the tier services (KCD_SERVICE).
         //
-        // WARUM NICHT Initialization, obwohl es ein Start-Vorgang ist: dort wird der
-        // Verwalter erst ANGELEGT (StorageIniSystem), und dieses System liest seine Wanduhr.
-        // Configuration ist die nachfolgende Lifecycle-Schedule — "Cross-module
-        // initialization" (schedule.hpp) — und laeuft ebenfalls genau einmal je Prozess.
-        // Ein run_after waere hier wirkungslos: es ordnet nur INNERHALB einer Schedule;
-        // zwischen zwei Schedules entscheidet die Nummer, und Configuration ist die 1.
+        // WHY NOT Initialization, although it is a start-up step: the manager is CREATED
+        // there (StorageIniSystem), and this system reads its wall clock. Configuration is
+        // the following lifecycle schedule - "Cross-module initialization" (schedule.hpp) -
+        // and it also runs exactly once per process. A run_after would be inert here: it
+        // orders only WITHIN one schedule; between two schedules the number decides, and
+        // Configuration is number 1.
         //
-        // KEIN run_after AUF StorageKycdReqDrnSystem, obwohl der die Antraege abholt: der
-        // Drain sitzt in Ingestion und laeuft in jedem Frame. Die Antragszeilen liegen, bis
-        // er sie nimmt — eine Schedule frueher zu praegen ist die Ordnung selbst.
+        // NO run_after ON StorageKycdReqDrnSystem, although that system collects the
+        // requests: the drain sits in Ingestion and runs every frame. The request rows wait
+        // until it takes them - minting one schedule earlier is the ordering itself.
         app.add_system<StorageKycdTierSeedSystem>(ecs::Schedule::Configuration);
 
         // Ingestion (60Hz): Developer Keycard pipeline (drain → validate → link)
@@ -198,12 +211,12 @@ struct StorageModule {
         // The edges BELOW that name Storage* systems are a different case and MUST STAY: both
         // ends run in Ingestion, same schedule, so the sorter resolves them.
         /**
-         * SYN-SCHNITT AN DER KEYCARD-ANFRAGE: erst der Stern, dann die Rechnung.
+         * SYN CUT AT THE KEYCARD REQUEST: the star first, then the arithmetic.
          *
-         * Der Spiegel liest die Hub-Zeile HUB_STG_KYCD_REQ in zwei Bruecken-Components, der
-         * Drain baut daraus die Anfrage. Beide in Ingestion, der Drain `run_after` dem
-         * Spiegel — sonst laese er im selben Takt eine Bruecke, die es noch nicht gibt, und
-         * die Anfrage wartete einen Takt laenger als noetig.
+         * The sync system reads the hub row HUB_STG_KYCD_REQ into two bridge components, and
+         * the drain builds the request from them. Both run in Ingestion, the drain `run_after`
+         * the sync system - otherwise it would read, in the same tick, a bridge that does not
+         * exist yet, and the request would wait one tick longer than necessary.
          */
         app.add_system<StorageKycdNtfySynSystem>(ecs::Schedule::Ingestion);
         app.add_system_with<StorageKycdNtfyDrnSystem>(ecs::Schedule::Ingestion)
@@ -213,11 +226,11 @@ struct StorageModule {
         app.add_system_with<StorageKycdReqDrnSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageKycdNtfyDrnSystem");
         /**
-         * DIE AUSSTELLUNGSZAHL WIRD ANGESAGT, NICHT MITGEZAEHLT.
+         * THE ISSUE COUNT IS ANNOUNCED, NOT COUNTED ALONG.
          *
-         * Dissemination (70) liegt hinter Ingestion (11), also traegt die Ansage jedes Takts
-         * schon die Karten DIESES Takts. Der Zaehler selbst entsteht im Drain, auf der
-         * Verwalterzeile; eine Fuehrung im Stern mischte Hub-I/O mit Rechnung.
+         * Dissemination (70) lies behind Ingestion (11), so the announcement of every tick
+         * already carries the keycards of THIS tick. The counter itself is kept by the drain,
+         * on the manager row; keeping it in the star would mix hub I/O with arithmetic.
          */
         app.add_system<StorageKycdStatPubSystem>(ecs::Schedule::Dissemination);
         app.add_system_with<StorageKycdVldSystem>(ecs::Schedule::Ingestion)
@@ -228,6 +241,11 @@ struct StorageModule {
         // system counts the marks into the module's own row (StorageKycdStatPubSystem announces).
         app.add_system_with<StorageKycdLnkCntSystem>(ecs::Schedule::Ingestion)
             .run_after("StorageKycdLnkSystem");
+        // Keycard revocation, star side: the operator route files a hub row with the mark
+        // HUB_STG_KYCD_REV, and this system tags the keycard whose digest the row names with
+        // StorageKycdRevTag. StorageKycdRevSystem reads that tag in Preservation, which runs
+        // after Ingestion in every frame, so no edge is needed between the two.
+        app.add_system<StorageKycdRevSynSystem>(ecs::Schedule::Ingestion);
         // Workflow-promote hub-row drain: converts the hub rows HUB_STG_WFLW_REQ (a plugin files
         // them with sdk::row_create and sdk::set_bytes) into module-local StorageReqWflwTranComponent
         // requests marked StorageWflwRcvTag - the form StorageEdgeWflwFwdRcvSystem (frame 113,
@@ -247,24 +265,30 @@ struct StorageModule {
         // after StorageAcssChkSystem would leave the ladder reading last tick's relations,
         // which is exactly the stale-grant failure the full rebuild exists to prevent.
         app.add_system<StorageAcssIdxSystem>(ecs::Schedule::Integration);
-        // TRENNUNG 2026-08-29: die Leiter stellt zwei Arten von Frage. Die Aufloesung schlaegt
-        // nach (welches Revier, wem gehoert es, welche ACL-Regel regiert diesen Pfad), die
-        // Torleiter entscheidet (darf DIESER Anrufer). Der Kanal zwischen beiden ist
-        // StorageStaAcssRslvComponent samt Marken - im selben Tick, also unveraendert schnell.
+        // The ladder asks two kinds of question. The resolution looks up (which realm, who
+        // owns it, which ACL rule governs this path), the gate ladder decides (may THIS caller
+        // pass). The channel between the two is StorageStaAcssRslvComponent with its marks -
+        // in the same tick, so no slower.
         app.add_system_with<StorageAcssRslvSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssIdxSystem");
         app.add_system_with<StorageAcssChkSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssRslvSystem");
-        // TRENNUNG 2026-08-31: die Torleiter wog ZWEI Fragen. Die Schluessel-Tore wiegen den
-        // ANRUFER (Ausweis, Revier, Gitter, Schutzstufe, Codewort, Recht), die Politik-Tore den
-        // GEGENSTAND (Label, laufende Aufgabe, Kontingent). Der Kanal zwischen beiden ist
-        // StorageAcssPassTag - im selben Tick, also unveraendert schnell.
+        // The gate ladder weighs TWO questions. The key gates weigh the CALLER (credential,
+        // realm, lattice, protection level, codeword, permission), the policy gates weigh the
+        // SUBJECT (label, running task, quota). The channel between the two is
+        // StorageAcssPassTag - in the same tick, so no slower.
         //
-        // DIE GEWAEHRUNG FAELLT SEITHER HIER, NICHT IN StorageAcssChkSystem. Jede Kante, die auf
-        // das Ergebnis der Leiter wartet, zeigt deshalb auf DIESES System; eine, die auf der
-        // halben Leiter stehen bliebe, saehe null Gewaehrungen und taete still gar nichts.
+        // THE GRANT FALLS HERE, NOT IN StorageAcssChkSystem. Every edge that waits for the
+        // result of the ladder therefore points at THIS system; one that stopped halfway up
+        // the ladder would see zero grants and silently do nothing.
+        // The quota step of the policy gates weighs a write against the realm's tier, so the
+        // edge realm's tier is written from ENG_CONST_TIER_ENTERPRISE first - after the hub
+        // laid its constants, before the gates read it.
+        app.add_system_with<StorageEdgeTierSystem>(ecs::Schedule::Integration)
+            .run_after("HubIniCnstSystem");
         app.add_system_with<StorageAcssPolSystem>(ecs::Schedule::Integration)
-            .run_after("StorageAcssChkSystem");
+            .run_after("StorageAcssChkSystem")
+            .run_after("StorageEdgeTierSystem");
         app.add_system_with<StorageFileWritSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssPolSystem");
         // released-gate artifact precondition runs BEFORE the transition system:
@@ -272,33 +296,32 @@ struct StorageModule {
         // .sig/.sha256/.spdx.json/.smoke companions are verified on disk.
         app.add_system_with<StorageWflwGateSystem>(ecs::Schedule::Integration)
             .run_after("StorageFileWritSystem");
-        // TRENNUNG 2026-08-29: der Beförderungs-Pfad trug drei Vorgaenge in einer tick().
-        // BERECHTIGEN (A/ACS: haelt der Anrufer PERM_PROMOTE) laeuft zuerst und schliesst seine
-        // Ablehnungen selbst ab; ADOPTIEREN legt fuer ein unverwaltetes, auf der Platte
-        // liegendes Gut die Entwurfs-Regel an; erst dann BEWEGT der Uebergang das Gut entlang
-        // einer Kante des Graphen. Drei Fragen, drei Fehlerbilder, drei Dateien.
+        // The promotion path is three steps. AUTHORISE (A/ACS: does the caller hold
+        // PERM_PROMOTE) runs first and closes its own denials; ADOPT lays the draft rule for an
+        // unmanaged asset that lies on disk; only then does the transition MOVE the asset along
+        // an edge of the graph. Three questions, three failure modes, three files.
         app.add_system_with<StorageWflwPermSystem>(ecs::Schedule::Integration)
             .run_after("StorageWflwGateSystem");
         app.add_system_with<StorageWflwIniSystem>(ecs::Schedule::Integration)
             .run_after("StorageWflwPermSystem");
         app.add_system_with<StorageWflwTranSystem>(ecs::Schedule::Integration)
             .run_after("StorageWflwIniSystem");
-        // NACH DER GANZEN LEITER, nicht nach ihrer ersten Haelfte: die Verschleierung filtert auf
-        // das ENTSCHIEDENE Ergebnis (2026-08-31 mit dem Schnitt nachgezogen).
+        // AFTER THE WHOLE LADDER, not after its first half: the concealment filters on the
+        // DECIDED result.
         app.add_system_with<StorageCncmFltSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssPolSystem");
         // The codeword projection is what the L4 edge gate reads: SES_KYCD_HOLDS_*,
-        // SES_CLEARANCE and SES_KYCD_PERM at owner = hashed_string(user_id). It existed,
-        // it was referenced as the producer by edge_binary_routes.cpp and by the hub
-        // metrics contract - and it was registered NOWHERE, so those axes stood at
-        // NOT_FOUND and the codeword step of the A/ACS ladder had no effect at that edge.
+        // SES_CLEARANCE and SES_KYCD_PERM at owner = hashed_string(user_id). The edge routes
+        // (edge_binary_routes.cpp) and the hub metrics contract name this system as the
+        // producer, so it must be registered here; without it those axes stand at NOT_FOUND
+        // and the codeword step of the A/ACS ladder has no effect at that edge.
         // It runs in Integration because the session set it must ask is built there.
         app.add_system_with<StorageKycdCwrdPubSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssIdxSystem");
 
         // Integration (60Hz): Curator request processing (after ACL)
-        // NACH DER GANZEN LEITER: der Kurator arbeitet auf gewaehrten Anfragen, und die
-        // Gewaehrung faellt in StorageAcssPolSystem.
+        // AFTER THE WHOLE LADDER: the curator works on granted requests, and the grant falls
+        // in StorageAcssPolSystem.
         app.add_system_with<StorageCurPrcSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssPolSystem");
 
@@ -306,6 +329,12 @@ struct StorageModule {
         app.add_system<StorageKycdExpSystem>(ecs::Schedule::Preservation);
         app.add_system_with<StorageKycdRevSystem>(ecs::Schedule::Preservation)
             .run_after("StorageKycdExpSystem");
+        // Keycard durable persist: the revoke system files a record entity
+        // (StorageBufKycdComponent + StorageKycdPstPendTag), and this system ships it on frame
+        // 35 as the REPLACE-upsert document the Replica keys by user_id. The edge orders both
+        // within Preservation, so a record filed this pass leaves in the same pass.
+        app.add_system_with<StorageKycdPstEmitSystem>(ecs::Schedule::Preservation)
+            .run_after("StorageKycdRevSystem");
         // Access-decision surveillance runs HERE, not in Observation, and it runs
         // BEFORE the writer. StorageAudtWritSystem is the sole owner of the audit
         // entity's lifetime: it ships the decision on frame 122 and destroys the
@@ -330,14 +359,13 @@ struct StorageModule {
         // (StorageBufWflwComponent + StorageWflwPstPendTag) into frame-112
         // REPLACE-upserts (storage_workflow_labels, keyed {realm,path}).
         app.add_system<StorageWflwPstSystem>(ecs::Schedule::Preservation);
-        // Keycard durable-persist is no longer a storage system: minting a keycard now
-        // ships the full document straight to the Replica from the dist L4 plugin mint
-        // sites (BIN_MSG_EDGE_KYCD_PERSIST, the document rides the wire as DATA). The
-        // former Hub-signal emit (SES_KYCD_PERSIST_*) could not carry the recipient
-        // user_id string across to the Replica — that bridge is removed.
+        // The MINT side of the keycard persist frame lies in the dist L4 plugin mint sites
+        // (BIN_MSG_EDGE_KYCD_PERSIST, the document rides the wire as DATA); the REVOKE side
+        // is StorageKycdPstEmitSystem above. A hub signal could not carry the recipient
+        // user_id string across to the Replica, so both sides ship the document as a frame.
 
         // Observation (1Hz): quota monitoring, vote evaluation
-        // (anomaly detection moved to Preservation — see StorageSrvlLogSystem above)
+        // (anomaly detection runs in Preservation — see StorageSrvlLogSystem above)
         app.add_system<StorageQuotChkSystem>(ecs::Schedule::Observation);
         // Retired-build retention sweep (Tag-filtered, 90 days): the cleanup —
         // not the quota ceiling — is what keeps the edge_binaries realm small.
@@ -348,13 +376,12 @@ struct StorageModule {
         // Preservation-stage StorageAudtWritSystem persists every gate decision.
         app.add_system<StorageEdgeAudtDrnSystem>(ecs::Schedule::Observation);
 
-        // Edge keycard-authz REQUEST is no longer a storage system: the dist edge
-        // routes (edge_keycard_routes/edge_binary_routes trigger_keycard_fetch)
-        // build the BIN_MSG_EDGE_KYCD_REQ frame from the held user_id and push it
-        // onto the L1 transport outbound queue directly — the user_id is string
-        // DATA on the binary wire, never the numeric Hub. The RESPONSE drain
-        // (StorageEdgeKycdResDrnSystem) stays: it publishes the SES_CLEARANCE
-        // session the gate reads.
+        // The edge keycard-authz REQUEST is not a storage system: the dist edge routes
+        // (edge_keycard_routes/edge_binary_routes trigger_keycard_fetch) build the
+        // BIN_MSG_EDGE_KYCD_REQ frame from the held user_id and push it onto the L1
+        // transport outbound queue directly — the user_id is string DATA on the binary wire,
+        // never the numeric Hub. The RESPONSE drain (StorageEdgeKycdResDrnSystem) publishes
+        // the SES_CLEARANCE session the gate reads.
 
         // The matching receiver: pops BIN_MSG_EDGE_KYCD_RES off the keycard lane,
         // parses the keycard document the Replica found, and publishes the
@@ -364,11 +391,17 @@ struct StorageModule {
         // RsnMemResDrnSystem). A NOT_FOUND / revoked keycard publishes nothing.
         app.add_system<StorageEdgeKycdResDrnSystem>(ecs::Schedule::Reception);
         // Operator release-workflow WS console receiver (Phase 12): pops BIN_MSG_EDGE_WFLW_FWD off
-        // LANE_WFLW (the Replica already verified the operator YK-JWT), files the promote request
-        // (StorageWflwStge/Gate/Tran/Pst drive it) or reads STG_WFLW_STAGE/RES for a
-        // status, and ships BIN_MSG_EDGE_WFLW_RES back for the Replica to relay to the ase-cli. Reception,
-        // alongside the kernel WS inbound demux, mirror of StorageEdgeKycdResDrnSystem.
+        // LANE_WFLW (the Replica already verified the operator YK-JWT) and files every frame as a
+        // StorageReqWflwFwdComponent marked promote, status or refused; a promote also files the
+        // promote request (StorageWflwStge/Gate/Tran/Pst drive it). Reception, alongside the
+        // kernel WS inbound demux, built the same way as StorageEdgeKycdResDrnSystem.
         app.add_system<StorageEdgeWflwFwdRcvSystem>(ecs::Schedule::Reception);
+        // The answer to every filed command: promote_requested, the live STG_WFLW_RES /
+        // STG_WFLW_STAGE verdict or the refusal, shipped as BIN_MSG_EDGE_WFLW_RES for the Replica
+        // to relay to the ase-cli. Both sit in Reception, so this edge is the whole guarantee
+        // that a command filed this tick is answered this tick.
+        app.add_system_with<StorageEdgeWflwRplySystem>(ecs::Schedule::Reception)
+            .run_after("StorageEdgeWflwFwdRcvSystem");
         // Credential A/ACS access-check: drain CACSS_WIRE_REQ (LANE_CACSS) from the Replica, resolve
         // keycard + project realm, emplace StorageReqAcssComponent so the Integration ladder decides.
         app.add_system<StorageCredAcssRcvSystem>(ecs::Schedule::Reception);
@@ -376,7 +409,7 @@ struct StorageModule {
         app.add_system_with<StorageCredAcssRspSystem>(ecs::Schedule::Reception)
             .run_after("StorageCredAcssRcvSystem");
 
-        // Operator bootstrap moved to the dist L4 plugin (EdgeOperSeedSystem):
+        // Operator bootstrap lives in the dist L4 plugin (EdgeOperSeedSystem):
         // it mints a DURABLE operator keycard via the SDK pipeline instead of an
         // in-memory per-launch session — so it survives restarts and the existing
         // /edge/keycard/session → Replica-fetch chain publishes SES_CLEARANCE.

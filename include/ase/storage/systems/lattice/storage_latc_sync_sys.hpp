@@ -14,6 +14,7 @@
  * @category    process
  * @schedule    Preservation
  * @parity      server_only
+ * @design      DSGN_109
  * @usecase     usecase:101533 - withdraw a lapsed lattice bond
  * @actor       Horizontal Layer Steward (HLSTEWARD)
  * @created     2026-04-05
