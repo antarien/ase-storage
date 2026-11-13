@@ -271,6 +271,11 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/systems/quota/storage_quot_chk_sys.hpp
 
     #[[
+    SYSTEMS - REALM
+    ]]
+    include/ase/storage/systems/realm/storage_relm_stat_pub_sys.hpp
+
+    #[[
     SYSTEMS - VOTE
     ]]
     include/ase/storage/systems/vote/storage_vote_prc_sys.hpp
@@ -371,6 +376,11 @@ add_library(${PROJECT_NAME} SHARED
     SYSTEM IMPLEMENTATIONS - QUOTA
     ]]
     src/quota/storage_quot_chk_sys.cpp
+
+    #[[
+    SYSTEM IMPLEMENTATIONS - REALM
+    ]]
+    src/realm/storage_relm_stat_pub_sys.cpp
 
     #[[
     SYSTEM IMPLEMENTATIONS - VOTE

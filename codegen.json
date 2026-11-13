@@ -168,10 +168,16 @@
             "key": "STG_KYCD_VLD_REJECT_COUNT"
         },
         {
+            "key": "STG_RELM_PROT"
+        },
+        {
             "key": "STG_RELM_QUOTA_HI"
         },
         {
             "key": "STG_RELM_QUOTA_LO"
+        },
+        {
+            "key": "STG_RELM_TIER"
         },
         {
             "key": "STG_RELM_USED_HI"
@@ -2034,6 +2040,10 @@
             {
                 "name": "StorageQuotChkSystem",
                 "file": "quota/storage_quot_chk_sys.hpp"
+            },
+            {
+                "name": "StorageRelmStatPubSystem",
+                "file": "realm/storage_relm_stat_pub_sys.hpp"
             },
             {
                 "name": "StorageSrvlLogSystem",

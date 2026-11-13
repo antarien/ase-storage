@@ -12,8 +12,8 @@
  * @layer       3 (Modules)
  * @usecase     usecase:100265 - check access clearance
  * @created     2026-04-05
- * @modified    2026-11-05
- * @version     1.0.3
+ * @modified    2026-11-07
+ * @version     1.0.4
  *
  * Systems by schedule:
  *
@@ -53,6 +53,7 @@
  *
  * Observation:
  *   StorageQuotChkSystem (quota monitoring per realm)
+ *   StorageRelmStatPubSystem (announces tier and default protection per realm)
  *   StorageVotePrcSystem (Vote of Confidence evaluation)
  *   StorageSrvlLogSystem (surveillance anomaly detection)
  *
@@ -138,6 +139,7 @@
 
 // Observation
 #include <ase/storage/systems/quota/storage_quot_chk_sys.hpp>
+#include <ase/storage/systems/realm/storage_relm_stat_pub_sys.hpp>
 #include <ase/storage/systems/vote/storage_vote_prc_sys.hpp>
 #include <ase/storage/systems/audit/storage_srvl_log_sys.hpp>
 #include <ase/storage/systems/audit/storage_edge_audt_drn_sys.hpp>
@@ -367,6 +369,12 @@ struct StorageModule {
         // Observation (1Hz): quota monitoring, vote evaluation
         // (anomaly detection runs in Preservation — see StorageSrvlLogSystem above)
         app.add_system<StorageQuotChkSystem>(ecs::Schedule::Observation);
+        // Tier and default protection of every realm, under the same owner as the quota rows
+        // (hashed realm id), so GET /api/realms/:realmId finds all rows of a realm by one key.
+        // Pure pass-through, hub::set is change-based; the edge only keeps the realm rows of
+        // one tick together in the order the quota announcement already has.
+        app.add_system_with<StorageRelmStatPubSystem>(ecs::Schedule::Observation)
+            .run_after("StorageQuotChkSystem");
         // Retired-build retention sweep (Tag-filtered, 90 days): the cleanup —
         // not the quota ceiling — is what keeps the edge_binaries realm small.
         app.add_system<StorageWflwClnSystem>(ecs::Schedule::Observation);
