@@ -11,7 +11,7 @@ api_version = 4
 plane = "kern"
 
 [dependencies]
-ase-hub = "^00.02"
+ase-hub = "^00.03"
 
 [dependencies.optional]
 
