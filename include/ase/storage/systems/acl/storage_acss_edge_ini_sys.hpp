@@ -18,7 +18,11 @@
  * @parity      server_only
  * @created     2026-08-31
  * @modified    2026-08-31
- * @version     1.0.0
+ * @version     00.00.39.00039 [core]
+ *
+ * Copyright (c) Jan Ohlmann. All rights reserved.
+ * Licensed to ANTARES SIMULACAO LTDA. Use is governed by LICENSE.md and PJV.md in this repository.
+ * SPDX-License-Identifier: LicenseRef-ASE-LIC
  *
  * WARUM DIE PARITAET HIER DEKLARIERT STEHT UND NICHT ERKANNT WIRD
  *   Das System SCHREIBT in den Hub (STG_WFLW_STAGE, STG_WFLW_PUB). Der Browser haelt

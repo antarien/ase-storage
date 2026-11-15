@@ -14,6 +14,10 @@ ASE MODULE BUILD CONFIGURATION
 @modified    2026-11-05
 @version     00.00.35.00035 [core]
 
+Copyright (c) Jan Ohlmann. All rights reserved.
+Licensed to ANTARES SIMULACAO LTDA. Use is governed by LICENSE.md and PJV.md in this repository.
+SPDX-License-Identifier: LicenseRef-ASE-LIC
+
 CMAKE MODULE COMPLIANCE
 
 [ ] cmake_minimum_required(VERSION 3.20) as FIRST line

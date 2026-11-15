@@ -17,7 +17,11 @@
  * @actor       Protocol Channel Steward (PROTCHASTE)
  * @created     2026-04-05
  * @modified    2026-11-05
- * @version     1.1.0
+ * @version     00.00.39.00039 [core]
+ *
+ * Copyright (c) Jan Ohlmann. All rights reserved.
+ * Licensed to ANTARES SIMULACAO LTDA. Use is governed by LICENSE.md and PJV.md in this repository.
+ * SPDX-License-Identifier: LicenseRef-ASE-LIC
  *
  * CAUSAL CHAIN (Audit Persistence)
  *

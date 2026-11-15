@@ -1,2 +1,9 @@
 #pragma once
+
+/**
+ * Copyright (c) Jan Ohlmann. All rights reserved.
+ * Licensed to ANTARES SIMULACAO LTDA. Use is governed by LICENSE.md and PJV.md in this repository.
+ * SPDX-License-Identifier: LicenseRef-ASE-LIC
+ */
+
 namespace ase::storage { constexpr const char* MODULE_VERSION = "@ASE_STORAGE_VERSION@"; }

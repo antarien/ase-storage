@@ -31,7 +31,11 @@
  *   Serverseite zur Attribution gebraucht wird und im Browser nichts zu suchen hat.
  * @created     2026-07-11
  * @modified    2026-10-16
- * @version     1.0.2
+ * @version     00.00.39.00039 [core]
+ *
+ * Copyright (c) Jan Ohlmann. All rights reserved.
+ * Licensed to ANTARES SIMULACAO LTDA. Use is governed by LICENSE.md and PJV.md in this repository.
+ * SPDX-License-Identifier: LicenseRef-ASE-LIC
  *
  * ECS COMPONENT COMPLIANCE
  *

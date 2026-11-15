@@ -7,6 +7,10 @@
  * @layer       3 (Module)
  * @usecase     usecase:100265 - check access clearance
  *
+ * Copyright (c) Jan Ohlmann. All rights reserved.
+ * Licensed to ANTARES SIMULACAO LTDA. Use is governed by LICENSE.md and PJV.md in this repository.
+ * SPDX-License-Identifier: LicenseRef-ASE-LIC
+ *
  * Drives the REAL StorageKycdSessClnSystem against the exact key set
  * StorageKycdLnkSystem publishes (storage_kycd_lnk_sys.cpp plus the
  * SES_USER_ID_HI/_LO and SES_REALM_ID_HI/_LO halves). No main() here —

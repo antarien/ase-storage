@@ -1,3 +1,9 @@
+/**
+ * Copyright (c) Jan Ohlmann. All rights reserved.
+ * Licensed to ANTARES SIMULACAO LTDA. Use is governed by LICENSE.md and PJV.md in this repository.
+ * SPDX-License-Identifier: LicenseRef-ASE-LIC
+ */
+
 #include <ase/ecs/plugin_interface.hpp>
 // Der Einstiegspunkt zieht den Umbrella, nicht den Modulheader allein: der Umbrella
 // enthaelt ihn und stellt zusaetzlich jeden Header des Moduls vor einen Compiler.

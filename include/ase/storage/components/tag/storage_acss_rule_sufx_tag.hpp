@@ -23,7 +23,11 @@
  *   Zugriffsentscheidungen auseinander, ohne dass irgendwo ein Fehler auftaucht.
  * @created     2026-08-16
  * @modified    2026-08-16
- * @version     1.0.0
+ * @version     00.00.39.00039 [core]
+ *
+ * Copyright (c) Jan Ohlmann. All rights reserved.
+ * Licensed to ANTARES SIMULACAO LTDA. Use is governed by LICENSE.md and PJV.md in this repository.
+ * SPDX-License-Identifier: LicenseRef-ASE-LIC
  *
  * ECS TAG COMPLIANCE
  *

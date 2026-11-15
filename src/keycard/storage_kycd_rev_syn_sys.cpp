@@ -20,6 +20,10 @@
  * @modified    2026-11-05
  * @version     00.00.00.00002 [seed]
  *
+ * Copyright (c) Jan Ohlmann. All rights reserved.
+ * Licensed to ANTARES SIMULACAO LTDA. Use is governed by LICENSE.md and PJV.md in this repository.
+ * SPDX-License-Identifier: LicenseRef-ASE-LIC
+ *
  * CAUSAL CHAIN (operator route, star row, revocation mark)
  *
  *   ase-pl-webserver: DELETE /api/realms/:realmId/keycards/:hash

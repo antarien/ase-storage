@@ -49,7 +49,11 @@
  * @category    ecs/resource
  * @created     2026-08-16
  * @modified    2026-10-13
- * @version     1.0.1
+ * @version     00.00.39.00039 [core]
+ *
+ * Copyright (c) Jan Ohlmann. All rights reserved.
+ * Licensed to ANTARES SIMULACAO LTDA. Use is governed by LICENSE.md and PJV.md in this repository.
+ * SPDX-License-Identifier: LicenseRef-ASE-LIC
  *
  * ECS RESOURCE MANAGER HEADER COMPLIANCE
  * [ ] NOT a Component - lives outside ECS registry

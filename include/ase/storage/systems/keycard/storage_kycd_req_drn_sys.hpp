@@ -17,7 +17,11 @@
  * @usecase     usecase:100264 - issue customer keycard
  * @created     2026-04-16
  * @modified    2026-10-12
- * @version     1.1.0
+ * @version     00.00.39.00039 [core]
+ *
+ * Copyright (c) Jan Ohlmann. All rights reserved.
+ * Licensed to ANTARES SIMULACAO LTDA. Use is governed by LICENSE.md and PJV.md in this repository.
+ * SPDX-License-Identifier: LicenseRef-ASE-LIC
  *
  * ECS SYSTEM HEADER COMPLIANCE
  *

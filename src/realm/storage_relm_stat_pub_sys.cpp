@@ -18,6 +18,10 @@
  * @modified    2026-11-07
  * @version     00.00.00.00000 [seed]
  *
+ * Copyright (c) Jan Ohlmann. All rights reserved.
+ * Licensed to ANTARES SIMULACAO LTDA. Use is governed by LICENSE.md and PJV.md in this repository.
+ * SPDX-License-Identifier: LicenseRef-ASE-LIC
+ *
  * CAUSAL CHAIN (CAUSA_ASE_STORAGE 11.1: registered there, announced here)
  *
  *   Realm-Anmeldung (StorageStaRelmComponent auf der Realm-Entity)

@@ -28,7 +28,11 @@
  *   Server_only schneidet hier nichts ab, weil der TRAEGER der Information weiterreist.
  * @created     2026-06-24
  * @modified    2026-06-24
- * @version     1.0.0
+ * @version     00.00.39.00039 [core]
+ *
+ * Copyright (c) Jan Ohlmann. All rights reserved.
+ * Licensed to ANTARES SIMULACAO LTDA. Use is governed by LICENSE.md and PJV.md in this repository.
+ * SPDX-License-Identifier: LicenseRef-ASE-LIC
  *
  * ECS COMPONENT COMPLIANCE (15 Checkpoints)
  *

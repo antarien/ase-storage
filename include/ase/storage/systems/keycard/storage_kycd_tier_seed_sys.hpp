@@ -19,7 +19,11 @@
  * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-09-14
  * @modified    2026-10-12
- * @version     1.1.0
+ * @version     00.00.39.00039 [core]
+ *
+ * Copyright (c) Jan Ohlmann. All rights reserved.
+ * Licensed to ANTARES SIMULACAO LTDA. Use is governed by LICENSE.md and PJV.md in this repository.
+ * SPDX-License-Identifier: LicenseRef-ASE-LIC
  *
  * WARUM EIN START-SEED UND KEIN AUSSTELLBEFEHL
  *   Eine Maschine kann sich nicht mit einem Netz-Credential ausweisen, um die Karte zu holen,
