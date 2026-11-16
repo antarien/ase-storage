@@ -156,6 +156,7 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/components/tag/storage_acss_grnt_tag.hpp
     include/ase/storage/components/tag/storage_acss_pass_tag.hpp
     include/ase/storage/components/tag/storage_acss_rslv_tag.hpp
+    include/ase/storage/components/tag/storage_acss_relm_tag.hpp
     include/ase/storage/components/tag/storage_acss_ownr_tag.hpp
     include/ase/storage/components/tag/storage_acss_deny_tag.hpp
     include/ase/storage/components/tag/storage_audt_pend_tag.hpp
@@ -215,6 +216,7 @@ add_library(${PROJECT_NAME} SHARED
     include/ase/storage/systems/acl/storage_acss_chk_sys.hpp
     include/ase/storage/systems/acl/storage_acss_pol_sys.hpp
     include/ase/storage/systems/acl/storage_acss_rslv_sys.hpp
+    include/ase/storage/systems/acl/storage_acss_rule_sys.hpp
     include/ase/storage/storage_acss_ladder.hpp
     include/ase/storage/systems/acl/storage_acss_idx_sys.hpp
     include/ase/storage/systems/acl/storage_idn_idx_sys.hpp
@@ -330,6 +332,7 @@ add_library(${PROJECT_NAME} SHARED
     src/acl/storage_acss_chk_sys.cpp
     src/acl/storage_acss_pol_sys.cpp
     src/acl/storage_acss_rslv_sys.cpp
+    src/acl/storage_acss_rule_sys.cpp
     src/acl/storage_acss_idx_sys.cpp
     src/acl/storage_idn_idx_sys.cpp
     src/acl/storage_acss_index_resource_manager.cpp

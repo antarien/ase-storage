@@ -15,7 +15,7 @@
  * @usecase     usecase:100265 - check access clearance
  * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-04-04
- * @modified    2026-11-05
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.
@@ -61,16 +61,11 @@ constexpr uint32_t MAX_LABEL_LEN      = 32;    // Workflow label max chars
 constexpr uint32_t MAX_REASON_LEN     = 64;    // Audit deny-reason max chars
 constexpr uint32_t CRED_ACSS_RSP_BATCH = 64;   // Max credential A/ACS verdicts responded per tick (deferred-destroy batch bound)
 constexpr uint32_t KYCD_REQ_BATCH      = 64;   // Max keycard requests released per tick (deferred-destroy batch bound)
+constexpr uint32_t STG_ACSS_REQ_BATCH  = 64;   // Max access requests decided per tick by one ladder system (deferred tag bound)
 constexpr uint32_t MAX_TASK_NAME      = 128;   // Need-to-Know task name max chars
 constexpr uint32_t MAX_KEYCARD_HASH   = 64;    // SHA-256 hex digest max chars
 constexpr uint32_t MAX_EMAIL_LEN      = 64;    // Email address max chars
 constexpr uint32_t MAX_DISPLAY_NAME   = 64;    // User display name max chars
-
-// JWT / KEYCARD LIMITS (developer platform tokens)
-
-constexpr uint32_t JWT_MAX_LENGTH           = 2048;  // Max JWT string length in base64url encoding
-constexpr uint32_t AUTH_CHECK_INTERVAL_MS   = 1000;  // Expiry check runs every 1000ms at 1Hz
-constexpr uint16_t USER_ID_MAX_LENGTH       = 64;    // Max user_id field size in bytes
 
 // REALM TYPES
 
@@ -322,7 +317,8 @@ constexpr uint32_t EDGE_CWRD_SBOM_HASH     = entt::hashed_string::value("SBOM");
 constexpr uint32_t EDGE_CWRD_SIG_HASH      = entt::hashed_string::value("SIG");       // Hash of EDGE_CWRD_SIG
 constexpr uint32_t EDGE_CWRD_METADATA_HASH = entt::hashed_string::value("METADATA");  // Hash of EDGE_CWRD_METADATA
 
-constexpr uint8_t EDGE_CLEARANCE_CUSTOMER = 0;   // Customer download-only clearance for released binaries
+// The customer step of the clearance ladder is a protocol constant other modules read: it stands in
+// hub_constants.json as STG_CONST_EDGE_CLEARANCE_CUSTOMER and is read on GLOBAL where a keycard is minted.
 constexpr uint8_t EDGE_CLEARANCE_OPERATOR = 5;   // Release-manager full release-workflow clearance
 
 // WORKFLOW TRANSITION ENGINE (Phase 12 Task 12.3)

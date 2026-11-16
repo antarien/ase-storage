@@ -8,9 +8,11 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Ingestion
+ * @design      DSGN_021
  * @usecase     usecase:100264 - issue customer keycard
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-04-16
- * @modified    2026-10-12
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.
@@ -206,11 +208,18 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
      */
     uint32_t issued_now = 0u;
 
-    // Collect-then-destroy: iterate view, remember request entities, destroy after. A request
-    // that already minted (StorageReqKycdTknComponent) and waits beyond the release batch of
-    // pass 3 is excluded, so it never mints a second keycard.
+    // A request that already minted (StorageReqKycdTknComponent) and waits beyond the release
+    // batch of pass 3 is excluded, so it never mints a second keycard. Because that type stands
+    // in the exclude list, the walk does not set it itself - that would change the set it walks
+    // (VIEW_SIGNATURE_TYPE_MUTATED, WRFL_ASE_DEFERRED_DELETION Section 5). Request and minted
+    // keycard are held as a pair, bound to KYCD_REQ_BATCH, and the record falls after the walk.
+    // Requests beyond the bound stay unminted and come back into the view next tick.
+    ecs::Entity drained_req[KYCD_REQ_BATCH];
+    uint32_t drained_kycd[KYCD_REQ_BATCH] = {};
+    uint32_t drained_n = 0;
     auto view = registry.view<StorageReqKycdComponent>(entt::exclude<StorageReqKycdTknComponent>);
     for (auto req_entity : view) {
+        if (drained_n >= KYCD_REQ_BATCH) break;
         auto& req = view.get<StorageReqKycdComponent>(req_entity);
 
         auto token_entity = registry.create();
@@ -256,12 +265,10 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // is set AFTER the codeword grants below so the emit replicates them too.
         registry.emplace<StorageKycdPstPendTag>(token_entity);
 
-        // The minted keycard is recorded ON the request. The codeword children name
-        // their request in req_ref, so the SECOND pass below walks them once and reaches
-        // this keycard by entity reference, instead of searching the children of every
-        // request (WS-K.2c).
-        auto& tkn = registry.emplace<StorageReqKycdTknComponent>(req_entity);
-        tkn.kycd_ref = static_cast<uint32_t>(token_entity);
+        // The minted keycard is held with its request and recorded ON it after the walk.
+        drained_req[drained_n] = req_entity;
+        drained_kycd[drained_n] = static_cast<uint32_t>(token_entity);
+        ++drained_n;
 
         log::debug("[StorageKycdReqDrn] +StorageKycdPendTag token={} user='{}' clearance={} relm={} perm={} exp={}",
                    static_cast<uint32_t>(token_entity), req.user_id,
@@ -269,6 +276,14 @@ void StorageKycdReqDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
                    kycd.relm_ref, static_cast<uint32_t>(grnt.perm), req.expires_at);
 
         issued_now += 1u;
+    }
+
+    // AFTER THE WALK: the minted keycard is recorded ON its request. The codeword children name
+    // their request in req_ref, so the SECOND pass below walks them once and reaches this keycard
+    // by entity reference, instead of searching the children of every request (WS-K.2c).
+    for (uint32_t di = 0; di < drained_n; ++di) {
+        auto& tkn = registry.emplace<StorageReqKycdTknComponent>(drained_req[di]);
+        tkn.kycd_ref = drained_kycd[di];
     }
 
     /**

@@ -997,6 +997,12 @@
                 "file": "tag/storage_acss_pass_tag.hpp"
             },
             {
+                "name": "StorageAcssRelmTag",
+                "description": "StorageAcssRelmTag - Keycard und Revier stehen, der Regelabgleich darf ansetzen",
+                "fields": [],
+                "file": "tag/storage_acss_relm_tag.hpp"
+            },
+            {
                 "name": "StorageAcssRslvTag",
                 "description": "StorageAcssRslvTag - Die Aufl\u00f6sung ist gelaufen, die Torleiter darf ansetzen",
                 "fields": [],
@@ -1920,6 +1926,10 @@
             {
                 "name": "StorageAcssRslvSystem",
                 "file": "acl/storage_acss_rslv_sys.hpp"
+            },
+            {
+                "name": "StorageAcssRuleSystem",
+                "file": "acl/storage_acss_rule_sys.hpp"
             },
             {
                 "name": "StorageAudtWritSystem",

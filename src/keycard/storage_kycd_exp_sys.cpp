@@ -206,12 +206,32 @@ void StorageKycdExpSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
         // Check if keycard has expired
         if (now > grnt.expires_at) {
-            registry.erase<StorageKycdVldTag>(entity);
-            registry.emplace<StorageKycdExpTag>(entity);
-            log::debug("[StorageKycdExp] -StorageKycdVldTag entity={} reason=expired",
-                       static_cast<uint32_t>(entity));
+            registry.emplace_or_replace<StorageKycdExpTag>(entity);
             expired_now += 1u;
             log::info("[StorageKycdExp] Keycard expired: {}", kycd.kycd_hash);
+        }
+    }
+
+    /**
+     * THE VALID TAG LEAVES AFTER THE WALK, NEVER INSIDE IT.
+     *
+     * The walk above filters on StorageKycdVldTag, so taking it there would change the set being
+     * walked (VIEW_SIGNATURE_TYPE_MUTATED, WRFL_ASE_DEFERRED_DELETION Section 5). The expiry tag
+     * is the mark, and this second walk does not name the valid tag. It checks the deadline
+     * again: StorageKycdLnkSystem can lay a fresh grant and the valid tag on an entity that
+     * carries the expiry tag from an earlier expiry, and that live keycard keeps its valid tag.
+     */
+    if (expired_now > 0u) {
+        auto exp_view = registry.view<StorageKycdGrntComponent, StorageKycdExpTag>();
+        for (auto entity : exp_view) {
+            const auto& grnt = exp_view.get<StorageKycdGrntComponent>(entity);
+            if (!grnt.expires_at || now <= grnt.expires_at) {
+                continue;
+            }
+            if (registry.remove<StorageKycdVldTag>(entity) > 0u) {
+                log::debug("[StorageKycdExp] -StorageKycdVldTag entity={} reason=expired",
+                           static_cast<uint32_t>(entity));
+            }
         }
     }
 

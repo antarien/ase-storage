@@ -8,9 +8,11 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Integration
- * @usecase     usecase:100406 - gate release artifacts
+ * @design      DSGN_021
+ * @usecase     usecase:100406 - withhold an unproven asset
+ * @actor       Asset Broker (ASSETBRO)
  * @created     2026-07-11
- * @modified    2026-10-12
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.
@@ -34,6 +36,7 @@
  *   │                                             │
  *   │  WRITES:                                    │
  *   │    - pass: removes StorageWflwGateTag       │
+ *   │      (after the walk)                       │
  *   │    - fail: STG_WFLW_RES = DENIED_GATE +     │
  *   │      StorageBufAudtComponent + AudtPendTag  │
  *   └─────────────────────────────────────────────┘
@@ -215,6 +218,15 @@ void StorageWflwGateSystem::tick(ecs::Registry& registry, float dt) {
     ecs::Entity failed[WFLW_REQ_BATCH];
     uint32_t failed_n = 0;
 
+    // Deferred release: gate-passed requests are collected the same way and lose
+    // StorageWflwGateTag after the loop. The tag is in gate_view's own signature;
+    // taking it inside the walk changes the set the walk iterates
+    // (VIEW_SIGNATURE_TYPE_MUTATED, WRFL_ASE_DEFERRED_DELETION Section 5). Both lists
+    // share the batch bound: a request the walk does not reach keeps its tag and stays
+    // gated until the next tick, so no request passes unchecked.
+    ecs::Entity passed[WFLW_REQ_BATCH];
+    uint32_t passed_n = 0;
+
     // Edge realm entity ref for the audit records. The answer does not depend on the
     // request, so it is resolved ONCE per tick instead of once per request. The tag
     // carries the identity (StorageEdgeIniSystem is its only producer), so no realm is
@@ -228,7 +240,7 @@ void StorageWflwGateSystem::tick(ecs::Registry& registry, float dt) {
     auto gate_view = registry.view<StorageReqWflwTranComponent, StorageWflwPendTag,
                                    StorageWflwGateTag>();
     for (auto [req_ent, req] : gate_view.each()) {
-        if (failed_n >= WFLW_REQ_BATCH) break;
+        if (failed_n >= WFLW_REQ_BATCH || passed_n >= WFLW_REQ_BATCH) break;
 
         char asset_abs[512] = {};
         mgr.resolve_path(EDGE_REALM_ID, nullptr, req.path, asset_abs, 512);
@@ -249,15 +261,15 @@ void StorageWflwGateSystem::tick(ecs::Registry& registry, float dt) {
         }
 
         if (missing == nullptr) {
-            // Gate passed: the transition system may now process this request.
-            //
-            // REIHENFOLGE IST BINDEND: erst req.path lesen, dann die Marke abnehmen.
-            // StorageWflwGateTag steht in der Signatur dieser Sicht, und EnTT sichert
-            // Referenzen nach dem Entfernen einer iterierten Component nicht mehr zu -
-            // "removing its components is allowed during iterations but it could invalidate
-            // references" (entt-src/docs/md/entity.md:2148). req stammt aus genau dieser Sicht.
+            // Gate passed: the transition system may process this request once the
+            // gate tag falls after the loop. It falls THERE and not here:
+            // StorageWflwGateTag stands in the signature of this view, and EnTT no longer
+            // vouches for references once an iterated component is removed - "removing
+            // its components is allowed during iterations but it could invalidate
+            // references" (entt-src/docs/md/entity.md:2148). req comes from this view.
             log::info("[StorageWflwGate] released-gate PASSED for {} (sig+sha256+sbom+smoke present)", req.path);
-            registry.remove<StorageWflwGateTag>(req_ent);
+            passed[passed_n] = req_ent;
+            ++passed_n;
             continue;
         }
 
@@ -318,6 +330,10 @@ void StorageWflwGateSystem::tick(ecs::Registry& registry, float dt) {
 
         failed[failed_n] = req_ent;
         ++failed_n;
+    }
+
+    for (uint32_t i = 0; i < passed_n; ++i) {
+        registry.remove<StorageWflwGateTag>(passed[i]);
     }
 
     for (uint32_t i = 0; i < failed_n; ++i) {

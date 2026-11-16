@@ -12,7 +12,7 @@
  * @usecase     usecase:100265 - check access clearance
  * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-04-05
- * @modified    2026-10-13
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.
@@ -35,6 +35,7 @@
  *   │  WRITES:                                    │
  *   │    - StorageKycdVldTag or StorageKycdRjctTag│
  *   │    - StorageStaIdnComponent (identity data) │
+ *   │    - StorageKycdPendTag taken after the walk│
  *   │    - StorageStaTknStatComponent counters    │
  *   └─────────────────────────────────────────────┘
  *          │
@@ -220,7 +221,6 @@ void StorageKycdVldSystem::tick(ecs::Registry& registry, float /*dt*/) {
             idn.user_id_hash = entt::hashed_string(idn.user_id).value();
 
             registry.emplace<StorageKycdVldTag>(entity);
-            registry.erase<StorageKycdPendTag>(entity);
             mgr.remove_token(tkn.token_id);
 
             log::debug("[StorageKycdVld] +StorageKycdVldTag client_id={} user='{}'", tkn.client_id, idn.user_id);
@@ -228,7 +228,6 @@ void StorageKycdVldSystem::tick(ecs::Registry& registry, float /*dt*/) {
             log::info("[StorageKycdVld] Keycard validated for client {}", tkn.client_id);
         } else {
             registry.emplace<StorageKycdRjctTag>(entity);
-            registry.erase<StorageKycdPendTag>(entity);
             mgr.remove_token(tkn.token_id);
 
             log::debug("[StorageKycdVld] +StorageKycdRjctTag client_id={} token_id={}", tkn.client_id, tkn.token_id);
@@ -239,6 +238,28 @@ void StorageKycdVldSystem::tick(ecs::Registry& registry, float /*dt*/) {
             // line appears exactly once per rejection. client_id stays the owner.
             log::error(log::ERR::CAT::ACCESS_DENIED, "StorageKycdVld", tkn.client_id,
                        "STG_KYCD_validation");
+        }
+    }
+
+    /**
+     * THE PENDING TAG LEAVES AFTER THE WALK, NEVER INSIDE IT.
+     *
+     * The walk above filters on StorageKycdPendTag, so taking it there would change the set being
+     * walked (VIEW_SIGNATURE_TYPE_MUTATED, WRFL_ASE_DEFERRED_DELETION Section 5). The outcome tag
+     * the walk set is the mark: a second walk over token entities with that outcome, which does
+     * not name the pending tag, takes it. remove and not erase: a token validated in an earlier
+     * tick carries the outcome but no longer the pending tag. No registry.clear: a keycard minted
+     * by StorageKycdReqDrnSystem carries the pending tag without a token component and is no
+     * entity of this walk.
+     */
+    if (accepted_now > 0u) {
+        for (auto entity : registry.view<StorageStaTknComponent, StorageKycdVldTag>()) {
+            registry.remove<StorageKycdPendTag>(entity);
+        }
+    }
+    if (rejected_now > 0u) {
+        for (auto entity : registry.view<StorageStaTknComponent, StorageKycdRjctTag>()) {
+            registry.remove<StorageKycdPendTag>(entity);
         }
     }
 

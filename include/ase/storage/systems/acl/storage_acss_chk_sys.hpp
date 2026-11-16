@@ -4,15 +4,21 @@
  * ASE ECS SYSTEM HEADER
  *
  * @file        storage_acss_chk_sys.hpp
- * @brief       StorageAcssChkSystem - 10-step Mandatory Access Control enforcement
- * @description Evaluates access requests against keycards, clearance, codewords, ACL rules
+ * @brief       StorageAcssChkSystem - the key gates of the A/ACS ladder (steps 1-6)
+ * @description Weighs WHO MAY for a request whose realm and ACL rule are resolved
+ *              (StorageAcssRslvTag): credential, realm, lattice, protection level, codeword and
+ *              permission. A request that holds every key gate carries StorageAcssPassTag into
+ *              StorageAcssPolSystem, which weighs the subject and alone grants.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Integration
+ * @design      DSGN_021
+ * @usecase     usecase:100265 - check access clearance
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-04-05
- * @modified    2026-04-05
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.
@@ -39,14 +45,14 @@
 namespace ase::storage {
 
 /**
- * @brief StorageAcssChkSystem - A/ACS 10-step enforcement
+ * @brief StorageAcssChkSystem - A/ACS key gates, steps 1 to 6
  *
- * @schedule Integration - Processes access requests each frame
- * @reads    StorageReqAcssComponent, StorageStaKycdComponent, StorageKycdCwrdComponent,
- *           StorageStaRelmComponent, StorageAcssRuleComponent, StorageAcssCwrdComponent,
- *           StorageLatLnkComponent, StorageStaTaskComponent
- * @writes   StorageAcssGrntTag or StorageAcssDenyTag + StorageBufAudtComponent
- * @depends  HTTP routes create StorageReqAcssComponent entities
+ * @schedule Integration - after StorageAcssRuleSystem, before StorageAcssPolSystem
+ * @reads    StorageReqAcssComponent, StorageReqCredComponent, StorageStaAcssRslvComponent,
+ *           StorageStaKycdComponent, StorageKycdCwrdComponent, StorageStaRelmComponent,
+ *           StorageAcssCwrdComponent, StorageLatLnkComponent
+ * @writes   StorageAcssPassTag, or StorageAcssDenyTag + StorageBufAudtComponent
+ * @depends  StorageAcssRuleSystem sets StorageAcssRslvTag on the resolved request
  */
 class StorageAcssChkSystem : public ecs::System {
 public:

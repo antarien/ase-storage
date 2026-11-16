@@ -194,15 +194,16 @@ void StorageKycdRevSystem::tick(ecs::Registry& registry, float /*dt*/) {
     // system makes the revocation durable: it files one record entity that the emit system
     // ships on frame 35. The Replica REPLACE-upserts on user_id, so the record names the
     // recipient; StorageKycdRevPstTag makes the filing exactly-once.
+    uint32_t handled_now = 0u;
     auto view = registry.view<StorageStaKycdComponent, StorageKycdRevTag>(
         entt::exclude<StorageKycdRevPstTag>);
     for (auto [entity, kycd] : view.each()) {
+        handled_now += 1u;
         // Without a recipient the durable document has no upsert key; the Replica cannot
         // address it. The resource is present and unusable: RESOURCE_UNAVAIL.
         if (kycd.issued_to[0] == '\0') {
             log::error(log::ERR::CAT::RESOURCE_UNAVAIL, "StorageKycdRev",
                        static_cast<uint32_t>(entity), "STG_KYCD_issued_to");
-            registry.emplace<StorageKycdRevPstTag>(entity);
             continue;
         }
 
@@ -217,9 +218,23 @@ void StorageKycdRevSystem::tick(ecs::Registry& registry, float /*dt*/) {
         acc.proj_ref = kycd.proj_ref;
         registry.emplace<StorageKycdPstPendTag>(record);
 
-        registry.emplace<StorageKycdRevPstTag>(entity);
         log::info("[StorageKycdRev] recipient='{}' hash='{}' durable revoke record filed",
                   kycd.issued_to, kycd.kycd_hash);
+    }
+
+    /**
+     * THE EXACTLY-ONCE MARK IS SET AFTER THE WALK, NEVER INSIDE IT.
+     *
+     * The walk above excludes StorageKycdRevPstTag: its absence is the work list. Setting it
+     * there would change the set being walked (VIEW_SIGNATURE_TYPE_MUTATED,
+     * WRFL_ASE_DEFERRED_DELETION Section 5). Every revoked keycard the walk saw is handled,
+     * filed or refused for a missing recipient, so this second walk over all revoked keycards,
+     * which does not name the mark, sets it idempotently.
+     */
+    if (handled_now > 0u) {
+        for (auto entity : registry.view<StorageStaKycdComponent, StorageKycdRevTag>()) {
+            registry.emplace_or_replace<StorageKycdRevPstTag>(entity);
+        }
     }
 }
 

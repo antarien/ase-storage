@@ -8,8 +8,9 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Integration
+ * @usecase     usecase:100342 - approve asset version
  * @created     2026-04-06
- * @modified    2026-06-24
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.
@@ -175,22 +176,12 @@ using namespace entt::literals;  // For "_hs hashed strings (Hub)
  *   NO: static void helper() {...}
  * NO STRUCTS HERE! Structs = Data = Components!
  * NO View/Query in helpers! (pure math only)
+ *
+ * Only pure functions over primitive types belong here - no registry, no view,
+ * no query. The mutual exclusion of the four review tags stands at its one call
+ * site in tick(), where it can be read off the code.
  */
 namespace {
-
-/**
- * @brief Remove all curation status Tags from entity (no View, no Query)
- * Called before emplacing the new status Tag to ensure mutual exclusion.
- */
-/* HIER STANDEN `remove_all_cur_tags` UND `emplace_cur_tag`, BEIDE MIT `ecs::Registry&`.
- *
- * Der zweite rief den ersten - eine Kette aus zwei verdeckten Markenschreibern hinter EINEM
- * Aufruf. Eine Funktion, die die Registry nimmt, ist kein Helfer, und kein Zaehler sieht sie
- * (INST_ASE_LINT.md, "Anonymous Namespace"). Beide Rumpfe stehen jetzt an ihrer einen
- * Aufrufstelle in tick(), wo die gegenseitige Ausschliessung der vier Marken am Code
- * ablesbar ist statt in zwei Funktionsnamen verteilt.
- *
- * Only pure functions over primitive types belong here - no registry, no view, no query. */
 }  // anonymous namespace
 
 // SYSTEM IMPLEMENTATION (ORDER: on_start → tick → on_stop)
@@ -215,9 +206,11 @@ void StorageCurPrcSystem::tick(ecs::Registry& registry, float /*dt*/) {
     auto req_view = registry.view<StorageReqCurComponent, StorageReqCurPrmComponent,
                                   StorageCurReqTag>(entt::exclude<StorageCurDoneTag>);
 
+    uint32_t processed_now = 0u;
     for (auto req_entity : req_view) {
         auto& req = req_view.get<StorageReqCurComponent>(req_entity);
         auto& prm = req_view.get<StorageReqCurPrmComponent>(req_entity);
+        processed_now += 1u;
 
         // The curation row is reached by its (project, key) pair - the key the index is
         // built on. The former version walked EVERY curation row for EVERY request
@@ -316,9 +309,21 @@ void StorageCurPrcSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // Update metadata
         ase::utils::str_copy(asmt.user_id, CUR_MAX_USERID, req.user_id);
         // updated_at is set by the route handler (wall clock from HTTP request)
+    }
 
-        // Mark request as processed (deferred deletion)
-        registry.emplace<StorageCurDoneTag>(req_entity);
+    // MARK: every request PASS 1 walked is processed (deferred deletion). The mark
+    // is NOT laid inside PASS 1: req_view excludes StorageCurDoneTag, so laying it
+    // there would change the set the loop walks (VIEW_SIGNATURE_TYPE_MUTATED,
+    // WRFL_ASE_DEFERRED_DELETION Section 5). This view does not name the mark. A
+    // request marked done is destroyed in PASS 2 of the same tick, so every request
+    // row standing here was walked by PASS 1 in this tick; emplace_or_replace keeps
+    // the mark idempotent.
+    if (processed_now > 0u) {
+        auto processed_view = registry.view<StorageReqCurComponent, StorageReqCurPrmComponent,
+                                            StorageCurReqTag>();
+        for (auto req_entity : processed_view) {
+            registry.emplace_or_replace<StorageCurDoneTag>(req_entity);
+        }
     }
 
     // PASS 2: Deferred cleanup of processed request entities

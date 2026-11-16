@@ -181,6 +181,7 @@
 #include <ase/storage/components/tag/storage_kycd_vld_tag.hpp>
 #include <ase/storage/components/tag/storage_kycd_rjct_tag.hpp>
 #include <ase/storage/components/tag/storage_kycd_lnk_cnt_tag.hpp>
+#include <ase/storage/types.hpp>
 // Hub API - the ONLY allowed hub header: set
 #include <ase/hub/api.hpp>
 // Logging
@@ -221,47 +222,89 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
     }
     auto& idx = **idx_ptr;
 
-    // Link each validated keycard entity to the session entity of its network client.
-    // The session is found by client id in the index StorageIdnIdxSystem built from the
-    // rows HUB_CLAI_IDNT.
+    /**
+     * Link each validated keycard entity to the session entity of its network client.
+     * The session is found by client id in the index StorageIdnIdxSystem built from the
+     * rows HUB_CLAI_IDNT.
+     *
+     * THE WALK DECIDES, IT WRITES NOTHING. StorageStaIdnComponent and StorageKycdVldTag stand
+     * in this view's signature and StorageKycdRjctTag in its exclude list; the link puts the
+     * first two on the client entity and the rejection takes the second off and puts the third
+     * on - inside the walk each of them changes the set the walk iterates
+     * (VIEW_SIGNATURE_TYPE_MUTATED, WRFL_ASE_DEFERRED_DELETION Section 5). The walk keeps the
+     * one link it found and the keycards it rejects on the way there, and both are written
+     * after it. One link per tick, as before: the walk ends at the first client it reaches.
+     * The rejection list shares KYCD_REQ_BATCH as its bound; a keycard the walk does not
+     * reach keeps its marks and is judged in the next tick.
+     */
+    ecs::Entity rejected[KYCD_REQ_BATCH];
+    uint32_t rejected_n = 0;
+    ecs::Entity link_auth = entt::null;
+    ecs::Entity link_client = entt::null;
+    uint32_t link_client_id = 0;
+
     auto auth_view = registry.view<StorageStaIdnComponent, StorageKycdVldTag>(
         entt::exclude<StorageKycdRjctTag>);
     for (auto auth_entity : auth_view) {
-        auto& auth_idn = auth_view.get<StorageStaIdnComponent>(auth_entity);
-        // The session row is fetched, not joined into the view: this loop emplaces
-        // onto the client entity, and every pool the view iterates is a pool that
-        // must not grow while it does. One O(1) lookup on the same entity instead.
+        if (rejected_n >= KYCD_REQ_BATCH) break;
+        // The session row is fetched, not joined into the view: one O(1) lookup on the
+        // same entity.
         auto* auth_sess = registry.try_get<StorageStaSessComponent>(auth_entity);
         if (auth_sess == nullptr) {
             log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageKycdLnkSystem",
                        static_cast<uint32_t>(auth_entity), "StorageStaSessComponent");
             continue;
         }
-        uint32_t target_client_id = auth_sess->client_id;
+        const uint32_t target_client_id = auth_sess->client_id;
 
         // The client is reached by its client id. StorageIdnIdxSystem indexed every open
         // session at the start of this frame, so the answer is one lookup instead of a
         // walk over every client per authenticated session (WS-K.2c).
         const uint32_t client_id = idx.get_client(target_client_id);
         if (client_id != INVALID_ENTITY) {
-            const auto client_entity = static_cast<ecs::Entity>(client_id);
+            link_auth = auth_entity;
+            link_client = static_cast<ecs::Entity>(client_id);
+            link_client_id = target_client_id;
+            break;
+        }
 
-            // Copy identity to client entity
-            auto& client_idn = registry.emplace_or_replace<StorageStaIdnComponent>(client_entity);
-            auto& client_sess = registry.emplace_or_replace<StorageStaSessComponent>(client_entity);
-            client_sess.client_id = auth_sess->client_id;
-            client_sess.authenticated_at = auth_sess->authenticated_at;
-            client_sess.active_keycard = static_cast<uint32_t>(auth_entity);
-            // Carry the EXACT FNV user_hash so the codeword projection (cwrd_pub
-            // reads idn.user_id_hash) lands at the gate owner even if the linked
-            // session entity's user_id string is ever empty/dangling.
-            client_idn.user_id_hash = auth_idn.user_id_hash;
-            for (uint32_t ci = 0; ci < 64; ++ci) {
-                client_idn.user_id[ci] = auth_idn.user_id[ci];
-                client_idn.email[ci] = auth_idn.email[ci];
-                client_idn.display_name[ci] = auth_idn.display_name[ci];
-            }
+        // No client for this keycard: it is rejected after the walk (Deferred Deletion Pattern).
+        rejected[rejected_n] = auth_entity;
+        ++rejected_n;
+    }
 
+    if (link_auth != entt::null) {
+        const auto auth_entity = link_auth;
+        const auto client_entity = link_client;
+        const uint32_t target_client_id = link_client_id;
+
+        // Both rows are put on the client FIRST and every reference is taken AFTER: an
+        // emplace into a pool may move its storage, and a reference taken before it would
+        // point into the old one.
+        registry.emplace_or_replace<StorageStaIdnComponent>(client_entity);
+        registry.emplace_or_replace<StorageStaSessComponent>(client_entity);
+        const auto& auth_idn  = registry.get<StorageStaIdnComponent>(auth_entity);
+        const auto& auth_sess = registry.get<StorageStaSessComponent>(auth_entity);
+        auto& client_idn  = registry.get<StorageStaIdnComponent>(client_entity);
+        auto& client_sess = registry.get<StorageStaSessComponent>(client_entity);
+
+        // The identity of the keycard goes onto the client entity.
+        client_sess.client_id = auth_sess.client_id;
+        client_sess.authenticated_at = auth_sess.authenticated_at;
+        client_sess.active_keycard = static_cast<uint32_t>(auth_entity);
+        // Carry the EXACT FNV user_hash so the codeword projection (cwrd_pub
+        // reads idn.user_id_hash) lands at the gate owner even if the linked
+        // session entity's user_id string is ever empty/dangling.
+        client_idn.user_id_hash = auth_idn.user_id_hash;
+        for (uint32_t ci = 0; ci < 64; ++ci) {
+            client_idn.user_id[ci] = auth_idn.user_id[ci];
+            client_idn.email[ci] = auth_idn.email[ci];
+            client_idn.display_name[ci] = auth_idn.display_name[ci];
+        }
+
+        // The client carries the validation and the link marker, and its session keys go to
+        // the hub. The block scopes the hub owner and hash to this publication.
+        {
             registry.emplace_or_replace<StorageKycdVldTag>(client_entity);
             // One marker per link; StorageKycdLnkCntSystem counts it into the module's own
             // counter row. This system writes the star and therefore does no arithmetic.
@@ -331,12 +374,13 @@ void StorageKycdLnkSystem::tick(ecs::Registry& registry, float /*dt*/) {
                        grnt != nullptr ? grnt->clrn : 0);
 
             log::info("[StorageKycdLnk] Linked keycard to client {}", target_client_id);
-            break;
         }
+    }
 
-        // Deferred Deletion Pattern: mark temp entity for cleanup
-        registry.erase<StorageKycdVldTag>(auth_entity);
-        registry.emplace<StorageKycdRjctTag>(auth_entity);
+    // Deferred Deletion Pattern: a keycard without a client is marked for cleanup.
+    for (uint32_t ri = 0; ri < rejected_n; ++ri) {
+        registry.erase<StorageKycdVldTag>(rejected[ri]);
+        registry.emplace<StorageKycdRjctTag>(rejected[ri]);
     }
 }
 

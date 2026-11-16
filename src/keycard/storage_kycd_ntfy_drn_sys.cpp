@@ -9,8 +9,9 @@
  * @category    process
  * @schedule    Ingestion
  * @usecase     usecase:100264 - issue customer keycard
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-04-16
- * @modified    2026-10-12
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.
@@ -22,7 +23,8 @@
  *   [plugins/ase-pl-webserver auth_routes POST /api/auth/keycard-issued]
  *          │
  *          │ the route verifies the HMAC, WebserverKycdDrnSystem files the hub row
- *          │ HUB_STG_KYCD_REQ (mark HUB_STG_KYCD); StorageKycdNtfySynSystem mirrors it
+ *          │ HUB_STG_KYCD_REQ (mark HUB_STG_KYCD); StorageKycdNtfySynSystem reads it
+ *          │ into the two input components
  *          ▼
  *   ┌─────────────────────────────────────────────────────────────┐
  *   │  THIS SYSTEM: StorageKycdNtfyDrnSystem                      │
@@ -32,7 +34,7 @@
  *   │    - StorageInpKycdNtfyGrntComponent (clearance, perm, exp) │
  *   │    - SES_KYCD_NTF_GRANT_* (codeword grant flags, Hub)       │
  *   │                                                             │
- *   │  WRITES:                                                    │
+ *   │  WRITES (after the walk):                                   │
  *   │    - StorageReqKycdComponent on the same request entity     │
  *   │    - StorageReqKycdRelmComponent, StorageReqKycdCwrdComponent│
  *   └─────────────────────────────────────────────────────────────┘
@@ -155,7 +157,7 @@
 #include <ase/storage/types.hpp>
 // Hub API (the codeword grant flags on the request entity)
 #include <ase/hub/api.hpp>
-// Die Bruecke des SYN-Schnitts: die gespiegelten Felder der Hub-Zeile.
+// Die Eingaenge des SYN-Schnitts: StorageKycdNtfySynSystem fuellt sie aus der Hub-Zeile.
 #include <ase/storage/components/state/storage_inp_kycd_ntfy_idn_comp.hpp>
 #include <ase/storage/components/state/storage_inp_kycd_ntfy_grnt_comp.hpp>
 // Types (L0 — is_not_found sentinel check)
@@ -203,15 +205,32 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
     auto& idx = **idx_ptr;
 
     /**
-     * DIE STERNSEITE STEHT NICHT HIER. StorageKycdNtfySynSystem liest die Hub-Zeile und legt das
-     * Gelesene in zwei Bruecken-Zeilen ab; dieses System baut daraus die Anfrage.
+     * DIE STERNSEITE STEHT NICHT HIER. StorageKycdNtfySynSystem liest die Hub-Zeile und fuellt
+     * das Gelesene in zwei Eingangs-Components; dieses System baut daraus die Anfrage.
      *
-     * DIE BRUECKE IM SICHTKOPF IST ZUGLEICH DER FILTER: eine Anfrage, deren Pflichtfelder fehlten,
-     * bekommt keine Bruecke und erreicht diesen Durchlauf gar nicht erst.
+     * DER EINGANG IM SICHTKOPF IST ZUGLEICH DER FILTER: eine Anfrage, deren Pflichtfelder
+     * fehlten, bekommt keinen Eingang und erreicht diesen Durchlauf gar nicht erst.
+     *
+     * DER LAUF SAMMELT NUR, ER BAUT NICHTS. StorageReqKycdComponent steht in der
+     * Ausschlussliste dieser View; sie im Lauf zu setzen aendert die Menge, die der Lauf
+     * durchgeht (VIEW_SIGNATURE_TYPE_MUTATED, WRFL_ASE_DEFERRED_DELETION Section 5). Gebaut
+     * wird danach, ueber die gesammelten Eintraege. Die Grenze ist KYCD_REQ_BATCH: was der
+     * Lauf nicht mehr fasst, behaelt seinen Eingang und kommt im naechsten Takt dran.
      */
+    ecs::Entity drained[KYCD_REQ_BATCH];
+    uint32_t drained_n = 0;
     auto view = registry.view<StorageInpKycdNtfyIdnComponent, StorageInpKycdNtfyGrntComponent>(
         entt::exclude<StorageReqKycdComponent>);
-    for (auto [req_entity, idn_inp, grnt_inp] : view.each()) {
+    for (auto req_entity : view) {
+        if (drained_n >= KYCD_REQ_BATCH) break;
+        drained[drained_n] = req_entity;
+        ++drained_n;
+    }
+
+    for (uint32_t di = 0; di < drained_n; ++di) {
+        const ecs::Entity req_entity = drained[di];
+        const auto& idn_inp  = registry.get<StorageInpKycdNtfyIdnComponent>(req_entity);
+        const auto& grnt_inp = registry.get<StorageInpKycdNtfyGrntComponent>(req_entity);
         uint32_t owner = static_cast<uint32_t>(req_entity);
 
         // The hashes and the expiry arrive whole: the row carries them as u32 and u64 fields.
@@ -220,9 +239,10 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         const uint32_t realm_hash = idn_inp.realm_hash;
         const uint64_t exp_at     = grnt_inp.expires_at;
 
-        // The user_id STRING the SDK carried on THIS request row, mirrored into the bridge. Works
-        // on first-login issuance (no session identity exists yet) and operator-mint-for-other
-        // alike, because the request always carries the string.
+        // The user_id STRING the SDK carried on THIS request row, read into the input
+        // component by the sync system. Works on first-login issuance (no session identity
+        // exists yet) and operator-mint-for-other alike, because the request always carries
+        // the string.
         const char* user_id_str = idn_inp.user_id;
 
         auto& payload = registry.emplace<StorageReqKycdComponent>(req_entity);
@@ -238,8 +258,8 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         payload.clearance        = static_cast<uint8_t>(clearance);
 
         // Realm + permission binding (Phase 12 operator mint): resolve the realm
-        // hash to its realm entity and carry it + permission bits as a sibling
-        // request component. Absent for the legacy auth-gate flow (realm_hash 0).
+        // hash to its realm entity and carry it + permission bits as a second request
+        // component on the same entity. Absent for the legacy auth-gate flow (realm_hash 0).
         if (realm_hash != 0) {
             // The realm is reached by its id hash, which is exactly the key the index is
             // built on - one number against one number.
@@ -257,18 +277,38 @@ void StorageKycdNtfyDrnSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // StorageReqKycdCwrdComponent grant with the exact fixed codeword string mapped here,
         // server-internal. Codewords outside this fixed edge set travel only on the durable
         // keycard-persist path (they are not part of the edge download A/ACS gate anyway).
-        const char* grant_keys[] = { "SES_KYCD_NTF_GRANT_BINARY", "SES_KYCD_NTF_GRANT_SIG",
-                                     "SES_KYCD_NTF_GRANT_SBOM", "SES_KYCD_NTF_GRANT_METADATA" };
-        const char* grant_cwrd[] = { EDGE_CWRD_BINARY, EDGE_CWRD_SIG, EDGE_CWRD_SBOM,
-                                     EDGE_CWRD_METADATA };
-        for (uint32_t gi = 0; gi < sizeof(grant_keys) / sizeof(grant_keys[0]); ++gi) {
-            float grant_f = hub::get(registry, owner, entt::hashed_string(grant_keys[gi]).value());
-            if (ase::types::is_not_found(grant_f)) continue;
-            if (grant_f < 0.5f) continue;
+        //
+        // EACH KEY IS READ BY ITS OWN LITERAL. The four keys stood in a char array and were hashed
+        // at run time: no reader census of the hub could see this system as their reader, and the
+        // array broke the no-array rule. One read per key, checked where it is read, each with the
+        // codeword it grants.
+        const float grant_binary = hub::get(registry, owner, "SES_KYCD_NTF_GRANT_BINARY"_hs);
+        if (!ase::types::is_not_found(grant_binary) && grant_binary >= 0.5f) {
             auto cw_ent = registry.create();
             auto& cwc = registry.emplace<StorageReqKycdCwrdComponent>(cw_ent);
             cwc.req_ref = static_cast<uint32_t>(req_entity);
-            ase::utils::str_copy(cwc.cwrd, MAX_CODEWORD_LEN, grant_cwrd[gi]);
+            ase::utils::str_copy(cwc.cwrd, MAX_CODEWORD_LEN, EDGE_CWRD_BINARY);
+        }
+        const float grant_sig = hub::get(registry, owner, "SES_KYCD_NTF_GRANT_SIG"_hs);
+        if (!ase::types::is_not_found(grant_sig) && grant_sig >= 0.5f) {
+            auto cw_ent = registry.create();
+            auto& cwc = registry.emplace<StorageReqKycdCwrdComponent>(cw_ent);
+            cwc.req_ref = static_cast<uint32_t>(req_entity);
+            ase::utils::str_copy(cwc.cwrd, MAX_CODEWORD_LEN, EDGE_CWRD_SIG);
+        }
+        const float grant_sbom = hub::get(registry, owner, "SES_KYCD_NTF_GRANT_SBOM"_hs);
+        if (!ase::types::is_not_found(grant_sbom) && grant_sbom >= 0.5f) {
+            auto cw_ent = registry.create();
+            auto& cwc = registry.emplace<StorageReqKycdCwrdComponent>(cw_ent);
+            cwc.req_ref = static_cast<uint32_t>(req_entity);
+            ase::utils::str_copy(cwc.cwrd, MAX_CODEWORD_LEN, EDGE_CWRD_SBOM);
+        }
+        const float grant_metadata = hub::get(registry, owner, "SES_KYCD_NTF_GRANT_METADATA"_hs);
+        if (!ase::types::is_not_found(grant_metadata) && grant_metadata >= 0.5f) {
+            auto cw_ent = registry.create();
+            auto& cwc = registry.emplace<StorageReqKycdCwrdComponent>(cw_ent);
+            cwc.req_ref = static_cast<uint32_t>(req_entity);
+            ase::utils::str_copy(cwc.cwrd, MAX_CODEWORD_LEN, EDGE_CWRD_METADATA);
         }
 
         log::debug("[StorageKycdNtfyDrn] +StorageReqKycdComponent entity={} user='{}' clearance={} exp={}",

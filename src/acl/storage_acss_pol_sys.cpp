@@ -17,7 +17,7 @@
  * @usecase     usecase:100265 - check access clearance
  * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-08-31
- * @modified    2026-11-05
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.
@@ -34,6 +34,14 @@
  *
  * THE LADDER STAYS STRICTLY ORDERED AND GRANTS ONLY ON STEP 10. What arrives here held steps 1
  * to 6 and carries StorageAcssPassTag.
+ *
+ * THE WALK DECIDES, THE MARKS FALL AFTER IT. Both marks this system sets - StorageAcssGrntTag
+ * and StorageAcssDenyTag - stand in the exclude list of the view it walks. Setting them inside
+ * the walk would change the set it iterates (VIEW_SIGNATURE_TYPE_MUTATED,
+ * WRFL_ASE_DEFERRED_DELETION Section 5). The walk files each audit row - its own entity, outside
+ * the view - and records the decision in two fields bound to STG_ACSS_REQ_BATCH; after the walk
+ * one block per field sets the mark. A request beyond the bound stays undecided and comes back
+ * into the view next tick.
  *
  * WHAT THIS SYSTEM DERIVES ITSELF. It needs four values of the caller side: the owner preset,
  * the effective clearance, the user hash and the prefix hashes of the path. It derives them from
@@ -283,6 +291,12 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
     // same form the key gates before it use.
     auto own_view = registry.view<StorageAcssOwnrTag>();
 
+    // What this walk decided, bound to STG_ACSS_REQ_BATCH. The marks fall after the walk.
+    ecs::Entity granted[STG_ACSS_REQ_BATCH];
+    uint32_t granted_n = 0;
+    ecs::Entity denied[STG_ACSS_REQ_BATCH];
+    uint32_t denied_n = 0;
+
     // Only requests whose KEY gates held and which are still undecided. The tag lets nothing
     // else in: what failed on steps 1 to 6 carries StorageAcssDenyTag and drops out at the
     // exclude list.
@@ -290,6 +304,9 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
                                   StorageStaAcssRslvComponent, StorageAcssPassTag>(
         entt::exclude<StorageAcssGrntTag, StorageAcssDenyTag>);
     for (auto entity : req_view) {
+        if (granted_n >= STG_ACSS_REQ_BATCH || denied_n >= STG_ACSS_REQ_BATCH) {
+            break;
+        }
         auto& req  = req_view.get<StorageReqAcssComponent>(entity);
         auto& cred = req_view.get<StorageReqCredComponent>(entity);
         auto& rslv = req_view.get<StorageStaAcssRslvComponent>(entity);
@@ -301,6 +318,23 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // The effective permissions are NOT derived here: no gate of this pass reads them.
         const uint8_t eff_clrn = owner_preset ? ACSS_OWNER_CLEARANCE : cred.clrn;
 
+        // THE AUDIT ROW IS FILED ONCE PER REQUEST, NOT ONCE PER EXIT. Its request-derived half -
+        // realm, project, user, path, timestamp - is the same at EVERY exit; only result and
+        // reason differ. Every request of this pass reaches exactly one exit, so exactly one row
+        // is filed, and a future sixth field cannot be missing at one of six exits. The row is
+        // its own entity outside the walked view, so it is filed inside the walk.
+        auto aud_ent = registry.create();
+        auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
+        aud.relm_ref = req.relm_ref;
+        aud.proj_ref = req.proj_ref;
+        ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, cred.user_id);
+        ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
+        aud.timestamp = now;
+        auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+        outc.action = req.action;
+        outc.result = AUD_DENIED;
+        registry.emplace<StorageAudtPendTag>(aud_ent);
+
         // Realm id and license tier stand on the realm record, not in the resolution component.
         // When the row vanishes between the systems, access falls fail-closed and says no more
         // than it knows.
@@ -309,19 +343,8 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
         if (relm_ptr == nullptr) {
             log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageAcssPolSystem",
                        req.relm_ref, "StorageStaRelmComponent");
-            registry.emplace<StorageAcssDenyTag>(entity);
-            auto aud_ent = registry.create();
-            auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
-            aud.relm_ref = req.relm_ref;
-            aud.proj_ref = req.proj_ref;
-            ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, cred.user_id);
-            ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
-            aud.timestamp = now;
-            auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-            outc.action = req.action;
-            outc.result = AUD_DENIED;
             ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "realm_not_found");
-            registry.emplace<StorageAudtPendTag>(aud_ent);
+            denied[denied_n++] = entity;
             continue;
         }
         char target_id[MAX_REALM_ID] = {};
@@ -338,38 +361,18 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
         const uint32_t path_len = ase::utils::str_len(req.path, MAX_PATH_LEN);
         path_prefix_hashes(req.path, path_len, pfx_hash);
 
-        // THE AUDIT ROW IS FILED ONCE PER REQUEST, NOT ONCE PER EXIT. Its request-derived half -
-        // realm, project, user, path, timestamp - is the same at EVERY exit; only result and
-        // reason differ. Every request of this pass reaches exactly one exit, so exactly one row
-        // is filed, and a future sixth field cannot be missing at four of five exits.
-        auto aud_ent = registry.create();
-        auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
-        aud.relm_ref = req.relm_ref;
-        aud.proj_ref = req.proj_ref;
-        ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, cred.user_id);
-        ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
-        aud.timestamp = now;
-
         //Step 7: LABEL ─ workflow-status gate.
         // retired = withdrawn build (no access); draft/review = team-only (clearance >= TEAM).
         if (rslv.rule_label_hash == EDGE_LABEL_RETIRED_HASH) {
-            registry.emplace<StorageAcssDenyTag>(entity);
-            auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-            outc.action = req.action;
-            outc.result = AUD_DENIED;
             ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "retired_asset");
-            registry.emplace<StorageAudtPendTag>(aud_ent);
+            denied[denied_n++] = entity;
             continue;
         }
         if ((rslv.rule_label_hash == EDGE_LABEL_DRAFT_HASH ||
              rslv.rule_label_hash == EDGE_LABEL_REVIEW_HASH) &&
             eff_clrn < PROTECTION_TEAM) {
-            registry.emplace<StorageAcssDenyTag>(entity);
-            auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-            outc.action = req.action;
-            outc.result = AUD_DENIED;
             ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "label_restricted");
-            registry.emplace<StorageAudtPendTag>(aud_ent);
+            denied[denied_n++] = entity;
             continue;
         }
 
@@ -409,12 +412,8 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
                 }
             }
             if (has_active_task && !path_in_scope) {
-                registry.emplace<StorageAcssDenyTag>(entity);
-                auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-                outc.action = req.action;
-                outc.result = AUD_DENIED;
                 ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "need_to_know");
-                registry.emplace<StorageAudtPendTag>(aud_ent);
+                denied[denied_n++] = entity;
                 continue;
             }
         }
@@ -423,12 +422,8 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
         // A write is refused when the realm's measured usage already meets its tier limit. Without
         // the tier codes of the hub the tariff of the realm is unknown, and the write is refused.
         if (req.action == AUD_WRITE && !tier_ready) {
-            registry.emplace<StorageAcssDenyTag>(entity);
-            auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-            outc.action = req.action;
-            outc.result = AUD_DENIED;
             ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "tier_constant_missing");
-            registry.emplace<StorageAudtPendTag>(aud_ent);
+            denied[denied_n++] = entity;
             continue;
         }
         if (req.action == AUD_WRITE) {
@@ -437,23 +432,24 @@ void StorageAcssPolSystem::tick(ecs::Registry& registry, float /*dt*/) {
             if (target_tier == tier_ent) { tier_limit = QUOTA_ENT_STORAGE; }
             uint64_t used = mgr.get_realm_usage(target_id);
             if (used >= tier_limit) {
-                registry.emplace<StorageAcssDenyTag>(entity);
-                auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-                outc.action = req.action;
-                outc.result = AUD_DENIED;
                 ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "quota_exceeded");
-                registry.emplace<StorageAudtPendTag>(aud_ent);
+                denied[denied_n++] = entity;
                 continue;
             }
         }
 
         //Step 10: GRANT + AUDIT(GRANTED) ─ reached only after every applicable step passed
-        registry.emplace<StorageAcssGrntTag>(entity);
-        auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-        outc.action = req.action;
         outc.result = AUD_GRANTED;
         ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "");
-        registry.emplace<StorageAudtPendTag>(aud_ent);
+        granted[granted_n++] = entity;
+    }
+
+    // AFTER THE WALK: the decision marks. Neither is in the signature of any view still open.
+    for (uint32_t gi = 0; gi < granted_n; ++gi) {
+        registry.emplace<StorageAcssGrntTag>(granted[gi]);
+    }
+    for (uint32_t di = 0; di < denied_n; ++di) {
+        registry.emplace<StorageAcssDenyTag>(denied[di]);
     }
 }
 

@@ -8,8 +8,10 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Preservation
+ * @usecase     usecase:101627 - detect a denial streak
+ * @actor       Asset Broker (ASSETBRO)
  * @created     2026-04-05
- * @modified    2026-06-24
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.
@@ -18,36 +20,42 @@
  *
  * CAUSAL CHAIN (Anomaly Detection)
  *
- *   [Audit entities from StorageAcssChkSystem]
+ *   [Audit entities from StorageAcssChkSystem, still pending persistence]
  *          │
- *          │ Observation schedule scans at 1Hz
+ *          │ Preservation, ahead of StorageAudtWritSystem
  *          ▼
  *   ┌─────────────────────────────────────────────┐
  *   │  THIS SYSTEM: StorageSrvlLogSystem          │
  *   │                                             │
  *   │  READS:                                     │
  *   │    - StorageBufAudtComponent (audit data)   │
- *   │    - Denied entries for pattern analysis    │
+ *   │    - StorageAudtOutcComponent (verdict)     │
+ *   │    - the owner's previous streak and stamp  │
  *   │                                             │
  *   │  WRITES:                                    │
- *   │    - log::warn for suspicious patterns      │
- *   │    - Rapid failures and bulk downloads      │
+ *   │    - the owner's streak and stamp           │
+ *   │    - the owner's anomaly verdict            │
+ *   │    - log::warn once the streak reaches the  │
+ *   │      threshold                              │
  *   └─────────────────────────────────────────────┘
  *          │
- *          │ Anomaly warnings emitted to log
+ *          │ SES_ACSS_ANOMALY on the owner
  *          ▼
- *   Security alerts for administrator review
+ *   storage_routes.cpp (ase-pl-webserver) answers it as "anomaly" to the operator
  *
- * HUB Pattern (N/A - No Hub reads/writes)
+ * HUB Pattern (MIG_ASE_HUB_API v2.0):
  *
- * READS (from Hub):
- *   (none)
+ * READS (from Hub, owner = hash of the audited user id):
+ *   "SES_ACSS_DENY_STREAK"_hs  → denials in a row before this one (only when measured)
+ *   "SES_ACSS_DENY_STAMP"_hs   → masked stamp of the previous denial (only when measured)
  *
- * WRITES (to Hub):
- *   (none)
+ * WRITES (to Hub, owner = hash of the audited user id):
+ *   "SES_ACSS_DENY_STREAK"_hs  → denials in a row including this one
+ *   "SES_ACSS_DENY_STAMP"_hs   → masked stamp of this denial
+ *   "SES_ACSS_ANOMALY"_hs      → result of streak >= SRVL_DENY_THRESHOLD (1 or 0)
+ *   all three removed on the owner's next granted access
  *
- * FLYWEIGHT PATTERN (Active - StorageResourceManager via ctx)
- *   Anomaly detection scans recent audit entries for suspicious patterns.
+ * FLYWEIGHT PATTERN (N/A - the system reads components and hub values only)
  *
  * ECS SYSTEM IMPLEMENTATION COMPLIANCE
  *
@@ -156,7 +164,7 @@
 #include <entt/core/hashed_string.hpp>
 // Logging
 #include <ase/log/log.hpp>
-// Strings (L0 — exakte Wiedergabe der Zaehl- und Kennwerte in der Anomaliezeile in tick())
+// Strings (L0 - exact rendering of the counts and ids in the anomaly line of tick())
 #include <ase/utils/strops.hpp>
 
 #include <cstdint>
@@ -232,30 +240,26 @@ void StorageSrvlLogSystem::tick(ecs::Registry& registry, float dt) {
         hub::set(registry, owner, "SES_ACSS_DENY_STREAK"_hs, static_cast<float>(streak));
         hub::set(registry, owner, "SES_ACSS_DENY_STAMP"_hs, static_cast<float>(stamp));
 
-        if (streak >= static_cast<uint32_t>(SRVL_DENY_THRESHOLD)) {
-            hub::set(registry, owner, "SES_ACSS_ANOMALY"_hs, 1.0f);
-            // MIGRIERT. Der Vermerk, der hier stand, hatte zwei Einwaende. Der erste war
-            // richtig beobachtet und falsch aufgeloest, der zweite war schlicht falsch.
+        // The verdict IS the comparison, stated on every denial: a streak below the
+        // threshold reads 0, so the operator sees a watched owner instead of a missing row.
+        const bool anomalous = streak >= static_cast<uint32_t>(SRVL_DENY_THRESHOLD);
+        hub::set(registry, owner, "SES_ACSS_ANOMALY"_hs, static_cast<float>(anomalous));
+
+        if (anomalous) {
+            // The line reports a PATTERN, not an event: each denial of the streak was
+            // decided and logged on its own. Its measurable core is that `streak` lies
+            // outside its permitted range (at or above SRVL_DENY_THRESHOLD), which is
+            // VALUE_OUT_OF_RANGE; the reaction is left to the caller, and here it is the
+            // anomaly verdict above and nothing else.
             //
-            // ZUR KATEGORIE: die Beobachtung stimmt — diese Zeile meldet kein EREIGNIS, sondern
-            // ein MUSTER, und ACCESS_DENIED beschreibt EINE Entscheidung, die hier laengst
-            // gefallen und protokolliert ist. Daraus folgt aber nicht, dass keine Kategorie
-            // passt. Der messbare Sachverhalt ist: `streak` hat SRVL_DENY_THRESHOLD
-            // ueberschritten — ein Wert existiert und liegt ausserhalb seines zulaessigen
-            // Bereichs. Das IST VALUE_OUT_OF_RANGE, und der Hilfetext ueberlaesst die Reaktion
-            // dem Aufrufer, was hier genau zutrifft: gesetzt wird die Anomaliemarke, sonst
-            // nichts. Ein Muster in eine Kategorie zu fassen heisst, seinen messbaren Kern zu
-            // benennen — nicht, eine eigene Kategorie dafuer zu verlangen.
+            // The form with owner, value_id and detail carries all six facts: `owner` is
+            // the user hash, value_id the path, and the detail renders streak, threshold,
+            // window, action and reason exactly - str_append_u64 prints without float and
+            // without rounding.
             //
-            // ZUR FORM: der Einwand nannte nur die AGGREGATFORM (value_id plus zwei Zahlen) und
-            // schloss daraus auf eine Grenze. Es gibt eine Ueberladung mit owner, value_id UND
-            // detail. Der `owner` traegt den Benutzer bereits als Hash (Zeile oben), value_id
-            // den Pfad, und die restlichen Angaben gehen exakt in den detail — ase::utils::
-            // str_append_u64 gibt sie ohne float und ohne Rundung wieder. Alle sechs bleiben.
-            //
-            // Zur Puffergroesse: path 256 + reason 64 + die Zahlen und Beschriftungen liegen
-            // zusammen unter 512, also schneidet hier nichts ab. Die Zahlen stehen trotzdem
-            // VORNE — faellt die Grenze spaeter, verliert man dann Text und nicht Messwerte.
+            // path 256 + reason 64 + the numbers and labels stay below 512, so nothing is
+            // cut. The numbers still stand FIRST: should the bound ever bite, text is lost
+            // before measurements.
             char deny_detail[512] = {};
             ase::utils::str_copy(deny_detail, 512, "streak=");
             ase::utils::str_append_u64(deny_detail, 512, streak);

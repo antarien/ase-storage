@@ -4,19 +4,22 @@
  * ASE ECS SYSTEM HEADER
  *
  * @file        storage_acss_rslv_sys.hpp
- * @brief       StorageAcssRslvSystem - Resolve realm and ACL rule for each pending request
- * @description The first half of the canonical Section 14.1 access ladder: authenticate the
- *              keycard, resolve the target realm (membership, public status, owner preset over
- *              path ancestors, concealment) and match the most specific ACL rule for the path.
- *              Requests that fail here are denied and audited; the rest carry their resolution
- *              into StorageAcssChkSystem, which runs the gates.
+ * @brief       StorageAcssRslvSystem - Validate the keycard and resolve the visible target realm
+ * @description Rungs 1 and 2 of the canonical Section 14.1 access ladder: authenticate the
+ *              keycard and resolve the target realm (membership, public status, owner preset
+ *              over path ancestors, concealment). Requests that fail here are denied and
+ *              audited; the rest carry StorageAcssRelmTag into StorageAcssRuleSystem, which
+ *              matches the ACL rule before StorageAcssChkSystem runs the gates.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Integration
+ * @design      DSGN_021
+ * @usecase     usecase:100265 - check access clearance
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-08-29
- * @modified    2026-08-29
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.

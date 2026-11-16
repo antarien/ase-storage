@@ -8,8 +8,9 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Integration
+ * @usecase     usecase:100265 - check access clearance
  * @created     2026-04-05
- * @modified    2026-06-24
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.
@@ -194,9 +195,14 @@ void StorageCncmFltSystem::tick(ecs::Registry& registry, float dt) {
     // never have tagged anything. Same C++ semantics, named - and the queries
     // come out one per view.
     //
-    // Each loop mutates a type that is NOT the filter of the view it walks, or
-    // removes the very component the view leads with, so nothing invalidates
-    // under the iterator and no deferred array is needed.
+    // NO LOOP MUTATES A TYPE OF ITS OWN VIEW. A loss pass that walked the
+    // carriers of StorageRelmVisbTag and took that tag would change the very set
+    // it walks (VIEW_SIGNATURE_TYPE_MUTATED, WRFL_ASE_DEFERRED_DELETION Section 5,
+    // marking without touching the view). Each loss pass therefore walks the
+    // realm rows that meet its condition and takes the tag where it stands. The
+    // tag is only ever laid on a realm row (listable_view below), so the realm
+    // rows cover every carrier; remove on a realm without the tag changes
+    // nothing, and the transpiler guards every remove with has() on the client.
 
     // GAINED: public and active, and none of the three hiding states.
     auto listable_view = registry.view<StorageStaRelmComponent, StorageRelmGlobTag,
@@ -206,26 +212,28 @@ void StorageCncmFltSystem::tick(ecs::Registry& registry, float dt) {
         registry.emplace_or_replace<StorageRelmVisbTag>(relm_ent);
     }
 
-    // LOST: the tag is carried, but one condition stopped holding. Five disjoint
-    // Views instead of one loop with five ifs - the conditions compose in the
-    // type system, which is also what lets each one become its own becsy query.
-    auto conceal_view = registry.view<StorageRelmVisbTag, StorageRelmCncmTag>();
+    // LOST: one condition stopped holding. Five disjoint Views instead of one
+    // loop with five ifs - the conditions compose in the type system, which is
+    // also what lets each one become its own becsy query.
+    auto conceal_view = registry.view<StorageStaRelmComponent, StorageRelmCncmTag>();
     for (auto relm_ent : conceal_view) {
         registry.remove<StorageRelmVisbTag>(relm_ent);
     }
-    auto suspended_view = registry.view<StorageRelmVisbTag, StorageRelmSuspTag>();
+    auto suspended_view = registry.view<StorageStaRelmComponent, StorageRelmSuspTag>();
     for (auto relm_ent : suspended_view) {
         registry.remove<StorageRelmVisbTag>(relm_ent);
     }
-    auto archived_view = registry.view<StorageRelmVisbTag, StorageRelmArcvTag>();
+    auto archived_view = registry.view<StorageStaRelmComponent, StorageRelmArcvTag>();
     for (auto relm_ent : archived_view) {
         registry.remove<StorageRelmVisbTag>(relm_ent);
     }
-    auto unpublic_view = registry.view<StorageRelmVisbTag>(entt::exclude<StorageRelmGlobTag>);
+    auto unpublic_view =
+        registry.view<StorageStaRelmComponent>(entt::exclude<StorageRelmGlobTag>);
     for (auto relm_ent : unpublic_view) {
         registry.remove<StorageRelmVisbTag>(relm_ent);
     }
-    auto inactive_view = registry.view<StorageRelmVisbTag>(entt::exclude<StorageRelmActvTag>);
+    auto inactive_view =
+        registry.view<StorageStaRelmComponent>(entt::exclude<StorageRelmActvTag>);
     for (auto relm_ent : inactive_view) {
         registry.remove<StorageRelmVisbTag>(relm_ent);
     }

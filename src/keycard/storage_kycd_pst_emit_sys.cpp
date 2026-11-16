@@ -226,6 +226,7 @@ void StorageKycdPstEmitSystem::tick(ecs::Registry& registry, float /*dt*/) {
     }
     const uint8_t code = static_cast<uint8_t>(code_f);
 
+    uint32_t shipped_now = 0u;
     auto view = registry.view<StorageBufKycdComponent, StorageBufKycdAccComponent,
                               StorageKycdPstPendTag>();
     for (auto [record, buf, acc] : view.each()) {
@@ -259,10 +260,24 @@ void StorageKycdPstEmitSystem::tick(ecs::Registry& registry, float /*dt*/) {
         std::memcpy(frame + head, doc, doc_len);
         out->push_outbound(frame, head + doc_len);
 
-        registry.remove<StorageKycdPstPendTag>(record);
-        registry.emplace<StorageKycdPstDoneTag>(record);
+        registry.emplace_or_replace<StorageKycdPstDoneTag>(record);
+        shipped_now += 1u;
         log::info("[StorageKycdPstEmitSystem] recipient='{}' op={} shipped on frame {} ({} bytes)",
                   buf.issued_to, buf.op, code, head + doc_len);
+    }
+
+    /**
+     * THE PENDING TAG LEAVES AFTER THE WALK, NEVER INSIDE IT.
+     *
+     * The walk above filters on StorageKycdPstPendTag, so taking it there would change the set
+     * being walked (VIEW_SIGNATURE_TYPE_MUTATED, WRFL_ASE_DEFERRED_DELETION Section 5). The done
+     * tag the walk set is the mark; this second walk over shipped records does not name the
+     * pending tag and takes it, so no record ships twice.
+     */
+    if (shipped_now > 0u) {
+        for (auto record : registry.view<StorageBufKycdComponent, StorageKycdPstDoneTag>()) {
+            registry.remove<StorageKycdPstPendTag>(record);
+        }
     }
 }
 

@@ -8,8 +8,11 @@
  * @layer       3 (Modules)
  * @category    process
  * @schedule    Integration
+ * @design      DSGN_021
+ * @usecase     usecase:100265 - check access clearance
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  * @created     2026-04-04
- * @modified    2026-08-31
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.
@@ -32,16 +35,16 @@
  * (Ausweis, Revier, Gitter, Schutzstufe, Codewort, Recht) und WAS GILT FUER DIESEN GEGENSTAND
  * (Label, laufende Aufgabe, Kontingent). Die erste Frage haengt am ANRUFER und aendert sich mit
  * seiner Keycard; die zweite haengt am GUT und aendert sich mit dem Arbeitsstand. DIESES SYSTEM
- * TRAEGT SEITHER NUR NOCH DIE ERSTE — Sprossen 1 bis 6. Die Sprossen 7 bis 10 stehen in
- * StorageAcssPolSystem.
+ * TRAEGT NUR DIE ERSTE — Sprossen 1 bis 6. Die Sprossen 7 bis 10 stehen in StorageAcssPolSystem.
  *
- * DER ANLASS WAR EIN VERSTECKTER HELFER: `emit_audit(ecs::Registry&, ...)` stellte die
- * Pruefspur-Zeile aus storage_acss_ladder.hpp heraus - eine freie Funktion mit der Registry im
- * Argument, also ECS-Arbeit hinter einem Namen. Ausgeschrieben traegt jede Ausgangsstelle sie
- * selbst; mit allen zehn Stellen fiel dieser Rumpf in das GOD_SYSTEM_UNSPLIT_BAND. Die ZAHL war
- * der Anlass, die NAHT war schon vorher da.
+ * DIE PRUEFSPUR-ZEILE STELLT DIESER RUMPF SELBST, nie eine freie Funktion mit `ecs::Registry&`
+ * im Argument - das waere ECS-Arbeit hinter einem Namen. Jedes Tor, das ablehnt, haelt im Lauf
+ * nur die Anfrage und ihren Grund fest; NACH dem Lauf setzt EIN Block je Ablehnung die Marke
+ * StorageAcssDenyTag und stellt die Pruefspur-Zeile. Die Marke steht in der Ausschlussliste der
+ * View, ueber die der Lauf geht: setzte er sie selbst, aenderte er die Menge, die er durchlaeuft
+ * (VIEW_SIGNATURE_TYPE_MUTATED, WRFL_ASE_DEFERRED_DELETION Section 5).
  *
- * DIE LEITER IST STRENG GEORDNET UND ERTEILT AUSSCHLIESSLICH AUF SPROSSE 10 — die liegt jetzt
+ * DIE LEITER IST STRENG GEORDNET UND ERTEILT AUSSCHLIESSLICH AUF SPROSSE 10 — die liegt
  * drueben. Es gibt keine Abkuerzung davor: der oeffentliche Raum und die Eigentuemer-Macht sind
  * INNERHALB der Leiter modelliert (PUBLIC-Schutzregel, Eigentuemer-Vorgabe als wirksame Keycard)
  * - sie ueberspringen kein Tor, sie machen die Tore fuer diesen Fall gegenstandslos.
@@ -49,8 +52,8 @@
  * WER DIE FUENF TORE HAELT, BEKOMMT StorageAcssPassTag UND KEINE PRUEFSPUR. Das ist kein
  * vergessener Ausgang, sondern die Naht: die Entscheidung faellt drueben, und eine Pruefspur ohne
  * Entscheidung waere eine Zeile, die etwas behauptet, das noch niemand entschieden hat. DESHALB
- * WIRD DIE PRUEFSPUR-ZEILE HIER AN JEDER ABLEHNUNG EINZELN GESTELLT und nicht wie drueben einmal
- * je Anfrage vorgezogen: dort endet JEDER Pfad in einer Entscheidung, hier nicht. Wer das
+ * ENTSTEHT DIE PRUEFSPUR-ZEILE HIER NUR FUER EINE ABLEHNUNG und wird nicht wie drueben einmal je
+ * Anfrage vorgezogen: dort endet JEDER Pfad in einer Entscheidung, hier nicht. Wer das
  * angleichen will, laesst hier eine halbe Pruefspur-Zeile ohne Ergebnis zurueck.
  *
  * WAS AUS DER AUFLOESUNG KOMMT UND WAS NICHT. Die Komponente traegt drei Zahlen - Schutzstufe,
@@ -204,9 +207,8 @@
 #include <ase/storage/components/state/storage_lat_lnk_comp.hpp>
 #include <ase/storage/components/state/storage_lnk_cnst_comp.hpp>
 #include <ase/storage/components/state/storage_lnk_idn_comp.hpp>
-// Die Pruefspur-Zeile wird seit dem 2026-08-31 in DIESEM Rumpf gestellt, nicht mehr von einem
-// Helfer mit `ecs::Registry&` im Argument. Sie kam bis dahin transitiv ueber storage_acss_ladder;
-// wer einen Typ selbst benutzt, fuehrt seine Kante selbst.
+// Die Pruefspur-Zeile stellt dieser Rumpf selbst; wer einen Typ selbst benutzt, fuehrt seine
+// Kante selbst und erbt sie nicht ueber storage_acss_ladder.
 #include <ase/storage/components/state/storage_buf_audt_comp.hpp>
 #include <ase/storage/components/state/storage_audt_outc_comp.hpp>
 #include <ase/storage/components/tag/storage_audt_pend_tag.hpp>
@@ -266,6 +268,13 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
     // (WRFL_ASE_TAGGED_VIEWS), und dieselbe Form, die die Aufloesung fuer Revier-Klassen nutzt.
     auto own_view = registry.view<StorageAcssOwnrTag>();
 
+    // Die Ablehnungen dieses Laufs: Anfrage und Grund, gebunden an STG_ACSS_REQ_BATCH. Ist die
+    // Grenze erreicht, endet der Lauf; die uebrigen Anfragen bleiben unentschieden und kommen im
+    // naechsten Takt wieder in die View.
+    ecs::Entity denied[STG_ACSS_REQ_BATCH];
+    const char* denied_why[STG_ACSS_REQ_BATCH] = {};
+    uint32_t denied_n = 0;
+
     // Nur aufgeloeste, noch unentschiedene Anfragen. Ohne Aufloesung gibt es weder Schutzstufe
     // noch Regel - die View laesst sie gar nicht erst herein, was dieselbe Wirkung hat wie eine
     // Abweisung und keine zweite Stelle schafft, an der ueber Zulaessigkeit entschieden wird.
@@ -273,6 +282,9 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
                                   StorageStaAcssRslvComponent, StorageAcssRslvTag>(
         entt::exclude<StorageAcssGrntTag, StorageAcssDenyTag>);
     for (auto entity : req_view) {
+        if (denied_n >= STG_ACSS_REQ_BATCH) {
+            break;
+        }
         auto& req  = req_view.get<StorageReqAcssComponent>(entity);
         auto& cred = req_view.get<StorageReqCredComponent>(entity);
         auto& rslv = req_view.get<StorageStaAcssRslvComponent>(entity);
@@ -302,19 +314,9 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
         if (relm_ptr == nullptr) {
             log::error(log::ERR::CAT::COMPONENT_MISSING, "StorageAcssChkSystem",
                        req.relm_ref, "StorageStaRelmComponent");
-            registry.emplace<StorageAcssDenyTag>(entity);
-            auto aud_ent = registry.create();
-            auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
-            aud.relm_ref = req.relm_ref;
-            aud.proj_ref = req.proj_ref;
-            ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, cred.user_id);
-            ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
-            aud.timestamp = now;
-            auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-            outc.action = req.action;
-            outc.result = AUD_DENIED;
-            ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "realm_not_found");
-            registry.emplace<StorageAudtPendTag>(aud_ent);
+            denied[denied_n] = entity;
+            denied_why[denied_n] = "realm_not_found";
+            ++denied_n;
             continue;
         }
         char target_id[MAX_REALM_ID] = {};
@@ -326,8 +328,8 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
 
         // Die Praefix-Hashes des Pfades, einmal je Anfrage: zwei Tore fragen "liegt dieser Pfad
         // unter X" - der Gitter-Anteil hier, die ACL-Regel drueben - und beide lesen dieselben
-        // Zahlen (storage_acss_ladder.hpp). Der Kenntnisnahme-Bereich, der sie frueher ebenfalls
-        // las, steht seit dem 2026-08-31 in StorageAcssPolSystem und leitet sie dort neu ab.
+        // Zahlen (storage_acss_ladder.hpp). Der Kenntnisnahme-Bereich in StorageAcssPolSystem
+        // leitet sie dort selbst ab.
         uint32_t pfx_hash[MAX_PATH_LEN + 1] = {};
         const uint32_t path_len = ase::utils::str_len(req.path, MAX_PATH_LEN);
         path_prefix_hashes(req.path, path_len, pfx_hash);
@@ -382,38 +384,18 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
                 }
             }
             if (lattice_required && !lattice_ok) {
-                registry.emplace<StorageAcssDenyTag>(entity);
-                auto aud_ent = registry.create();
-                auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
-                aud.relm_ref = req.relm_ref;
-                aud.proj_ref = req.proj_ref;
-                ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, cred.user_id);
-                ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
-                aud.timestamp = now;
-                auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-                outc.action = req.action;
-                outc.result = AUD_DENIED;
-                ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "no_lattice_link");
-                registry.emplace<StorageAudtPendTag>(aud_ent);
+                denied[denied_n] = entity;
+                denied_why[denied_n] = "no_lattice_link";
+                ++denied_n;
                 continue;
             }
         }
 
         //Step 4: CLEARANCE ─ vertical Schutzstufe gate (public realm rule keeps PUBLIC)
         if (eff_clrn < rslv.required_protection) {
-            registry.emplace<StorageAcssDenyTag>(entity);
-            auto aud_ent = registry.create();
-            auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
-            aud.relm_ref = req.relm_ref;
-            aud.proj_ref = req.proj_ref;
-            ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, cred.user_id);
-            ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
-            aud.timestamp = now;
-            auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-            outc.action = req.action;
-            outc.result = AUD_DENIED;
-            ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "insufficient_clearance");
-            registry.emplace<StorageAudtPendTag>(aud_ent);
+            denied[denied_n] = entity;
+            denied_why[denied_n] = "insufficient_clearance";
+            ++denied_n;
             continue;
         }
 
@@ -447,46 +429,49 @@ void StorageAcssChkSystem::tick(ecs::Registry& registry, float /*dt*/) {
                 if (!held) { missing_codeword = true; break; }
             }
             if (missing_codeword) {
-                registry.emplace<StorageAcssDenyTag>(entity);
-                auto aud_ent = registry.create();
-                auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
-                aud.relm_ref = req.relm_ref;
-                aud.proj_ref = req.proj_ref;
-                ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, cred.user_id);
-                ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
-                aud.timestamp = now;
-                auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-                outc.action = req.action;
-                outc.result = AUD_DENIED;
-                ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "missing_codeword");
-                registry.emplace<StorageAudtPendTag>(aud_ent);
+                denied[denied_n] = entity;
+                denied_why[denied_n] = "missing_codeword";
+                ++denied_n;
                 continue;
             }
         }
 
         //Step 6: PERMISSION ─ action bitflag gate (owner preset holds all flags)
         if (!(eff_perm & required_perm)) {
-            registry.emplace<StorageAcssDenyTag>(entity);
-            auto aud_ent = registry.create();
-            auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
-            aud.relm_ref = req.relm_ref;
-            aud.proj_ref = req.proj_ref;
-            ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, cred.user_id);
-            ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
-            aud.timestamp = now;
-            auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
-            outc.action = req.action;
-            outc.result = AUD_DENIED;
-            ase::utils::str_copy(outc.reason, MAX_REASON_LEN, "permission_denied");
-            registry.emplace<StorageAudtPendTag>(aud_ent);
+            denied[denied_n] = entity;
+            denied_why[denied_n] = "permission_denied";
+            ++denied_n;
             continue;
         }
 
         //DIE FUENF SCHLUESSEL-TORE HABEN GEHALTEN ─ die Anfrage geht an die Politik-Tore.
         // KEINE PRUEFSPUR HIER, und das ist die Naht: entschieden ist noch nichts. Eine Zeile,
         // die "gewaehrt" oder "abgelehnt" behauptet, gehoert an den Ausgang, der es entscheidet,
-        // und der liegt in StorageAcssPolSystem auf Sprosse 10.
+        // und der liegt in StorageAcssPolSystem auf Sprosse 10. StorageAcssPassTag steht weder in
+        // der Signatur noch in der Ausschlussliste der View und darf im Lauf gesetzt werden.
         registry.emplace<StorageAcssPassTag>(entity);
+    }
+
+    // NACH DEM LAUF: jede festgehaltene Ablehnung bekommt ihre Marke und ihre Pruefspur-Zeile.
+    // Die Anfrage-Komponenten werden hier neu gelesen - die Referenzen aus dem Lauf gelten nach
+    // den emplace-Aufrufen, die einen Pool verschieben koennen, nicht mehr.
+    for (uint32_t di = 0; di < denied_n; ++di) {
+        const ecs::Entity entity = denied[di];
+        registry.emplace<StorageAcssDenyTag>(entity);
+        const auto& req  = registry.get<StorageReqAcssComponent>(entity);
+        const auto& cred = registry.get<StorageReqCredComponent>(entity);
+        auto aud_ent = registry.create();
+        auto& aud = registry.emplace<StorageBufAudtComponent>(aud_ent);
+        aud.relm_ref = req.relm_ref;
+        aud.proj_ref = req.proj_ref;
+        ase::utils::str_copy(aud.user_id, MAX_OWNER_ID, cred.user_id);
+        ase::utils::str_copy(aud.path, MAX_PATH_LEN, req.path);
+        aud.timestamp = now;
+        auto& outc = registry.emplace<StorageAudtOutcComponent>(aud_ent);
+        outc.action = req.action;
+        outc.result = AUD_DENIED;
+        ase::utils::str_copy(outc.reason, MAX_REASON_LEN, denied_why[di]);
+        registry.emplace<StorageAudtPendTag>(aud_ent);
     }
 }
 

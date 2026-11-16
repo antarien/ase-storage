@@ -12,7 +12,7 @@
  * @usecase     usecase:101533 - withdraw a lapsed lattice bond
  * @actor       Horizontal Layer Steward (HLSTEWARD)
  * @created     2026-04-05
- * @modified    2026-10-29
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.
@@ -187,13 +187,18 @@ void StorageLatcSyncSystem::tick(ecs::Registry& registry, float /*dt*/) {
         return;
     }
 
-    // SINGLE-PASS over the links that still stand. Only the tag the view excludes is added,
-    // nothing is erased, so the iteration stays valid: the tagged link leaves the view behind us.
-    auto view = registry.view<StorageLatLnkComponent, StorageLnkIdnComponent>(
+    /**
+     * FIRST WALK over the links that still stand: it judges and reports each lapsed bond and
+     * counts them, and it changes nothing. StorageLnkExpTag stands in this view's exclude
+     * list; setting it inside the walk changes the set the walk iterates
+     * (VIEW_SIGNATURE_TYPE_MUTATED, WRFL_ASE_DEFERRED_DELETION Section 5).
+     */
+    uint32_t lapsed_now = 0u;
+    auto standing = registry.view<StorageLatLnkComponent, StorageLnkIdnComponent>(
         entt::exclude<StorageLnkExpTag>);
-    for (auto entity : view) {
-        auto& link = view.get<StorageLatLnkComponent>(entity);
-        auto& idn = view.get<StorageLnkIdnComponent>(entity);
+    for (auto entity : standing) {
+        auto& link = standing.get<StorageLatLnkComponent>(entity);
+        auto& idn = standing.get<StorageLnkIdnComponent>(entity);
 
         // 0 = a permanent bond (ARCH_ASE_STORAGE 8.2)
         if (!link.expires_at) {
@@ -203,11 +208,28 @@ void StorageLatcSyncSystem::tick(ecs::Registry& registry, float /*dt*/) {
             continue;
         }
 
-        registry.emplace<StorageLnkExpTag>(entity);
+        lapsed_now += 1u;
         log::info("[StorageLatcSync] Lattice link ended: entity={} source={} target={} "
                   "prefix={} expires_at={} now={}",
                   static_cast<uint32_t>(entity), idn.source_realm_hash, idn.target_realm_hash,
                   link.path_prefix, link.expires_at, now);
+    }
+
+    // SECOND WALK, only when the first one found a lapsed bond: the mark is set over a view
+    // that names neither the mark nor its exclusion. The same test as above picks the bond;
+    // a bond marked in an earlier tick takes the mark again, which changes nothing.
+    if (lapsed_now > 0u) {
+        auto links = registry.view<StorageLatLnkComponent>();
+        for (auto entity : links) {
+            auto& link = links.get<StorageLatLnkComponent>(entity);
+            if (!link.expires_at) {
+                continue;
+            }
+            if (now <= link.expires_at) {
+                continue;
+            }
+            registry.emplace_or_replace<StorageLnkExpTag>(entity);
+        }
     }
 }
 

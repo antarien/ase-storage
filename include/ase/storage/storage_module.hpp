@@ -5,14 +5,14 @@
  *
  * @file        storage_module.hpp
  * @brief       StorageModule - A/ACS platform storage with Realms, Keycards, ACL
- * @description Registers all 15 storage systems across 4 schedules.
+ * @description Registers all 49 storage systems across 8 schedules.
  *              Applies DSGN_109 patterns to real-world engine asset management.
  *
  * @module      ase-storage
  * @layer       3 (Modules)
  * @usecase     usecase:100265 - check access clearance
  * @created     2026-04-05
- * @modified    2026-11-07
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.
@@ -33,9 +33,15 @@
  *   StorageKycdRevSynSystem (marks the keycard a revocation hub row names)
  *
  * Integration (ACL + Storage):
- *   StorageAcssChkSystem (10-step Mandatory Access Control)
- *   StorageFileWritSystem (filesystem CRUD via ResourceManager)
+ *   StorageAcssRslvSystem (keycard + visible realm, rungs 1-2 of ARCH 14.1)
+ *   StorageAcssRuleSystem (most specific ACL rule for the path)
+ *     run_after: StorageAcssRslvSystem
+ *   StorageAcssChkSystem (key gates: lattice, clearance, codeword, permission)
+ *     run_after: StorageAcssRuleSystem
+ *   StorageAcssPolSystem (policy gates: label, need-to-know, quota; grants)
  *     run_after: StorageAcssChkSystem
+ *   StorageFileWritSystem (filesystem CRUD via ResourceManager)
+ *     run_after: StorageAcssPolSystem
  *   StorageWflwTranSystem (workflow label transitions)
  *     run_after: StorageFileWritSystem
  *   StorageCncmFltSystem (realm concealment filter)
@@ -105,6 +111,7 @@
 #include <ase/storage/systems/acl/storage_acss_chk_sys.hpp>
 #include <ase/storage/systems/acl/storage_acss_pol_sys.hpp>
 #include <ase/storage/systems/acl/storage_acss_rslv_sys.hpp>
+#include <ase/storage/systems/acl/storage_acss_rule_sys.hpp>
 #include <ase/storage/systems/acl/storage_acss_idx_sys.hpp>
 #include <ase/storage/systems/acl/storage_idn_idx_sys.hpp>
 #include <ase/storage/systems/keycard/storage_kycd_cwrd_pub_sys.hpp>
@@ -271,14 +278,17 @@ struct StorageModule {
         // after StorageAcssChkSystem would leave the ladder reading last tick's relations,
         // which is exactly the stale-grant failure the full rebuild exists to prevent.
         app.add_system<StorageAcssIdxSystem>(ecs::Schedule::Integration);
-        // The ladder asks two kinds of question. The resolution looks up (which realm, who
-        // owns it, which ACL rule governs this path), the gate ladder decides (may THIS caller
-        // pass). The channel between the two is StorageStaAcssRslvComponent with its marks -
-        // in the same tick, so no slower.
+        // The ladder asks two kinds of question. The resolution looks up (keycard and visible
+        // realm in StorageAcssRslvSystem, the ACL rule governing this path in
+        // StorageAcssRuleSystem), the gate ladder decides (may THIS caller pass). The channel
+        // from realm to rule is StorageAcssRelmTag, from rule to gates
+        // StorageStaAcssRslvComponent with StorageAcssRslvTag - in the same tick, so no slower.
         app.add_system_with<StorageAcssRslvSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssIdxSystem");
-        app.add_system_with<StorageAcssChkSystem>(ecs::Schedule::Integration)
+        app.add_system_with<StorageAcssRuleSystem>(ecs::Schedule::Integration)
             .run_after("StorageAcssRslvSystem");
+        app.add_system_with<StorageAcssChkSystem>(ecs::Schedule::Integration)
+            .run_after("StorageAcssRuleSystem");
         // The gate ladder weighs TWO questions. The key gates weigh the CALLER (credential,
         // realm, lattice, protection level, codeword, permission), the policy gates weigh the
         // SUBJECT (label, running task, quota). The channel between the two is

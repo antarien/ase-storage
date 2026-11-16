@@ -5,9 +5,9 @@
  *
  * @file        storage_acss_rslv_tag.hpp
  * @brief       StorageAcssRslvTag - Die Auflösung ist gelaufen, die Torleiter darf ansetzen
- * @description Marke auf einer Zugriffsanfrage, für die StorageAcssRslvSystem Revier und
- *              ACL-Regel aufgelöst hat, ohne sie dabei abzuweisen. Erst mit ihr betritt die
- *              Anfrage die Torleiter in StorageAcssChkSystem.
+ * @description Marke auf einer Zugriffsanfrage, deren Revier StorageAcssRslvSystem als
+ *              sichtbar festgestellt und deren ACL-Regel StorageAcssRuleSystem gefunden hat.
+ *              Erst mit ihr betritt die Anfrage die Torleiter in StorageAcssChkSystem.
  *
  *              SIE IST DAS TOR, NICHT EINE NOTIZ. Ohne sie müsste die Torleiter am Vorhandensein
  *              der Auflösungs-Komponente ablesen, ob die Auflösung gelaufen ist - und eine
@@ -24,15 +24,18 @@
  * @layer       3 (Module)
  * @category    tag/access
  * @parity      server_only
+ * @design      DSGN_021
+ * @usecase     usecase:100265 - check access clearance
+ * @actor       Provider Credential Keeper (PROVCREKEE)
  *
- * PARITAET GEMESSEN AM 2026-08-30. ACHTUNG: die uebliche Bestandsableitung traegt hier NICHT —
- * ase-storage fuehrt 44 shared Components und client_relevance true, das Modul HAT einen
- * Client-Kanal. Getragen wird die Zeile von null Lesern ausserhalb des Moduls, null Treffern im
- * Web-Client bei 88 dortigen Storage*-Dateien (starke Positivkontrolle), und davon, dass eine
- * ACL-Aufloesung eine Autorisierungsentscheidung ist: der Client erfaehrt das ERGEBNIS, nie die
- * Ableitung. Volle Begruendung in storage_acss_ownr_tag.hpp.
+ * PARITAET: die uebliche Bestandsableitung traegt hier NICHT — ase-storage fuehrt shared
+ * Components und client_relevance true, das Modul HAT einen Client-Kanal. Getragen wird die
+ * Zeile von null Lesern ausserhalb des Moduls, null Treffern im Web-Client unter dessen
+ * Storage*-Dateien, und davon, dass eine ACL-Aufloesung eine Autorisierungsentscheidung ist:
+ * der Client erfaehrt das ERGEBNIS, nie die Ableitung. Volle Begruendung in
+ * storage_acss_ownr_tag.hpp.
  * @created     2026-08-29
- * @modified    2026-08-29
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.
@@ -72,9 +75,10 @@ namespace ase::storage {
 
 /**
  * StorageAcssRslvTag - realm and ACL rule are resolved; the gate ladder may run
- * State: StorageAcssRslvSystem finished this request without denying it
+ * State: StorageAcssRuleSystem matched the ACL rule of this visible request
  * Filter: StorageAcssChkSystem views request entities carrying it
- * Added: StorageAcssRslvSystem, together with StorageStaAcssRslvComponent
+ * Added: StorageAcssRuleSystem, after its walk, on the entities that got
+ *        StorageStaAcssRslvComponent in it
  * Removed: never - the request is destroyed once granted or denied downstream
  */
 struct StorageAcssRslvTag {};

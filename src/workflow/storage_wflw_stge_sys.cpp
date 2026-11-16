@@ -12,7 +12,7 @@
  * @usecase     usecase:100329 - stage workflow promotion
  * @actor       Operator Command Dispatcher (OPERCOMDIS)
  * @created     2026-10-12
- * @modified    2026-10-12
+ * @modified    2026-11-16
  * @version     00.00.39.00039 [core]
  *
  * Copyright (c) Jan Ohlmann. All rights reserved.
@@ -184,14 +184,18 @@ void StorageWflwStgeSystem::tick(ecs::Registry& registry, float dt) {
     (void)dt;
 
     /**
-     * ONE pass over the received requests. Removing the visited entity's own StorageWflwRcvTag
-     * inside the walk is what EnTT permits for the current element; the tags added go to pools
-     * the view does not iterate.
+     * ONE pass over the received requests. The walk only ADDS tags the view does not name
+     * (StorageWflwPendTag, StorageWflwGateTag). It never takes StorageWflwRcvTag: that tag is
+     * in the view's own signature, and taking it inside the loop changes the set the loop
+     * walks (VIEW_SIGNATURE_TYPE_MUTATED, WRFL_ASE_DEFERRED_DELETION Section 5). The received
+     * mark falls in the second walk below, over the staged requests, a view that does not
+     * name it.
      */
+    uint32_t staged_now = 0u;
     auto received = registry.view<StorageReqWflwTranComponent, StorageWflwRcvTag>();
     for (auto [req_ent, req] : received.each()) {
-        registry.remove<StorageWflwRcvTag>(req_ent);
         registry.emplace<StorageWflwPendTag>(req_ent);
+        staged_now += 1u;
 
         // released-gate: the artifact precondition runs as a SEPARATE Tag-filtered
         // check (StorageWflwGateSystem) - the transition system never re-tests it.
@@ -205,6 +209,15 @@ void StorageWflwStgeSystem::tick(ecs::Registry& registry, float dt) {
 
         log::info("[StorageWflwStge] Promote request staged: {} -> {} (by {})",
                   req.path, req.target_label, req.requested_by);
+    }
+
+    // A staged request is no longer a received one. remove on a staged request that
+    // carried no received mark changes nothing.
+    if (staged_now > 0u) {
+        auto staged = registry.view<StorageReqWflwTranComponent, StorageWflwPendTag>();
+        for (auto req_ent : staged) {
+            registry.remove<StorageWflwRcvTag>(req_ent);
+        }
     }
 }
 
