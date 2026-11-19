@@ -16,6 +16,39 @@
             "key": "ENG_CONST_TIER_PRO"
         },
         {
+            "key": "HUB_CLAI_IDNT_CLIENT_ID"
+        },
+        {
+            "key": "HUB_STG_KYCD_REQ_CLEARANCE"
+        },
+        {
+            "key": "HUB_STG_KYCD_REQ_EXP_AT"
+        },
+        {
+            "key": "HUB_STG_KYCD_REQ_PERM"
+        },
+        {
+            "key": "HUB_STG_KYCD_REQ_REALM_HASH"
+        },
+        {
+            "key": "HUB_STG_KYCD_REQ_USER_HASH"
+        },
+        {
+            "key": "HUB_STG_KYCD_REQ_USER_ID"
+        },
+        {
+            "key": "HUB_STG_KYCD_REV_REQ_HASH"
+        },
+        {
+            "key": "HUB_STG_WFLW_REQ_PATH"
+        },
+        {
+            "key": "HUB_STG_WFLW_REQ_REQUESTED_BY"
+        },
+        {
+            "key": "HUB_STG_WFLW_REQ_TARGET_LABEL"
+        },
+        {
             "key": "NET_CONST_BIN_MSG_EDGE_AUDT_PERSIST"
         },
         {
@@ -88,6 +121,18 @@
             "key": "SES_EDGE_AUDIT_SEQ"
         },
         {
+            "key": "SES_KYCD_NTF_GRANT_BINARY"
+        },
+        {
+            "key": "SES_KYCD_NTF_GRANT_METADATA"
+        },
+        {
+            "key": "SES_KYCD_NTF_GRANT_SBOM"
+        },
+        {
+            "key": "SES_KYCD_NTF_GRANT_SIG"
+        },
+        {
             "key": "STG_CONST_KYCD_HASH_BYTES"
         },
         {
@@ -98,6 +143,28 @@
         },
         {
             "key": "STG_CONST_WFLW_REQUESTER_BYTES"
+        }
+    ],
+    "hub_outputs": [
+        {
+            "key": "STG_RELM_PROT",
+            "component": "StorageStaRelmComponent",
+            "field": "default_protection",
+            "type": "uint8",
+            "default": 0,
+            "scope": "sim_entity",
+            "description": "Default Schutzstufe for new assets (0-9)",
+            "hub_category": "metric"
+        },
+        {
+            "key": "STG_RELM_TIER",
+            "component": "StorageStaRelmComponent",
+            "field": "tier",
+            "type": "uint8",
+            "default": 0,
+            "scope": "sim_entity",
+            "description": "License tier (0=indie, 1=pro, 2=enterprise)",
+            "hub_category": "metric"
         }
     ],
     "hub_writes": [
