@@ -4,7 +4,7 @@
 # via a '# @toml-load-after: ase-x ase-y' line.
 [module]
 name = "ase-storage"
-version = "00.00.39.00039"
+version = "00.00.47.00047"
 type = "module"
 layer = 3
 api_version = 4
